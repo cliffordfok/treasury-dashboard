@@ -1,0 +1,476 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark } from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+
+// --- 真實環境 Firebase 設定 (使用環境變數) ---
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// --- Gemini API Configuration ---
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+
+const fetchWithRetry = async (url, options, retries = 5) => {
+  const delays = [1000, 2000, 4000, 8000, 16000];
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errData?.error?.message || 'Unknown'}`);
+      }
+      return await response.json();
+    } catch (e) {
+      if (i === retries - 1) throw e;
+      await new Promise(res => setTimeout(res, delays[i]));
+    }
+  }
+};
+
+const generateText = async (prompt) => {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    systemInstruction: {
+      parts: [{ text: "You are an expert US Treasury Bond portfolio manager. Provide concise, professional insights in Traditional Chinese (Hong Kong style)." }]
+    }
+  };
+  const result = await fetchWithRetry(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  return result.candidates?.[0]?.content?.parts?.[0]?.text || "無法獲取 AI 回應。";
+};
+
+const extractTradeData = async (rawText) => {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  const payload = {
+    contents: [{ parts: [{ text: `Extract the US Treasury bond trade details from the following text:\n\n${rawText}` }] }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          cusip: { type: "STRING" },
+          type: { type: "STRING" },
+          side: { type: "STRING" },
+          tradeDate: { type: "STRING" },
+          maturityDate: { type: "STRING" },
+          faceValue: { type: "NUMBER" },
+          cleanPrice: { type: "NUMBER" },
+          couponRate: { type: "NUMBER" },
+          commission: { type: "NUMBER" },
+          couponFrequency: { type: "NUMBER" }
+        },
+        required: ["type", "side", "faceValue", "cleanPrice", "couponRate"]
+      }
+    }
+  };
+  const result = await fetchWithRetry(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  return JSON.parse(result.candidates?.[0]?.content?.parts?.[0]?.text);
+};
+
+// --- Math & Date Engine ---
+const isMatured = (maturityDateStr) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); 
+  return new Date(maturityDateStr) < today;
+};
+
+const calculateDaysBetween = (date1, date2) => Math.ceil(Math.abs(new Date(date2) - new Date(date1)) / (1000 * 60 * 60 * 24));
+
+const generateAllCoupons = (trade) => {
+  if (trade.type === 't-bill' || !trade.couponFrequency || !trade.couponRate) return [];
+  const coupons = [];
+  const matDate = new Date(trade.maturityDate);
+  const tradeDate = new Date(trade.tradeDate);
+  const endDate = trade.status === 'closed' ? new Date(trade.closeDate) : matDate;
+  
+  const intervalMonths = 12 / trade.couponFrequency;
+  let d = new Date(matDate);
+
+  while (d > tradeDate) {
+    if (d <= endDate) {
+      const amt = ((trade.faceValue * (trade.couponRate / 100)) / trade.couponFrequency) * (trade.side === 'sell' ? -1 : 1);
+      coupons.push({
+        id: `${trade.id}-${d.getTime()}`,
+        tradeId: trade.id,
+        cusip: trade.cusip || trade.type.toUpperCase(),
+        date: new Date(d),
+        dateStr: d.toISOString().split('T')[0],
+        amount: amt,
+        isShort: trade.side === 'sell'
+      });
+    }
+    d = new Date(d);
+    d.setMonth(d.getMonth() - intervalMonths);
+  }
+  return coupons.sort((a, b) => a.date - b.date);
+};
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [trades, setTrades] = useState([]);
+  const [isDbReady, setIsDbReady] = useState(false);
+
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [ledgerSubTab, setLedgerSubTab] = useState('active'); 
+  
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [editingTradeId, setEditingTradeId] = useState(null);
+  const [smartInputMode, setSmartInputMode] = useState(false);
+  
+  const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
+  const [closingTradeId, setClosingTradeId] = useState(null);
+  
+  const [editingPriceId, setEditingPriceId] = useState(null);
+  const [newPrice, setNewPrice] = useState('');
+
+  const [aiInsights, setAiInsights] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [insightError, setInsightError] = useState('');
+  const [rawTradeText, setRawTradeText] = useState('');
+  const [isParsing, setIsParsing] = useState(false);
+
+  const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2 };
+  const [formData, setFormData] = useState(defaultForm);
+  const [closeData, setCloseData] = useState({ closeDate: new Date().toISOString().split('T')[0], closePrice: '', closeCommission: 0 });
+
+  // --- Firebase Auth & Data Fetching (真實環境版) ---
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (error) {
+        console.error("Firebase Auth Error:", error);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    // 使用 user.uid 作為個人專屬路徑
+    const tradesRef = collection(db, 'users', user.uid, 'trades');
+    const unsubscribe = onSnapshot(tradesRef, (snapshot) => {
+      const fetchedTrades = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setTrades(fetchedTrades);
+      setIsDbReady(true);
+    }, (error) => console.error("Firestore error:", error));
+    return () => unsubscribe();
+  }, [user]);
+
+  // --- Derived Data ---
+  const activeTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && !isMatured(t.maturityDate)), [trades]);
+  const maturedTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && isMatured(t.maturityDate)), [trades]);
+  const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
+
+  const allCoupons = useMemo(() => trades.flatMap(generateAllCoupons), [trades]);
+  const todayObj = new Date();
+  todayObj.setHours(0,0,0,0);
+  const receivedCoupons = useMemo(() => allCoupons.filter(c => c.date <= todayObj), [allCoupons, todayObj]);
+  const upcomingCouponsList = useMemo(() => allCoupons.filter(c => c.date > todayObj && c.date.getFullYear() === todayObj.getFullYear()), [allCoupons, todayObj]);
+
+  // --- PnL Calculations ---
+  const portfolioMetrics = useMemo(() => {
+    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let absoluteTotalMarketValue = 0; 
+    let totalRealizedPnL = 0;
+
+    receivedCoupons.forEach(c => totalRealizedPnL += c.amount);
+    closedTrades.forEach(t => {
+      const mult = t.side === 'sell' ? -1 : 1;
+      totalRealizedPnL += (((t.closePrice - t.cleanPrice) * t.faceValue) / 100) * mult - (t.commission||0) - (t.closeCommission||0);
+    });
+    maturedTrades.forEach(t => {
+      const mult = t.side === 'sell' ? -1 : 1;
+      totalRealizedPnL += (((100 - t.cleanPrice) * t.faceValue) / 100) * mult - (t.commission||0);
+    });
+    activeTrades.forEach(trade => {
+      const mult = trade.side === 'sell' ? -1 : 1;
+      const marketVal = ((trade.currentMarketPrice * trade.faceValue) / 100) * mult;
+      totalMarketValue += marketVal;
+      totalUnrealizedPnL += ((((trade.currentMarketPrice - trade.cleanPrice) * trade.faceValue) / 100) * mult) - (trade.commission||0);
+      totalFace += trade.faceValue * mult;
+      absoluteTotalMarketValue += Math.abs(marketVal);
+    });
+    activeTrades.forEach(trade => {
+      const mult = trade.side === 'sell' ? -1 : 1;
+      const marketVal = ((trade.currentMarketPrice * trade.faceValue) / 100) * mult;
+      const weight = Math.abs(marketVal) / (absoluteTotalMarketValue || 1);
+      const daysToMat = calculateDaysBetween(todayObj, trade.maturityDate);
+      const yearsToMat = daysToMat / 365.25;
+      let ytm = 0;
+      if (yearsToMat > 0) {
+        if (trade.type === 't-bill') ytm = ((100 - trade.currentMarketPrice) / trade.currentMarketPrice) * (365 / daysToMat) * 100;
+        else ytm = (((trade.couponRate) + (100 - trade.currentMarketPrice) / yearsToMat) / ((100 + trade.currentMarketPrice) / 2)) * 100;
+      }
+      totalWeightYTM += ytm * weight;
+    });
+
+    return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalRealizedPnL };
+  }, [activeTrades, maturedTrades, closedTrades, receivedCoupons]);
+
+  // --- Database Actions ---
+  const saveTradeToDB = async (tradeData) => {
+    if (!user) return;
+    const tradeRef = doc(db, 'users', user.uid, 'trades', tradeData.id);
+    await setDoc(tradeRef, tradeData);
+  };
+
+  const deleteTradeFromDB = async (id) => {
+    if (!user) return;
+    await deleteDoc(doc(db, 'users', user.uid, 'trades', id));
+  };
+
+  const handleSaveTrade = async (e) => {
+    e.preventDefault();
+    const tradeData = {
+      ...formData,
+      faceValue: Number(formData.faceValue) || 0,
+      cleanPrice: Number(formData.cleanPrice) || 0,
+      couponRate: Number(formData.couponRate) || 0,
+      commission: Number(formData.commission) || 0,
+      couponFrequency: Number(formData.couponFrequency) || 0,
+      status: 'active'
+    };
+    if (!editingTradeId) {
+      tradeData.id = Date.now().toString();
+      tradeData.currentMarketPrice = Number(formData.cleanPrice);
+    } else {
+      tradeData.id = editingTradeId;
+      tradeData.currentMarketPrice = trades.find(t=>t.id===editingTradeId)?.currentMarketPrice || tradeData.cleanPrice;
+    }
+    await saveTradeToDB(tradeData);
+    setIsFormOpen(false);
+    setEditingTradeId(null);
+  };
+
+  const handleClosePosition = async (e) => {
+    e.preventDefault();
+    const trade = trades.find(t => t.id === closingTradeId);
+    if (!trade) return;
+    const updatedTrade = { ...trade, status: 'closed', closeDate: closeData.closeDate, closePrice: Number(closeData.closePrice), closeCommission: Number(closeData.closeCommission) || 0, currentMarketPrice: Number(closeData.closePrice) };
+    await saveTradeToDB(updatedTrade);
+    setIsCloseModalOpen(false);
+  };
+
+  const handleUpdatePrice = async (id) => {
+    const trade = trades.find(t => t.id === id);
+    if (trade) await saveTradeToDB({ ...trade, currentMarketPrice: Number(newPrice) });
+    setEditingPriceId(null);
+  };
+
+  const handleSmartParse = async () => {
+    if (!rawTradeText.trim()) return;
+    setIsParsing(true);
+    try {
+      const parsedData = await extractTradeData(rawTradeText);
+      setFormData({ ...defaultForm, ...parsedData });
+      setSmartInputMode(false);
+      setRawTradeText('');
+    } catch (err) {
+      alert("無法解析文字，請檢查格式。");
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
+  const handleAnalyzePortfolio = async () => {
+    if (activeTrades.length === 0) return;
+    setIsAnalyzing(true);
+    setInsightError('');
+    try {
+      const prompt = `Here is a summary of a user's ACTIVE US Treasury bond portfolio:
+        Total Market Value: $${portfolioMetrics.totalMarketValue.toFixed(2)}, Total Unrealized PnL: $${portfolioMetrics.totalUnrealizedPnL.toFixed(2)}, Weighted Average YTM: ${portfolioMetrics.totalWeightYTM.toFixed(2)}%
+        Detailed holdings: ${activeTrades.map(t => `- ${t.side.toUpperCase()} ${t.type.toUpperCase()}, Face Value: $${t.faceValue}, Matures: ${t.maturityDate}, YTM: ${estimateYTM(t, false).toFixed(2)}%`).join('\n')}
+        Provide a short analysis on interest rate risk, reinvestment risk, and strategic recommendation. Keep it under 3 paragraphs with bullet points. Respond in Traditional Chinese (HK).`;
+      const response = await generateText(prompt);
+      setAiInsights(response);
+    } catch (err) {
+      setInsightError('分析時發生錯誤。請確保已設定 API Key。');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  if (!isDbReady) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-500" size={48}/></div>;
+
+  const renderDashboard = () => (
+    <div className="space-y-6">
+      <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-xl shadow-lg p-6 text-white relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-4 opacity-20"><Landmark size={100} /></div>
+        <h3 className="text-emerald-100 font-medium mb-1">Total Realized PnL (終身已結算利潤)</h3>
+        <div className="flex items-end space-x-3">
+          <p className="text-4xl font-bold tracking-tight">{portfolioMetrics.totalRealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalRealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+          <span className="text-sm bg-white/20 px-2 py-1 rounded mb-1">已包含所有平倉、到期本金及歷史收息</span>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
+          <div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><DollarSign size={24} /></div>
+          <div><p className="text-xs text-slate-500 font-medium">Active Market Value</p><p className="text-xl font-bold text-slate-800">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
+          <div className={`p-3 rounded-lg ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}><Activity size={24} /></div>
+          <div><p className="text-xs text-slate-500 font-medium">Active Unrealized PnL</p><p className={`text-xl font-bold ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>{portfolioMetrics.totalUnrealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalUnrealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
+          <div className="p-3 bg-amber-50 text-amber-600 rounded-lg"><TrendingUp size={24} /></div>
+          <div><p className="text-xs text-slate-500 font-medium">Weighted Avg YTM</p><p className="text-xl font-bold text-slate-800">{portfolioMetrics.totalWeightYTM.toFixed(2)}%</p></div>
+        </div>
+      </div>
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+        <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="text-lg font-bold text-slate-800 flex items-center"><Wallet className="mr-2 text-emerald-500" size={20}/> 今年剩餘派息預測</h3></div>
+        {upcomingCouponsList.length === 0 ? <p className="text-sm text-slate-500 py-4 text-center bg-slate-50 rounded">今年內暫無剩餘派息。</p> : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {upcomingCouponsList.map(c => (
+              <div key={c.id} className="bg-emerald-50/50 border border-emerald-100 p-3 rounded-lg"><p className="text-xs font-bold text-slate-500">{c.dateStr}</p><p className="text-xs text-slate-700 my-1">{c.cusip}</p><p className={`font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</p></div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-xl shadow-sm border border-blue-100">
+        <div className="flex justify-between items-start mb-4">
+          <div className="flex items-center space-x-2 text-indigo-700"><Bot size={24} /><h3 className="text-lg font-bold">Gemini 投資組合分析</h3></div>
+          <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center shadow-sm">
+            {isAnalyzing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Sparkles size={16} className="mr-2" />} ✨ 智能分析活躍持倉
+          </button>
+        </div>
+        {insightError && <p className="text-sm text-red-600 flex items-center mt-2"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
+        {aiInsights ? <div className="bg-white/80 p-4 rounded-lg text-sm text-slate-700 leading-relaxed whitespace-pre-wrap border border-white">{aiInsights}</div> : <p className="text-sm text-indigo-400">點擊按鈕，讓 AI 為你分析現時債券梯的久期風險及資金流動性建議。</p>}
+      </div>
+    </div>
+  );
+
+  const renderTrades = () => {
+    let displayedTrades = [];
+    if (ledgerSubTab === 'active') displayedTrades = activeTrades;
+    else if (ledgerSubTab === 'closed') displayedTrades = [...maturedTrades, ...closedTrades].sort((a,b) => new Date(b.tradeDate) - new Date(a.tradeDate));
+
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white">
+          <h3 className="text-lg font-bold text-slate-800">Trade Ledger</h3>
+          <button onClick={() => { setFormData(defaultForm); setIsFormOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center"><Plus size={16} className="mr-1" /> Add Trade</button>
+        </div>
+        <div className="flex space-x-6 px-4 pt-2 bg-slate-50 border-b border-slate-200">
+          <button onClick={() => setLedgerSubTab('active')} className={`pb-3 text-sm font-bold flex items-center border-b-2 ${ledgerSubTab === 'active' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}><Activity size={16} className="mr-2"/> 活躍持倉 ({activeTrades.length})</button>
+          <button onClick={() => setLedgerSubTab('closed')} className={`pb-3 text-sm font-bold flex items-center border-b-2 ${ledgerSubTab === 'closed' ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-500'}`}><Archive size={16} className="mr-2"/> 已結算 / 到期 ({maturedTrades.length + closedTrades.length})</button>
+          <button onClick={() => setLedgerSubTab('coupons')} className={`pb-3 text-sm font-bold flex items-center border-b-2 ${ledgerSubTab === 'coupons' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500'}`}><History size={16} className="mr-2"/> 收息歷史 ({receivedCoupons.length})</button>
+        </div>
+        <div className="overflow-x-auto">
+          {ledgerSubTab === 'coupons' ? (
+             <table className="w-full text-left text-sm whitespace-nowrap"><thead className="bg-emerald-50 text-emerald-800 font-medium"><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP / Type</th><th className="p-4 text-right">派息金額 (USD)</th></tr></thead><tbody className="divide-y divide-slate-100">{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : receivedCoupons.sort((a,b) => b.date - a.date).map(c => (<tr key={c.id} className="hover:bg-slate-50"><td className="p-4 font-medium text-slate-700">{c.dateStr}</td><td className="p-4 text-slate-600">{c.cusip}</td><td className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</td></tr>))}</tbody></table>
+          ) : (
+            <table className="w-full text-left text-sm whitespace-nowrap">
+              <thead className="bg-white text-slate-600 font-medium border-b border-slate-200">
+                <tr>
+                  <th className="p-4">CUSIP</th><th className="p-4">Action/Type</th><th className="p-4 text-right">Face Value</th><th className="p-4 text-right">Cost (Clean)</th>
+                  {ledgerSubTab === 'active' ? <><th className="p-4 text-right text-blue-600">Market Price ✏️</th><th className="p-4 text-right">Unrealized PnL</th></> : <><th className="p-4 text-right">Close Price</th><th className="p-4 text-right text-emerald-600">Realized PnL</th></>}
+                  <th className="p-4 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-700">
+                {displayedTrades.length === 0 ? <tr><td colSpan="8" className="p-8 text-center text-slate-400">無紀錄。</td></tr> : displayedTrades.map(trade => {
+                  const mult = trade.side === 'sell' ? -1 : 1;
+                  const isMaturedBond = isMatured(trade.maturityDate) && trade.status !== 'closed';
+                  let pnl = 0;
+                  if (trade.status === 'closed') pnl = (((trade.closePrice - trade.cleanPrice) * trade.faceValue) / 100) * mult - (trade.commission||0) - (trade.closeCommission||0);
+                  else if (isMaturedBond) pnl = (((100 - trade.cleanPrice) * trade.faceValue) / 100) * mult - (trade.commission||0);
+                  else pnl = ((((trade.currentMarketPrice - trade.cleanPrice) * trade.faceValue) / 100) * mult) - (trade.commission||0);
+                  return (
+                    <tr key={trade.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="p-4 font-medium">{trade.cusip || '--'}<div className="text-[10px] text-slate-400">Mat: {trade.maturityDate}</div></td>
+                      <td className="p-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-sm ${trade.side === 'sell' ? 'bg-red-500' : 'bg-emerald-500'} mr-1`}>{trade.side.toUpperCase()}</span><span className="px-2 py-0.5 rounded text-[10px] uppercase font-bold bg-slate-200 text-slate-700">{trade.type}</span>{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉 ({trade.closeDate})</div>}</td>
+                      <td className="p-4 text-right">${trade.faceValue.toLocaleString()}</td><td className="p-4 text-right">{trade.cleanPrice.toFixed(3)}</td>
+                      {ledgerSubTab === 'active' ? (
+                        <><td className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">Save</button></div>) : (<span className="cursor-pointer text-blue-600 font-medium flex items-center justify-end" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(trade.currentMarketPrice);}}>{trade.currentMarketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></span>)}</td><td className={`p-4 text-right font-bold ${pnl>=0?'text-green-600':'text-red-600'}`}>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</td></>
+                      ) : (
+                        <><td className="p-4 text-right font-medium">{trade.status === 'closed' ? trade.closePrice.toFixed(3) : '100.000 (Par)'}</td><td className={`p-4 text-right font-bold ${pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</td></>
+                      )}
+                      <td className="p-4 text-center">
+                        <div className="flex items-center justify-center space-x-2">
+                          <button onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={16} /></button>
+                          {ledgerSubTab === 'active' && <button onClick={()=>{setClosingTradeId(trade.id); setCloseData({ ...closeData, closePrice: trade.currentMarketPrice }); setIsCloseModalOpen(true);}} className="text-orange-500 hover:bg-orange-50 p-1 rounded" title="平倉"><LogOut size={16} /></button>}
+                          <button onClick={() => deleteTradeFromDB(trade.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={16} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-20">
+      <nav className="bg-slate-900 text-white p-4 sticky top-0 z-20 shadow-md">
+        <div className="max-w-6xl mx-auto flex items-center space-x-3"><div className="w-8 h-8 bg-blue-500 rounded flex items-center justify-center font-bold text-lg">US</div><h1 className="text-xl font-bold tracking-tight">Treasury Dashboard</h1></div>
+      </nav>
+      <main className="max-w-6xl mx-auto p-4 mt-4">
+        <div className="flex space-x-2 mb-6 bg-slate-200 p-1 rounded-lg w-max shadow-inner">
+          <button onClick={() => setActiveTab('dashboard')} className={`px-5 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600'}`}>Analytics</button>
+          <button onClick={() => setActiveTab('trades')} className={`px-5 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600'}`}>Trade Ledger</button>
+        </div>
+        {activeTab === 'dashboard' ? renderDashboard() : renderTrades()}
+      </main>
+
+      {isFormOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="p-5 bg-slate-50 border-b flex justify-between items-center"><h2 className="text-lg font-bold">{editingTradeId ? 'Edit Trade' : 'Record New Trade'}</h2><button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button></div>
+            {!editingTradeId && (
+               <div className="px-5 pt-4"><div className="flex bg-slate-100 p-1 rounded-lg"><button type="button" onClick={() => setSmartInputMode(false)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${!smartInputMode ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>手動輸入</button><button type="button" onClick={() => setSmartInputMode(true)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${smartInputMode ? 'bg-indigo-500 text-white shadow' : 'text-slate-500'}`}>✨ 智能貼上</button></div></div>
+            )}
+            <div className="p-5 overflow-y-auto max-h-[60vh]">
+              {smartInputMode && !editingTradeId ? (
+                <div className="space-y-4"><textarea value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" /><button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim()} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button></div>
+              ) : (
+                <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">CUSIP / 名稱</label><input required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+                    <div><label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label><select required name="type" value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, couponRate: e.target.value==='t-bill'?0:formData.couponRate})} className="w-full p-2 border rounded-lg text-sm"><option value="t-bill">T-Bill</option><option value="t-note">T-Note</option><option value="t-bond">T-Bond</option><option value="tips">TIPS</option></select></div>
+                    <div><label className="block text-xs font-medium text-slate-500 mb-1">Action</label><select required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">BUY (買入)</option><option value="sell">SELL (沽空)</option></select></div>
+                    <div><label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label><input required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+                    <div><label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label><input required type="date" name="maturityDate" value={formData.maturityDate} onChange={(e)=>setFormData({...formData, maturityDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+                    <div><label className="block text-xs font-medium text-slate-500 mb-1">Face Value ($)</label><input required type="number" name="faceValue" value={formData.faceValue} onChange={(e)=>setFormData({...formData, faceValue: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+                    <div><label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label><input required type="number" step="0.001" name="cleanPrice" value={formData.cleanPrice} onChange={(e)=>setFormData({...formData, cleanPrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+                    <div><label className="block text-xs font-medium text-slate-500 mb-1">Commission ($)</label><input type="number" step="0.01" name="commission" value={formData.commission} onChange={(e)=>setFormData({...formData, commission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+                    {formData.type !== 't-bill' && (
+                      <><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate (%)</label><input required type="number" step="0.125" name="couponRate" value={formData.couponRate} onChange={(e)=>setFormData({...formData, couponRate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label><select name="couponFrequency" value={formData.couponFrequency} onChange={(e)=>setFormData({...formData, couponFrequency: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="12">Monthly</option><option value="4">Quarterly</option><option value="2">Semi-Annually</option><option value="1">Annually</option></select></div></>
+                    )}
+                  </div>
+                </form>
+              )}
+            </div>
+            <div className="p-5 border-t bg-slate-50 flex justify-end space-x-3"><button onClick={() => setIsFormOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg">Cancel</button>{!smartInputMode && <button type="submit" form="tradeForm" className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm">Save Trade</button>}</div>
+          </div>
+        </div>
+      )}
+
+      {isCloseModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="p-5 bg-orange-50 border-b border-orange-100 flex justify-between items-center"><h2 className="text-lg font-bold text-orange-800 flex items-center"><LogOut size={20} className="mr-2"/> 平倉結算</h2></div>
+            <form id="closeForm" onSubmit={handleClosePosition} className="p-5 space-y-4"><p className="text-sm text-slate-600 mb-4">平倉後，該筆債券會移入「已結算區」，利潤將會永久鎖定。</p><div><label className="block text-xs font-medium text-slate-500 mb-1">賣出/平倉日期</label><input required type="date" value={closeData.closeDate} onChange={(e)=>setCloseData({...closeData, closeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">成交價 (Close Price)</label><input required type="number" step="0.001" value={closeData.closePrice} onChange={(e)=>setCloseData({...closeData, closePrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">平倉手續費 ($)</label><input type="number" step="0.01" value={closeData.closeCommission} onChange={(e)=>setCloseData({...closeData, closeCommission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div></form>
+            <div className="p-5 border-t bg-slate-50 flex justify-end space-x-3"><button onClick={() => setIsCloseModalOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg">取消</button><button type="submit" form="closeForm" className="px-4 py-2 text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-lg shadow-sm">確認平倉</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

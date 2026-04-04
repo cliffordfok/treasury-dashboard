@@ -23,9 +23,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          # 🚨 已經幫你刪除咗 cache: 'npm' 嗰行！
 
       - name: Install Dependencies
+        # 🚨 已經幫你確保用緊 npm install
         run: npm install
 
       - name: Build Project

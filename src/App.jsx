@@ -300,10 +300,10 @@ export default function App() {
     <div className="space-y-6">
       <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-xl shadow-lg p-6 text-white relative overflow-hidden">
         <div className="absolute top-0 right-0 p-4 opacity-20"><Landmark size={100} /></div>
-        <h3 className="text-emerald-100 font-medium mb-1">Total Realized PnL (終身已結算利潤)</h3>
+        <h3 className="text-emerald-100 font-medium mb-1">Total Realized PnL (累計已實現利潤)</h3>
         <div className="flex items-end space-x-3">
           <p className="text-4xl font-bold tracking-tight">{portfolioMetrics.totalRealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalRealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
-          <span className="text-sm bg-white/20 px-2 py-1 rounded mb-1">已包含所有平倉、到期本金及歷史收息</span>
+          <span className="text-sm bg-white/20 px-2 py-1 rounded mb-1">已包含所有平倉、到期結算及歷史收息</span>
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -321,7 +321,7 @@ export default function App() {
         </div>
       </div>
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-        <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="text-lg font-bold text-slate-800 flex items-center"><Wallet className="mr-2 text-emerald-500" size={20}/> 今年剩餘派息預測</h3></div>
+        <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="text-lg font-bold text-slate-800 flex items-center"><Wallet className="mr-2 text-emerald-500" size={20}/> 今年剩餘應收派息</h3></div>
         {upcomingCouponsList.length === 0 ? <p className="text-sm text-slate-500 py-4 text-center bg-slate-50 rounded">今年內暫無剩餘派息。</p> : (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             {upcomingCouponsList.map(c => (
@@ -334,7 +334,7 @@ export default function App() {
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center space-x-2 text-indigo-700"><Bot size={24} /><h3 className="text-lg font-bold">Gemini 投資組合分析</h3></div>
           <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center shadow-sm">
-            {isAnalyzing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Sparkles size={16} className="mr-2" />} ✨ 智能分析活躍持倉
+            {isAnalyzing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Sparkles size={16} className="mr-2" />} 智能分析活躍持倉
           </button>
         </div>
         {insightError && <p className="text-sm text-red-600 flex items-center mt-2"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
@@ -431,7 +431,7 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
             <div className="p-5 bg-orange-50 border-b border-orange-100 flex justify-between items-center"><h2 className="text-lg font-bold text-orange-800 flex items-center"><LogOut size={20} className="mr-2"/> 平倉結算</h2></div>
-            <form id="closeForm" onSubmit={handleClosePosition} className="p-5 space-y-4"><p className="text-sm text-slate-600 mb-4">平倉後，該筆債券會移入「已結算區」，利潤將會永久鎖定。</p><div><label className="block text-xs font-medium text-slate-500 mb-1">賣出/平倉日期</label><input required type="date" value={closeData.closeDate} onChange={(e)=>setCloseData({...closeData, closeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">成交價 (Close Price)</label><input required type="number" step="0.001" value={closeData.closePrice} onChange={(e)=>setCloseData({...closeData, closePrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">平倉手續費 ($)</label><input type="number" step="0.01" value={closeData.closeCommission} onChange={(e)=>setCloseData({...closeData, closeCommission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div></form>
+            <form id="closeForm" onSubmit={handleClosePosition} className="p-5 space-y-4"><p className="text-sm text-slate-600 mb-4">平倉後，該筆債券會移入「已結算區」，利潤將被鎖定。</p><div><label className="block text-xs font-medium text-slate-500 mb-1">賣出/平倉日期</label><input required type="date" value={closeData.closeDate} onChange={(e)=>setCloseData({...closeData, closeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">成交價 (Close Price)</label><input required type="number" step="0.001" value={closeData.closePrice} onChange={(e)=>setCloseData({...closeData, closePrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">平倉手續費 ($)</label><input type="number" step="0.01" value={closeData.closeCommission} onChange={(e)=>setCloseData({...closeData, closeCommission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div></form>
             <div className="p-5 border-t bg-slate-50 flex justify-end space-x-3"><button onClick={() => setIsCloseModalOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg">取消</button><button type="submit" form="closeForm" className="px-4 py-2 text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-lg shadow-sm">確認平倉</button></div>
           </div>
         </div>

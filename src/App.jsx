@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -267,6 +267,44 @@ export default function App() {
     } catch (err) { setInsightError('分析時發生錯誤。請確保已設定 API Key。'); } finally { setIsAnalyzing(false); }
   };
 
+  // --- 匯出 / 匯入 ---
+  const handleExport = () => {
+    if (trades.length === 0) return;
+    const data = JSON.stringify(trades, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `treasury-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const imported = JSON.parse(text);
+        if (!Array.isArray(imported)) { alert('檔案格式錯誤：需要為交易陣列。'); return; }
+        const existingIds = new Set(trades.map(t => t.id));
+        let added = 0;
+        for (const trade of imported) {
+          if (!trade.id || !trade.type || !trade.side) continue;
+          if (existingIds.has(trade.id)) continue;
+          await saveTradeToDB(trade);
+          added++;
+        }
+        alert(`匯入完成：新增 ${added} 筆交易，略過 ${imported.length - added} 筆（重複或無效）。`);
+      } catch (err) { alert('匯入失敗：無法讀取或解析檔案。'); }
+    };
+    input.click();
+  };
+
   // --- 登入畫面 UI ---
   if (authLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-500" size={48}/></div>;
 
@@ -401,6 +439,8 @@ export default function App() {
           {user && (
             <div className="flex items-center space-x-4">
               <span className="text-sm text-slate-300 hidden md:inline">{user.email}</span>
+              <button onClick={handleExport} disabled={trades.length === 0} className="text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 px-3 py-1.5 rounded transition-colors flex items-center" title="匯出資料"><Download size={14} className="mr-1"/> 匯出</button>
+              <button onClick={handleImport} className="text-sm bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded transition-colors flex items-center" title="匯入資料"><Upload size={14} className="mr-1"/> 匯入</button>
               <button onClick={handleLogout} className="text-sm bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded transition-colors flex items-center"><LogOut size={14} className="mr-1"/> 登出</button>
             </div>
           )}

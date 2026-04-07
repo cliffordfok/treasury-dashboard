@@ -41,7 +41,7 @@ const fetchWithRetry = async (url, options, retries = 5) => {
 };
 
 const generateText = async (prompt) => {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   const payload = {
     contents: [{ parts: [{ text: prompt }] }],
     systemInstruction: { parts: [{ text: "You are an expert US Treasury Bond portfolio manager. Provide concise, professional insights in Traditional Chinese (Hong Kong style)." }] }
@@ -51,7 +51,7 @@ const generateText = async (prompt) => {
 };
 
 const extractTradeData = async (rawText) => {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   const payload = {
     contents: [{ parts: [{ text: `Extract the US Treasury bond trade details from the following text:\n\n${rawText}` }] }],
     generationConfig: {

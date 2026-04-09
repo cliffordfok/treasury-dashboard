@@ -175,7 +175,7 @@ export default function App() {
 
   // --- PnL Calculations ---
   const portfolioMetrics = useMemo(() => {
-    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let absoluteTotalMarketValue = 0; let totalRealizedPnL = 0;
+    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let absoluteTotalMarketValue = 0; let totalRealizedPnL = 0; let annualCouponIncome = 0;
     receivedCoupons.forEach(c => totalRealizedPnL += c.amount);
     closedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; totalRealizedPnL += (((t.closePrice - t.cleanPrice) * t.faceValue) / 100) * mult - (t.commission||0) - (t.closeCommission||0); });
     maturedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; totalRealizedPnL += (((100 - t.cleanPrice) * t.faceValue) / 100) * mult - (t.commission||0); });
@@ -186,6 +186,9 @@ export default function App() {
       totalUnrealizedPnL += ((((trade.currentMarketPrice - trade.cleanPrice) * trade.faceValue) / 100) * mult) - (trade.commission||0);
       totalFace += trade.faceValue * mult;
       absoluteTotalMarketValue += Math.abs(marketVal);
+      if (trade.type !== 't-bill' && trade.couponRate) {
+        annualCouponIncome += (trade.faceValue * (trade.couponRate / 100)) * mult;
+      }
     });
     activeTrades.forEach(trade => {
       const mult = trade.side === 'sell' ? -1 : 1;
@@ -200,7 +203,7 @@ export default function App() {
       }
       totalWeightYTM += ytm * weight;
     });
-    return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalRealizedPnL };
+    return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
   }, [activeTrades, maturedTrades, closedTrades, receivedCoupons]);
 
   // --- Database Actions ---
@@ -344,7 +347,7 @@ export default function App() {
           <span className="text-sm bg-white/20 px-2 py-1 rounded mb-1">已包含所有平倉、到期結算及歷史收息</span>
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
           <div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><DollarSign size={24} /></div>
           <div><p className="text-xs text-slate-500 font-medium">Active Market Value</p><p className="text-xl font-bold text-slate-800">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
@@ -356,6 +359,10 @@ export default function App() {
         <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
           <div className="p-3 bg-amber-50 text-amber-600 rounded-lg"><TrendingUp size={24} /></div>
           <div><p className="text-xs text-slate-500 font-medium">Weighted Avg YTM</p><p className="text-xl font-bold text-slate-800">{portfolioMetrics.totalWeightYTM.toFixed(2)}%</p></div>
+        </div>
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
+          <div className="p-3 bg-emerald-50 text-emerald-600 rounded-lg"><Wallet size={24} /></div>
+          <div><p className="text-xs text-slate-500 font-medium">平均每月利息</p><p className="text-xl font-bold text-emerald-600">${portfolioMetrics.monthlyAvgIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
         </div>
       </div>
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">

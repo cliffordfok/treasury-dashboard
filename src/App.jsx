@@ -368,6 +368,45 @@ export default function App() {
           </div>
         )}
       </div>
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+        <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={20}/> 債券到期倒數</h3></div>
+        {activeTrades.length === 0 ? <p className="text-sm text-slate-500 py-4 text-center bg-slate-50 rounded">暫無活躍持倉。</p> : (() => {
+          const sorted = [...activeTrades].sort((a, b) => new Date(a.maturityDate) - new Date(b.maturityDate));
+          const maxDays = Math.max(...sorted.map(t => calculateDaysBetween(todayObj, t.maturityDate)), 1);
+          const formatCountdown = (d) => {
+            if (d < 30) return `${d} 天`;
+            if (d < 365) return `${Math.floor(d/30)} 個月 ${d%30} 天`;
+            return `${Math.floor(d/365)} 年 ${Math.floor((d%365)/30)} 個月`;
+          };
+          const getColor = (d) => {
+            if (d < 30) return { bar: 'bg-red-500', text: 'text-red-600', bg: 'bg-red-50' };
+            if (d < 90) return { bar: 'bg-amber-500', text: 'text-amber-600', bg: 'bg-amber-50' };
+            if (d < 365) return { bar: 'bg-blue-500', text: 'text-blue-600', bg: 'bg-blue-50' };
+            return { bar: 'bg-emerald-500', text: 'text-emerald-600', bg: 'bg-emerald-50' };
+          };
+          return (
+            <div className="space-y-3">
+              {sorted.map(trade => {
+                const days = calculateDaysBetween(todayObj, trade.maturityDate);
+                const pct = (days / maxDays) * 100;
+                const color = getColor(days);
+                return (
+                  <div key={trade.id} className="flex items-center space-x-3">
+                    <div className="w-28 flex-shrink-0">
+                      <p className="text-xs font-bold text-slate-700 truncate">{trade.cusip || trade.type.toUpperCase()}</p>
+                      <p className="text-[10px] text-slate-400">{trade.maturityDate}</p>
+                    </div>
+                    <div className={`flex-1 h-7 ${color.bg} rounded-md overflow-hidden relative`}>
+                      <div className={`h-full ${color.bar} transition-all`} style={{ width: `${pct}%` }}></div>
+                      <span className={`absolute inset-0 flex items-center px-3 text-xs font-bold ${color.text}`}>{formatCountdown(days)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+      </div>
       <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-xl shadow-sm border border-blue-100">
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center space-x-2 text-indigo-700"><Bot size={24} /><h3 className="text-lg font-bold">Gemini 投資組合分析</h3></div>

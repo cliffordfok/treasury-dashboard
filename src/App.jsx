@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -22,6 +22,65 @@ const googleProvider = new GoogleAuthProvider(); // 初始化 Google 登入
 
 // --- Gemini API Configuration ---
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
+
+// --- FRED API Configuration ---
+const fredApiKey = import.meta.env.VITE_FRED_API_KEY || "";
+
+// FRED Treasury constant-maturity series. years = 到期年期對應的 curve point。
+const FRED_YIELD_SERIES = [
+  { id: 'DGS1MO', years: 1 / 12 },
+  { id: 'DGS3MO', years: 3 / 12 },
+  { id: 'DGS6MO', years: 6 / 12 },
+  { id: 'DGS1',   years: 1 },
+  { id: 'DGS2',   years: 2 },
+  { id: 'DGS3',   years: 3 },
+  { id: 'DGS5',   years: 5 },
+  { id: 'DGS7',   years: 7 },
+  { id: 'DGS10',  years: 10 },
+  { id: 'DGS20',  years: 20 },
+  { id: 'DGS30',  years: 30 },
+];
+
+// 一次 fetch 所有 curve point。FRED 支援 CORS，rate limit 120 req/min 足夠我哋用。
+// 返回格式: [{ years, yield, id }, ...]（只包含有效資料點），以及 updatedAt
+const fetchYieldCurve = async () => {
+  if (!fredApiKey) throw new Error('missing FRED API key');
+  const results = await Promise.all(FRED_YIELD_SERIES.map(async ({ id, years }) => {
+    const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${id}&api_key=${fredApiKey}&file_type=json&sort_order=desc&limit=1`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const obs = data.observations?.[0];
+      const v = Number(obs?.value);
+      if (!Number.isFinite(v)) return null; // FRED 用 "." 代表缺值
+      return { id, years, yield: v, date: obs.date };
+    } catch {
+      return null;
+    }
+  }));
+  const points = results.filter(Boolean).sort((a, b) => a.years - b.years);
+  if (points.length === 0) throw new Error('no FRED data');
+  return { points, updatedAt: points[0].date };
+};
+
+// 依據 maturity 年期用 linear interpolation 在 yield curve 查出對應市場 YTM。
+// 超出最短/最長期則夾在端點（flat extrapolation）。
+const getMarketYTMFromCurve = (curve, years) => {
+  if (!curve || !curve.points || curve.points.length === 0) return null;
+  if (!Number.isFinite(years) || years <= 0) return null;
+  const pts = curve.points;
+  if (years <= pts[0].years) return pts[0].yield;
+  if (years >= pts[pts.length - 1].years) return pts[pts.length - 1].yield;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    if (years >= a.years && years <= b.years) {
+      const t = (years - a.years) / (b.years - a.years);
+      return a.yield + t * (b.yield - a.yield);
+    }
+  }
+  return null;
+};
 
 const fetchWithRetry = async (url, options, retries = 5) => {
   const delays = [1000, 2000, 4000, 8000, 16000];
@@ -131,6 +190,11 @@ export default function App() {
   const [rawTradeText, setRawTradeText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
 
+  // --- FRED Yield Curve ---
+  const [yieldCurve, setYieldCurve] = useState(null);
+  const [yieldCurveError, setYieldCurveError] = useState('');
+  const [isFetchingCurve, setIsFetchingCurve] = useState(false);
+
   const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2 };
   const [formData, setFormData] = useState(defaultForm);
   const [closeData, setCloseData] = useState({ closeDate: new Date().toISOString().split('T')[0], closePrice: '', closeCommission: 0 });
@@ -143,6 +207,32 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // --- FRED Yield Curve fetch（掛載時拉一次；無 key 時靜默跳過） ---
+  useEffect(() => {
+    if (!fredApiKey) return;
+    let cancelled = false;
+    setIsFetchingCurve(true);
+    fetchYieldCurve()
+      .then(curve => { if (!cancelled) { setYieldCurve(curve); setYieldCurveError(''); } })
+      .catch(err => { if (!cancelled) setYieldCurveError(err.message || '無法獲取市場收益率'); })
+      .finally(() => { if (!cancelled) setIsFetchingCurve(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleRefreshCurve = async () => {
+    if (!fredApiKey) { setYieldCurveError('未設定 FRED API key'); return; }
+    setIsFetchingCurve(true);
+    try {
+      const curve = await fetchYieldCurve();
+      setYieldCurve(curve);
+      setYieldCurveError('');
+    } catch (err) {
+      setYieldCurveError(err.message || '無法獲取市場收益率');
+    } finally {
+      setIsFetchingCurve(false);
+    }
+  };
 
   useEffect(() => {
     if (!user) {
@@ -395,7 +485,16 @@ export default function App() {
         )}
       </div>
       <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-        <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={20}/> 債券到期倒數</h3></div>
+        <div className="flex justify-between items-center mb-4 border-b pb-2">
+          <h3 className="text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={20}/> 債券到期倒數</h3>
+          <div className="flex items-center space-x-2 text-[11px] text-slate-500">
+            {yieldCurve?.updatedAt && <span>FRED 更新: {yieldCurve.updatedAt}</span>}
+            {yieldCurveError && <span className="text-red-500 flex items-center"><AlertCircle size={12} className="mr-1"/>{yieldCurveError}</span>}
+            <button onClick={handleRefreshCurve} disabled={isFetchingCurve || !fredApiKey} title={fredApiKey ? '刷新市場收益率' : '未設定 FRED API key'} className="p-1 hover:bg-slate-100 rounded disabled:opacity-40">
+              {isFetchingCurve ? <Loader2 size={14} className="animate-spin"/> : <RefreshCw size={14}/>}
+            </button>
+          </div>
+        </div>
         {activeTrades.length === 0 ? <p className="text-sm text-slate-500 py-4 text-center bg-slate-50 rounded">暫無活躍持倉。</p> : (() => {
           const sorted = [...activeTrades].sort((a, b) => new Date(a.maturityDate) - new Date(b.maturityDate));
           const maxDays = Math.max(...sorted.map(t => calculateDaysBetween(todayObj, t.maturityDate)), 1);
@@ -417,6 +516,8 @@ export default function App() {
                 const ytm = safeYTM(trade, days);
                 const pct = Math.min((days / maxDays) * 100, 100);
                 const color = getColor(days);
+                const marketYtm = getMarketYTMFromCurve(yieldCurve, days / 365.25);
+                const delta = marketYtm != null ? ytm - marketYtm : null;
                 return (
                   <div key={trade.id} className="flex items-center space-x-3">
                     <div className="w-28 flex-shrink-0">
@@ -430,6 +531,19 @@ export default function App() {
                     <div className="w-16 flex-shrink-0 text-right">
                       <p className="text-[10px] text-slate-400 font-medium">YTM</p>
                       <p className="text-xs font-bold text-amber-600">{ytm.toFixed(2)}%</p>
+                    </div>
+                    <div className="w-20 flex-shrink-0 text-right">
+                      <p className="text-[10px] text-slate-400 font-medium">Market</p>
+                      {marketYtm != null ? (
+                        <p className="text-xs font-bold text-slate-700">
+                          {marketYtm.toFixed(2)}%
+                          <span className={`ml-1 text-[10px] ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                            {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
+                          </span>
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-300">—</p>
+                      )}
                     </div>
                   </div>
                 );

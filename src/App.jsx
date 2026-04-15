@@ -76,6 +76,17 @@ const isMatured = (maturityDateStr) => {
 };
 const calculateDaysBetween = (date1, date2) => Math.ceil(Math.abs(new Date(date2) - new Date(date1)) / (1000 * 60 * 60 * 24));
 
+const safeYTM = (trade, days) => {
+  const price = Number(trade.currentMarketPrice);
+  if (!Number.isFinite(price) || price <= 0 || !days || days <= 0) return 0;
+  const years = days / 365.25;
+  if (trade.type === 't-bill') {
+    return ((100 - price) / price) * (365 / days) * 100;
+  }
+  const coupon = Number(trade.couponRate) || 0;
+  return ((coupon + (100 - price) / years) / ((100 + price) / 2)) * 100;
+};
+
 const generateAllCoupons = (trade) => {
   if (trade.type === 't-bill' || !trade.couponFrequency || !trade.couponRate) return [];
   const coupons = [];
@@ -180,28 +191,28 @@ export default function App() {
     closedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; totalRealizedPnL += (((t.closePrice - t.cleanPrice) * t.faceValue) / 100) * mult - (t.commission||0) - (t.closeCommission||0); });
     maturedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; totalRealizedPnL += (((100 - t.cleanPrice) * t.faceValue) / 100) * mult - (t.commission||0); });
     activeTrades.forEach(trade => {
+      const price = Number(trade.currentMarketPrice);
+      if (!Number.isFinite(price) || price <= 0) return;
+      const faceValue = Number(trade.faceValue) || 0;
+      const cleanPrice = Number(trade.cleanPrice) || 0;
       const mult = trade.side === 'sell' ? -1 : 1;
-      const marketVal = ((trade.currentMarketPrice * trade.faceValue) / 100) * mult;
+      const marketVal = ((price * faceValue) / 100) * mult;
       totalMarketValue += marketVal;
-      totalUnrealizedPnL += ((((trade.currentMarketPrice - trade.cleanPrice) * trade.faceValue) / 100) * mult) - (trade.commission||0);
-      totalFace += trade.faceValue * mult;
+      totalUnrealizedPnL += ((((price - cleanPrice) * faceValue) / 100) * mult) - (trade.commission||0);
+      totalFace += faceValue * mult;
       absoluteTotalMarketValue += Math.abs(marketVal);
       if (trade.type !== 't-bill' && trade.couponRate) {
-        annualCouponIncome += (trade.faceValue * (trade.couponRate / 100)) * mult;
+        annualCouponIncome += (faceValue * (Number(trade.couponRate) / 100)) * mult;
       }
     });
     activeTrades.forEach(trade => {
+      const price = Number(trade.currentMarketPrice);
+      if (!Number.isFinite(price) || price <= 0) return;
       const mult = trade.side === 'sell' ? -1 : 1;
-      const marketVal = ((trade.currentMarketPrice * trade.faceValue) / 100) * mult;
+      const marketVal = ((price * (Number(trade.faceValue) || 0)) / 100) * mult;
       const weight = Math.abs(marketVal) / (absoluteTotalMarketValue || 1);
       const daysToMat = calculateDaysBetween(todayObj, trade.maturityDate);
-      const yearsToMat = daysToMat / 365.25;
-      let ytm = 0;
-      if (yearsToMat > 0) {
-        if (trade.type === 't-bill') ytm = ((100 - trade.currentMarketPrice) / trade.currentMarketPrice) * (365 / daysToMat) * 100;
-        else ytm = (((trade.couponRate) + (100 - trade.currentMarketPrice) / yearsToMat) / ((100 + trade.currentMarketPrice) / 2)) * 100;
-      }
-      totalWeightYTM += ytm * weight;
+      totalWeightYTM += safeYTM(trade, daysToMat) * weight;
     });
     return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
   }, [activeTrades, maturedTrades, closedTrades, receivedCoupons]);
@@ -226,7 +237,7 @@ export default function App() {
       tradeData.currentMarketPrice = Number(formData.cleanPrice);
     } else {
       tradeData.id = editingTradeId;
-      tradeData.currentMarketPrice = trades.find(t=>t.id===editingTradeId)?.currentMarketPrice || tradeData.cleanPrice;
+      tradeData.currentMarketPrice = trades.find(t=>t.id===editingTradeId)?.currentMarketPrice ?? tradeData.cleanPrice;
     }
     await saveTradeToDB(tradeData);
     setIsFormOpen(false); setEditingTradeId(null);
@@ -242,8 +253,13 @@ export default function App() {
   };
 
   const handleUpdatePrice = async (id) => {
+    const n = Number(newPrice);
+    if (!Number.isFinite(n) || n <= 0) {
+      alert('請輸入有效價格');
+      return;
+    }
     const trade = trades.find(t => t.id === id);
-    if (trade) await saveTradeToDB({ ...trade, currentMarketPrice: Number(newPrice) });
+    if (trade) await saveTradeToDB({ ...trade, currentMarketPrice: n });
     setEditingPriceId(null);
   };
 
@@ -295,10 +311,13 @@ export default function App() {
         const imported = JSON.parse(text);
         if (!Array.isArray(imported)) { alert('檔案格式錯誤：需要為交易陣列。'); return; }
         const existingIds = new Set(trades.map(t => t.id));
+        const isValid = (t) =>
+          t && t.id && t.type && t.side && t.maturityDate &&
+          Number.isFinite(Number(t.faceValue)) &&
+          Number.isFinite(Number(t.cleanPrice));
         let added = 0;
         for (const trade of imported) {
-          if (!trade.id || !trade.type || !trade.side) continue;
-          if (existingIds.has(trade.id)) continue;
+          if (!isValid(trade) || existingIds.has(trade.id)) continue;
           await saveTradeToDB(trade);
           added++;
         }
@@ -395,13 +414,8 @@ export default function App() {
             <div className="space-y-3">
               {sorted.map(trade => {
                 const days = calculateDaysBetween(todayObj, trade.maturityDate);
-                const years = days / 365.25;
-                let ytm = 0;
-                if (years > 0 && trade.currentMarketPrice) {
-                  if (trade.type === 't-bill') ytm = ((100 - trade.currentMarketPrice) / trade.currentMarketPrice) * (365 / days) * 100;
-                  else ytm = (((trade.couponRate) + (100 - trade.currentMarketPrice) / years) / ((100 + trade.currentMarketPrice) / 2)) * 100;
-                }
-                const pct = (days / maxDays) * 100;
+                const ytm = safeYTM(trade, days);
+                const pct = Math.min((days / maxDays) * 100, 100);
                 const color = getColor(days);
                 return (
                   <div key={trade.id} className="flex items-center space-x-3">

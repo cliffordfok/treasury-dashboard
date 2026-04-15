@@ -395,6 +395,12 @@ export default function App() {
             <div className="space-y-3">
               {sorted.map(trade => {
                 const days = calculateDaysBetween(todayObj, trade.maturityDate);
+                const years = days / 365.25;
+                let ytm = 0;
+                if (years > 0 && trade.currentMarketPrice) {
+                  if (trade.type === 't-bill') ytm = ((100 - trade.currentMarketPrice) / trade.currentMarketPrice) * (365 / days) * 100;
+                  else ytm = (((trade.couponRate) + (100 - trade.currentMarketPrice) / years) / ((100 + trade.currentMarketPrice) / 2)) * 100;
+                }
                 const pct = (days / maxDays) * 100;
                 const color = getColor(days);
                 return (
@@ -406,6 +412,10 @@ export default function App() {
                     <div className={`flex-1 h-7 ${color.bg} rounded-md overflow-hidden relative`}>
                       <div className={`h-full ${color.bar} transition-all`} style={{ width: `${pct}%` }}></div>
                       <span className={`absolute inset-0 flex items-center px-3 text-xs font-bold ${color.text}`}>{formatCountdown(days)}</span>
+                    </div>
+                    <div className="w-16 flex-shrink-0 text-right">
+                      <p className="text-[10px] text-slate-400 font-medium">YTM</p>
+                      <p className="text-xs font-bold text-amber-600">{ytm.toFixed(2)}%</p>
                     </div>
                   </div>
                 );

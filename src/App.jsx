@@ -41,27 +41,42 @@ const FRED_YIELD_SERIES = [
   { id: 'DGS30',  years: 30 },
 ];
 
-// 一次 fetch 所有 curve point。FRED 支援 CORS，rate limit 120 req/min 足夠我哋用。
-// 返回格式: [{ years, yield, id }, ...]（只包含有效資料點），以及 updatedAt
+// Dev 用 Vite proxy 繞 CORS；Prod 直接 call FRED（如 host 不 allow CORS 要自行 proxy）
+const FRED_BASE = import.meta.env.DEV
+  ? '/fred-proxy/fred'
+  : 'https://api.stlouisfed.org/fred';
+
+// 一次 fetch 所有 curve point，rate limit 120 req/min 足夠我哋用。
+// 返回格式: { points: [{ years, yield, id, date }, ...], updatedAt }
 const fetchYieldCurve = async () => {
-  if (!fredApiKey) throw new Error('missing FRED API key');
-  const results = await Promise.all(FRED_YIELD_SERIES.map(async ({ id, years }) => {
-    const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${id}&api_key=${fredApiKey}&file_type=json&sort_order=desc&limit=1`;
+  if (!fredApiKey) throw new Error('未設定 VITE_FRED_API_KEY');
+  const attempts = await Promise.all(FRED_YIELD_SERIES.map(async ({ id, years }) => {
+    const url = `${FRED_BASE}/series/observations?series_id=${id}&api_key=${fredApiKey}&file_type=json&sort_order=desc&limit=1`;
     try {
       const res = await fetch(url);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return { ok: false, id, error: `HTTP ${res.status} ${text.slice(0, 80)}` };
+      }
       const data = await res.json();
       const obs = data.observations?.[0];
       const v = Number(obs?.value);
-      if (!Number.isFinite(v)) return null; // FRED 用 "." 代表缺值
-      return { id, years, yield: v, date: obs.date };
-    } catch {
-      return null;
+      if (!Number.isFinite(v)) return { ok: false, id, error: 'no observation value' };
+      return { ok: true, id, years, yield: v, date: obs.date };
+    } catch (e) {
+      return { ok: false, id, error: e.message || String(e) };
     }
   }));
-  const points = results.filter(Boolean).sort((a, b) => a.years - b.years);
-  if (points.length === 0) throw new Error('no FRED data');
-  return { points, updatedAt: points[0].date };
+  const points = attempts.filter(a => a.ok).sort((a, b) => a.years - b.years);
+  const failures = attempts.filter(a => !a.ok);
+  if (failures.length) {
+    console.warn('[FRED] failures:', failures);
+  }
+  if (points.length === 0) {
+    const reason = failures[0]?.error || 'unknown';
+    throw new Error(`FRED 無回傳資料 (${reason})`);
+  }
+  return { points, updatedAt: points[0].date, failures };
 };
 
 // 依據 maturity 年期用 linear interpolation 在 yield curve 查出對應市場 YTM。
@@ -447,50 +462,55 @@ export default function App() {
   if (!isDbReady) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-500" size={48}/></div>;
 
   const renderDashboard = () => (
-    <div className="space-y-6">
-      <div className="bg-gradient-to-r from-emerald-600 to-teal-700 rounded-xl shadow-lg p-6 text-white relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-4 opacity-20"><Landmark size={100} /></div>
-        <h3 className="text-emerald-100 font-medium mb-1">Total Realized PnL (累計已實現利潤)</h3>
-        <div className="flex items-end space-x-3">
-          <p className="text-4xl font-bold tracking-tight">{portfolioMetrics.totalRealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalRealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
-          <span className="text-sm bg-white/20 px-2 py-1 rounded mb-1">已包含所有平倉、到期結算及歷史收息</span>
+    <div className="space-y-4 sm:space-y-6">
+      <div className="bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-700 rounded-2xl shadow-lg p-5 sm:p-6 text-white relative overflow-hidden">
+        <div className="absolute -top-2 -right-2 opacity-15 pointer-events-none"><Landmark size={140} /></div>
+        <p className="text-emerald-100 text-xs sm:text-sm font-medium mb-1.5">Total Realized PnL · 累計已實現利潤</p>
+        <p className="text-3xl sm:text-4xl font-bold tracking-tight">{portfolioMetrics.totalRealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalRealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+        <span className="inline-block text-[11px] sm:text-xs bg-white/15 backdrop-blur-sm px-2.5 py-1 rounded-md mt-2.5 ring-1 ring-white/20">已包含所有平倉、到期結算及歷史收息</span>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
+          <div className="p-2.5 sm:p-3 bg-blue-50 text-blue-600 rounded-lg flex-shrink-0"><DollarSign size={20} className="sm:hidden" /><DollarSign size={24} className="hidden sm:block" /></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">Active Market Value</p><p className="text-base sm:text-xl font-bold text-slate-800 truncate">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+        </div>
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
+          <div className={`p-2.5 sm:p-3 rounded-lg flex-shrink-0 ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}><Activity size={20} className="sm:hidden" /><Activity size={24} className="hidden sm:block" /></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">Unrealized PnL</p><p className={`text-base sm:text-xl font-bold truncate ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>{portfolioMetrics.totalUnrealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalUnrealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+        </div>
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
+          <div className="p-2.5 sm:p-3 bg-amber-50 text-amber-600 rounded-lg flex-shrink-0"><TrendingUp size={20} className="sm:hidden" /><TrendingUp size={24} className="hidden sm:block" /></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">Weighted Avg YTM</p><p className="text-base sm:text-xl font-bold text-slate-800">{portfolioMetrics.totalWeightYTM.toFixed(2)}%</p></div>
+        </div>
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
+          <div className="p-2.5 sm:p-3 bg-emerald-50 text-emerald-600 rounded-lg flex-shrink-0"><Wallet size={20} className="sm:hidden" /><Wallet size={24} className="hidden sm:block" /></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">平均每月利息</p><p className="text-base sm:text-xl font-bold text-emerald-600 truncate">${portfolioMetrics.monthlyAvgIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
-          <div className="p-3 bg-blue-50 text-blue-600 rounded-lg"><DollarSign size={24} /></div>
-          <div><p className="text-xs text-slate-500 font-medium">Active Market Value</p><p className="text-xl font-bold text-slate-800">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+      <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
+        <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+          <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Wallet className="mr-2 text-emerald-500" size={18}/> 今年剩餘應收派息</h3>
+          {upcomingCouponsList.length > 0 && <span className="text-[11px] text-slate-400 font-medium">{upcomingCouponsList.length} 筆</span>}
         </div>
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
-          <div className={`p-3 rounded-lg ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}><Activity size={24} /></div>
-          <div><p className="text-xs text-slate-500 font-medium">Active Unrealized PnL</p><p className={`text-xl font-bold ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>{portfolioMetrics.totalUnrealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalUnrealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
-        </div>
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
-          <div className="p-3 bg-amber-50 text-amber-600 rounded-lg"><TrendingUp size={24} /></div>
-          <div><p className="text-xs text-slate-500 font-medium">Weighted Avg YTM</p><p className="text-xl font-bold text-slate-800">{portfolioMetrics.totalWeightYTM.toFixed(2)}%</p></div>
-        </div>
-        <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
-          <div className="p-3 bg-emerald-50 text-emerald-600 rounded-lg"><Wallet size={24} /></div>
-          <div><p className="text-xs text-slate-500 font-medium">平均每月利息</p><p className="text-xl font-bold text-emerald-600">${portfolioMetrics.monthlyAvgIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
-        </div>
-      </div>
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-        <div className="flex justify-between items-center mb-4 border-b pb-2"><h3 className="text-lg font-bold text-slate-800 flex items-center"><Wallet className="mr-2 text-emerald-500" size={20}/> 今年剩餘應收派息</h3></div>
-        {upcomingCouponsList.length === 0 ? <p className="text-sm text-slate-500 py-4 text-center bg-slate-50 rounded">今年內暫無剩餘派息。</p> : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {upcomingCouponsList.length === 0 ? <p className="text-sm text-slate-500 py-6 text-center bg-slate-50 rounded-lg">今年內暫無剩餘派息。</p> : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-3">
             {upcomingCouponsList.map(c => (
-              <div key={c.id} className="bg-emerald-50/50 border border-emerald-100 p-3 rounded-lg"><p className="text-xs font-bold text-slate-500">{c.dateStr}</p><p className="text-xs text-slate-700 my-1">{c.cusip}</p><p className={`font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</p></div>
+              <div key={c.id} className="bg-gradient-to-br from-emerald-50/70 to-emerald-50/20 border border-emerald-100 p-3 rounded-lg hover:border-emerald-300 transition-colors">
+                <p className="text-[10px] font-semibold text-emerald-700 tracking-wide">{c.dateStr}</p>
+                <p className="text-[11px] text-slate-500 truncate mt-0.5">{c.cusip}</p>
+                <p className={`font-bold text-sm sm:text-base mt-1 ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</p>
+              </div>
             ))}
           </div>
         )}
       </div>
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
-        <div className="flex justify-between items-center mb-4 border-b pb-2">
-          <h3 className="text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={20}/> 債券到期倒數</h3>
-          <div className="flex items-center space-x-2 text-[11px] text-slate-500">
-            {yieldCurve?.updatedAt && <span>FRED 更新: {yieldCurve.updatedAt}</span>}
-            {yieldCurveError && <span className="text-red-500 flex items-center"><AlertCircle size={12} className="mr-1"/>{yieldCurveError}</span>}
-            <button onClick={handleRefreshCurve} disabled={isFetchingCurve || !fredApiKey} title={fredApiKey ? '刷新市場收益率' : '未設定 FRED API key'} className="p-1 hover:bg-slate-100 rounded disabled:opacity-40">
+      <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
+        <div className="flex flex-wrap justify-between items-center gap-2 mb-4 border-b border-slate-100 pb-3">
+          <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={18}/> 債券到期倒數</h3>
+          <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-500">
+            {yieldCurve?.updatedAt && <span className="bg-slate-100 px-2 py-0.5 rounded-md">FRED · {yieldCurve.updatedAt}</span>}
+            {yieldCurveError && <span className="text-red-500 flex items-center max-w-[180px] truncate" title={yieldCurveError}><AlertCircle size={11} className="mr-1 flex-shrink-0"/>{yieldCurveError}</span>}
+            <button onClick={handleRefreshCurve} disabled={isFetchingCurve || !fredApiKey} title={fredApiKey ? '刷新市場收益率' : '未設定 FRED API key'} className="p-1.5 hover:bg-slate-100 rounded-md disabled:opacity-40 transition-colors">
               {isFetchingCurve ? <Loader2 size={14} className="animate-spin"/> : <RefreshCw size={14}/>}
             </button>
           </div>
@@ -510,7 +530,7 @@ export default function App() {
             return { bar: 'bg-emerald-500', text: 'text-emerald-600', bg: 'bg-emerald-50' };
           };
           return (
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               {sorted.map(trade => {
                 const days = calculateDaysBetween(todayObj, trade.maturityDate);
                 const ytm = safeYTM(trade, days);
@@ -519,21 +539,46 @@ export default function App() {
                 const marketYtm = getMarketYTMFromCurve(yieldCurve, days / 365.25);
                 const delta = marketYtm != null ? ytm - marketYtm : null;
                 return (
-                  <div key={trade.id} className="flex items-center space-x-3">
-                    <div className="w-28 flex-shrink-0">
-                      <p className="text-xs font-bold text-slate-700 truncate">{trade.cusip || trade.type.toUpperCase()}</p>
-                      <p className="text-[10px] text-slate-400">{trade.maturityDate}</p>
+                  <div key={trade.id} className="p-2.5 sm:p-0 sm:bg-transparent rounded-lg bg-slate-50/60 sm:rounded-none space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-3">
+                    {/* Mobile：上排為 CUSIP + YTM/Market；Desktop 保持橫向 */}
+                    <div className="flex items-center justify-between sm:w-32 sm:flex-shrink-0 sm:block">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-800 truncate">{trade.cusip || trade.type.toUpperCase()}</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">{trade.maturityDate}</p>
+                      </div>
+                      {/* Mobile-only YTM / Market 顯示喺右上 */}
+                      <div className="flex items-center gap-3 sm:hidden">
+                        <div className="text-right">
+                          <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">YTM</p>
+                          <p className="text-xs font-bold text-amber-600">{ytm.toFixed(2)}%</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">Market</p>
+                          {marketYtm != null ? (
+                            <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
+                              {marketYtm.toFixed(2)}%
+                              <span className={`ml-1 text-[10px] ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
+                              </span>
+                            </p>
+                          ) : (
+                            <p className="text-xs text-slate-300">—</p>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className={`flex-1 h-7 ${color.bg} rounded-md overflow-hidden relative`}>
+                    {/* 倒數 bar：mobile 全寬，desktop flex-1 */}
+                    <div className={`w-full sm:flex-1 h-7 ${color.bg} rounded-md overflow-hidden relative ring-1 ring-inset ring-black/5`}>
                       <div className={`h-full ${color.bar} transition-all`} style={{ width: `${pct}%` }}></div>
                       <span className={`absolute inset-0 flex items-center px-3 text-xs font-bold ${color.text}`}>{formatCountdown(days)}</span>
                     </div>
-                    <div className="w-16 flex-shrink-0 text-right">
-                      <p className="text-[10px] text-slate-400 font-medium">YTM</p>
+                    {/* Desktop-only YTM / Market columns */}
+                    <div className="hidden sm:block w-16 flex-shrink-0 text-right">
+                      <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">YTM</p>
                       <p className="text-xs font-bold text-amber-600">{ytm.toFixed(2)}%</p>
                     </div>
-                    <div className="w-20 flex-shrink-0 text-right">
-                      <p className="text-[10px] text-slate-400 font-medium">Market</p>
+                    <div className="hidden sm:block w-24 flex-shrink-0 text-right">
+                      <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">Market</p>
                       {marketYtm != null ? (
                         <p className="text-xs font-bold text-slate-700">
                           {marketYtm.toFixed(2)}%
@@ -552,15 +597,18 @@ export default function App() {
           );
         })()}
       </div>
-      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-xl shadow-sm border border-blue-100">
-        <div className="flex justify-between items-start mb-4">
-          <div className="flex items-center space-x-2 text-indigo-700"><Bot size={24} /><h3 className="text-lg font-bold">Gemini 投資組合分析</h3></div>
-          <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center shadow-sm">
-            {isAnalyzing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Sparkles size={16} className="mr-2" />} 智能分析活躍持倉
+      <div className="bg-gradient-to-br from-indigo-50 via-blue-50 to-indigo-50 p-4 sm:p-6 rounded-xl shadow-sm border border-indigo-100">
+        <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
+          <div className="flex items-center gap-2 text-indigo-700">
+            <div className="p-1.5 bg-white/70 rounded-lg shadow-sm"><Bot size={20} /></div>
+            <h3 className="text-base sm:text-lg font-bold">Gemini 投資組合分析</h3>
+          </div>
+          <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
+            {isAnalyzing ? <Loader2 size={15} className="animate-spin mr-1.5" /> : <Sparkles size={15} className="mr-1.5" />} 智能分析
           </button>
         </div>
-        {insightError && <p className="text-sm text-red-600 flex items-center mt-2"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
-        {aiInsights ? <div className="bg-white/80 p-4 rounded-lg text-sm text-slate-700 leading-relaxed whitespace-pre-wrap border border-white">{aiInsights}</div> : <p className="text-sm text-indigo-400">點擊按鈕，讓 AI 為你分析現時債券梯的久期風險及資金流動性建議。</p>}
+        {insightError && <p className="text-sm text-red-600 flex items-center mt-2 mb-2"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
+        {aiInsights ? <div className="bg-white/90 p-4 rounded-lg text-sm text-slate-700 leading-relaxed whitespace-pre-wrap border border-white shadow-inner">{aiInsights}</div> : <p className="text-sm text-indigo-400/90 italic">點擊按鈕，讓 AI 為你分析現時債券梯的久期風險及資金流動性建議。</p>}
       </div>
     </div>
   );
@@ -573,13 +621,13 @@ export default function App() {
     return (
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white">
-          <h3 className="text-lg font-bold text-slate-800">Trade Ledger</h3>
-          <button onClick={() => { setFormData(defaultForm); setIsFormOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center"><Plus size={16} className="mr-1" /> Add Trade</button>
+          <h3 className="text-base sm:text-lg font-bold text-slate-800">Trade Ledger</h3>
+          <button onClick={() => { setFormData(defaultForm); setIsFormOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm"><Plus size={15} className="mr-1" /> Add Trade</button>
         </div>
-        <div className="flex space-x-6 px-4 pt-2 bg-slate-50 border-b border-slate-200">
-          <button onClick={() => setLedgerSubTab('active')} className={`pb-3 text-sm font-bold flex items-center border-b-2 ${ledgerSubTab === 'active' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}><Activity size={16} className="mr-2"/> 活躍持倉 ({activeTrades.length})</button>
-          <button onClick={() => setLedgerSubTab('closed')} className={`pb-3 text-sm font-bold flex items-center border-b-2 ${ledgerSubTab === 'closed' ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-500'}`}><Archive size={16} className="mr-2"/> 已結算 / 到期 ({maturedTrades.length + closedTrades.length})</button>
-          <button onClick={() => setLedgerSubTab('coupons')} className={`pb-3 text-sm font-bold flex items-center border-b-2 ${ledgerSubTab === 'coupons' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500'}`}><History size={16} className="mr-2"/> 收息歷史 ({receivedCoupons.length})</button>
+        <div className="flex gap-1 sm:gap-6 px-2 sm:px-4 pt-2 bg-slate-50 border-b border-slate-200 overflow-x-auto">
+          <button onClick={() => setLedgerSubTab('active')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'active' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Activity size={14} className="mr-1.5"/> 活躍 ({activeTrades.length})</button>
+          <button onClick={() => setLedgerSubTab('closed')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'closed' ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Archive size={14} className="mr-1.5"/> 已結算 ({maturedTrades.length + closedTrades.length})</button>
+          <button onClick={() => setLedgerSubTab('coupons')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'coupons' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><History size={14} className="mr-1.5"/> 收息 ({receivedCoupons.length})</button>
         </div>
         <div className="overflow-x-auto">
           {ledgerSubTab === 'coupons' ? (
@@ -617,21 +665,37 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-20">
-      <nav className="bg-slate-900 text-white p-4 sticky top-0 z-20 shadow-md">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <div className="flex items-center space-x-3"><div className="w-8 h-8 bg-blue-500 rounded flex items-center justify-center font-bold text-lg">US</div><h1 className="text-xl font-bold tracking-tight">Treasury Dashboard</h1></div>
+      <nav className="bg-slate-900 text-white px-4 py-3 sticky top-0 z-20 shadow-md">
+        <div className="max-w-6xl mx-auto flex justify-between items-center gap-3">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center font-bold text-sm shadow-sm flex-shrink-0">US</div>
+            <h1 className="text-base sm:text-xl font-bold tracking-tight truncate">Treasury Dashboard</h1>
+          </div>
           {user && (
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-slate-300 hidden md:inline">{user.email}</span>
-              <button onClick={handleExport} disabled={trades.length === 0} className="text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 px-3 py-1.5 rounded transition-colors flex items-center" title="匯出資料"><Download size={14} className="mr-1"/> 匯出</button>
-              <button onClick={handleImport} className="text-sm bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded transition-colors flex items-center" title="匯入資料"><Upload size={14} className="mr-1"/> 匯入</button>
-              <button onClick={handleLogout} className="text-sm bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded transition-colors flex items-center"><LogOut size={14} className="mr-1"/> 登出</button>
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+              <span className="text-xs text-slate-300 hidden lg:inline truncate max-w-[160px]">{user.email}</span>
+              <button onClick={handleExport} disabled={trades.length === 0} className="text-xs sm:text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 px-2.5 py-1.5 rounded-md transition-colors flex items-center gap-1" title="匯出資料">
+                <Download size={14}/><span className="hidden sm:inline">匯出</span>
+              </button>
+              <button onClick={handleImport} className="text-xs sm:text-sm bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 rounded-md transition-colors flex items-center gap-1" title="匯入資料">
+                <Upload size={14}/><span className="hidden sm:inline">匯入</span>
+              </button>
+              <button onClick={handleLogout} className="text-xs sm:text-sm bg-slate-800 hover:bg-red-600 px-2.5 py-1.5 rounded-md transition-colors flex items-center gap-1" title="登出">
+                <LogOut size={14}/><span className="hidden sm:inline">登出</span>
+              </button>
             </div>
           )}
         </div>
       </nav>
-      <main className="max-w-6xl mx-auto p-4 mt-4">
-        <div className="flex space-x-2 mb-6 bg-slate-200 p-1 rounded-lg w-max shadow-inner"><button onClick={() => setActiveTab('dashboard')} className={`px-5 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600'}`}>Analytics</button><button onClick={() => setActiveTab('trades')} className={`px-5 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600'}`}>Trade Ledger</button></div>
+      <main className="max-w-6xl mx-auto px-3 sm:px-4 mt-4">
+        <div className="grid grid-cols-2 sm:flex sm:w-max gap-1 mb-5 bg-slate-200/70 p-1 rounded-xl shadow-inner">
+          <button onClick={() => setActiveTab('dashboard')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+            <PieChart size={15}/> Analytics
+          </button>
+          <button onClick={() => setActiveTab('trades')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+            <History size={15}/> Trade Ledger
+          </button>
+        </div>
         {activeTab === 'dashboard' ? renderDashboard() : renderTrades()}
       </main>
 

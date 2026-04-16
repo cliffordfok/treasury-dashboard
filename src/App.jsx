@@ -41,27 +41,42 @@ const FRED_YIELD_SERIES = [
   { id: 'DGS30',  years: 30 },
 ];
 
-// 一次 fetch 所有 curve point。FRED 支援 CORS，rate limit 120 req/min 足夠我哋用。
-// 返回格式: [{ years, yield, id }, ...]（只包含有效資料點），以及 updatedAt
+// Dev 用 Vite proxy 繞 CORS；Prod 直接 call FRED（如 host 不 allow CORS 要自行 proxy）
+const FRED_BASE = import.meta.env.DEV
+  ? '/fred-proxy/fred'
+  : 'https://api.stlouisfed.org/fred';
+
+// 一次 fetch 所有 curve point，rate limit 120 req/min 足夠我哋用。
+// 返回格式: { points: [{ years, yield, id, date }, ...], updatedAt }
 const fetchYieldCurve = async () => {
-  if (!fredApiKey) throw new Error('missing FRED API key');
-  const results = await Promise.all(FRED_YIELD_SERIES.map(async ({ id, years }) => {
-    const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${id}&api_key=${fredApiKey}&file_type=json&sort_order=desc&limit=1`;
+  if (!fredApiKey) throw new Error('未設定 VITE_FRED_API_KEY');
+  const attempts = await Promise.all(FRED_YIELD_SERIES.map(async ({ id, years }) => {
+    const url = `${FRED_BASE}/series/observations?series_id=${id}&api_key=${fredApiKey}&file_type=json&sort_order=desc&limit=1`;
     try {
       const res = await fetch(url);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        return { ok: false, id, error: `HTTP ${res.status} ${text.slice(0, 80)}` };
+      }
       const data = await res.json();
       const obs = data.observations?.[0];
       const v = Number(obs?.value);
-      if (!Number.isFinite(v)) return null; // FRED 用 "." 代表缺值
-      return { id, years, yield: v, date: obs.date };
-    } catch {
-      return null;
+      if (!Number.isFinite(v)) return { ok: false, id, error: 'no observation value' };
+      return { ok: true, id, years, yield: v, date: obs.date };
+    } catch (e) {
+      return { ok: false, id, error: e.message || String(e) };
     }
   }));
-  const points = results.filter(Boolean).sort((a, b) => a.years - b.years);
-  if (points.length === 0) throw new Error('no FRED data');
-  return { points, updatedAt: points[0].date };
+  const points = attempts.filter(a => a.ok).sort((a, b) => a.years - b.years);
+  const failures = attempts.filter(a => !a.ok);
+  if (failures.length) {
+    console.warn('[FRED] failures:', failures);
+  }
+  if (points.length === 0) {
+    const reason = failures[0]?.error || 'unknown';
+    throw new Error(`FRED 無回傳資料 (${reason})`);
+  }
+  return { points, updatedAt: points[0].date, failures };
 };
 
 // 依據 maturity 年期用 linear interpolation 在 yield curve 查出對應市場 YTM。
@@ -519,20 +534,45 @@ export default function App() {
                 const marketYtm = getMarketYTMFromCurve(yieldCurve, days / 365.25);
                 const delta = marketYtm != null ? ytm - marketYtm : null;
                 return (
-                  <div key={trade.id} className="flex items-center space-x-3">
-                    <div className="w-28 flex-shrink-0">
-                      <p className="text-xs font-bold text-slate-700 truncate">{trade.cusip || trade.type.toUpperCase()}</p>
-                      <p className="text-[10px] text-slate-400">{trade.maturityDate}</p>
+                  <div key={trade.id} className="space-y-1.5 sm:space-y-0 sm:flex sm:items-center sm:space-x-3">
+                    {/* Mobile：上排為 CUSIP + YTM/Market；Desktop 保持橫向 */}
+                    <div className="flex items-center justify-between sm:w-28 sm:flex-shrink-0 sm:block">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-700 truncate">{trade.cusip || trade.type.toUpperCase()}</p>
+                        <p className="text-[10px] text-slate-400">{trade.maturityDate}</p>
+                      </div>
+                      {/* Mobile-only YTM / Market 顯示喺右上 */}
+                      <div className="flex items-center space-x-3 sm:hidden">
+                        <div className="text-right">
+                          <p className="text-[10px] text-slate-400 font-medium leading-none">YTM</p>
+                          <p className="text-xs font-bold text-amber-600">{ytm.toFixed(2)}%</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[10px] text-slate-400 font-medium leading-none">Market</p>
+                          {marketYtm != null ? (
+                            <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
+                              {marketYtm.toFixed(2)}%
+                              <span className={`ml-1 text-[10px] ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
+                              </span>
+                            </p>
+                          ) : (
+                            <p className="text-xs text-slate-300">—</p>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div className={`flex-1 h-7 ${color.bg} rounded-md overflow-hidden relative`}>
+                    {/* 倒數 bar：mobile 全寬，desktop flex-1 */}
+                    <div className={`w-full sm:flex-1 h-7 ${color.bg} rounded-md overflow-hidden relative`}>
                       <div className={`h-full ${color.bar} transition-all`} style={{ width: `${pct}%` }}></div>
                       <span className={`absolute inset-0 flex items-center px-3 text-xs font-bold ${color.text}`}>{formatCountdown(days)}</span>
                     </div>
-                    <div className="w-16 flex-shrink-0 text-right">
+                    {/* Desktop-only YTM / Market columns */}
+                    <div className="hidden sm:block w-16 flex-shrink-0 text-right">
                       <p className="text-[10px] text-slate-400 font-medium">YTM</p>
                       <p className="text-xs font-bold text-amber-600">{ytm.toFixed(2)}%</p>
                     </div>
-                    <div className="w-20 flex-shrink-0 text-right">
+                    <div className="hidden sm:block w-20 flex-shrink-0 text-right">
                       <p className="text-[10px] text-slate-400 font-medium">Market</p>
                       {marketYtm != null ? (
                         <p className="text-xs font-bold text-slate-700">

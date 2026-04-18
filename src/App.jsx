@@ -41,15 +41,11 @@ const FRED_YIELD_SERIES = [
   { id: 'DGS30',  years: 30 },
 ];
 
-// Dev 用 Vite proxy 繞 CORS；Prod 直接 call FRED（如 host 不 allow CORS 要自行 proxy）
-const FRED_BASE = import.meta.env.DEV
-  ? '/fred-proxy/fred'
-  : 'https://api.stlouisfed.org/fred';
-
-// 一次 fetch 所有 curve point，rate limit 120 req/min 足夠我哋用。
-// 返回格式: { points: [{ years, yield, id, date }, ...], updatedAt }
-const fetchYieldCurve = async () => {
+// Dev: Vite proxy 即時拉 FRED
+// Prod: 讀 GitHub Actions 預生成嘅 static JSON（完全無 CORS 問題）
+const fetchYieldCurveFromFRED = async () => {
   if (!fredApiKey) throw new Error('未設定 VITE_FRED_API_KEY');
+  const FRED_BASE = '/fred-proxy/fred';
   const attempts = await Promise.all(FRED_YIELD_SERIES.map(async ({ id, years }) => {
     const url = `${FRED_BASE}/series/observations?series_id=${id}&api_key=${fredApiKey}&file_type=json&sort_order=desc&limit=1`;
     try {
@@ -69,14 +65,28 @@ const fetchYieldCurve = async () => {
   }));
   const points = attempts.filter(a => a.ok).sort((a, b) => a.years - b.years);
   const failures = attempts.filter(a => !a.ok);
-  if (failures.length) {
-    console.warn('[FRED] failures:', failures);
-  }
+  if (failures.length) console.warn('[FRED] failures:', failures);
   if (points.length === 0) {
     const reason = failures[0]?.error || 'unknown';
     throw new Error(`FRED 無回傳資料 (${reason})`);
   }
-  return { points, updatedAt: points[0].date, failures };
+  return { points, updatedAt: points[0].date };
+};
+
+const fetchYieldCurveFromStatic = async () => {
+  const base = import.meta.env.BASE_URL || '/';
+  const res = await fetch(`${base}yield-curve.json`);
+  if (!res.ok) throw new Error(`yield-curve.json HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.points || data.points.length === 0) throw new Error('yield-curve.json 無資料');
+  return data;
+};
+
+const fetchYieldCurve = async () => {
+  if (import.meta.env.DEV && fredApiKey) {
+    return fetchYieldCurveFromFRED();
+  }
+  return fetchYieldCurveFromStatic();
 };
 
 // 依據 maturity 年期用 linear interpolation 在 yield curve 查出對應市場 YTM。
@@ -223,9 +233,8 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- FRED Yield Curve fetch（掛載時拉一次；無 key 時靜默跳過） ---
+  // --- FRED Yield Curve fetch（掛載時拉一次；prod 讀 static JSON） ---
   useEffect(() => {
-    if (!fredApiKey) return;
     let cancelled = false;
     setIsFetchingCurve(true);
     fetchYieldCurve()
@@ -236,7 +245,6 @@ export default function App() {
   }, []);
 
   const handleRefreshCurve = async () => {
-    if (!fredApiKey) { setYieldCurveError('未設定 FRED API key'); return; }
     setIsFetchingCurve(true);
     try {
       const curve = await fetchYieldCurve();

@@ -1,0 +1,59 @@
+name: Fetch FRED Yield Curve
+
+on:
+  schedule:
+    # 每日 UTC 22:00（美股收市後 ~6pm ET）更新一次
+    - cron: '0 22 * * 1-5'
+  workflow_dispatch: # 手動觸發
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch yield curve from FRED
+        env:
+          FRED_API_KEY: ${{ secrets.VITE_FRED_API_KEY }}
+        run: |
+          SERIES="DGS1MO DGS3MO DGS6MO DGS1 DGS2 DGS3 DGS5 DGS7 DGS10 DGS20 DGS30"
+          YEARS="0.0833 0.25 0.5 1 2 3 5 7 10 20 30"
+
+          echo '{"points":[' > /tmp/curve.json
+          FIRST=true
+          i=0
+          for SERIES_ID in $SERIES; do
+            YEAR=$(echo $YEARS | cut -d' ' -f$((i+1)))
+            RESP=$(curl -sf "https://api.stlouisfed.org/fred/series/observations?series_id=${SERIES_ID}&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1")
+            VALUE=$(echo "$RESP" | jq -r '.observations[0].value // empty')
+            DATE=$(echo "$RESP" | jq -r '.observations[0].date // empty')
+            if [ -n "$VALUE" ] && [ "$VALUE" != "." ]; then
+              if [ "$FIRST" = true ]; then FIRST=false; else echo ',' >> /tmp/curve.json; fi
+              echo "{\"id\":\"${SERIES_ID}\",\"years\":${YEAR},\"yield\":${VALUE},\"date\":\"${DATE}\"}" >> /tmp/curve.json
+            fi
+            i=$((i+1))
+          done
+          echo '],"updatedAt":"'$(date -u +%Y-%m-%d)'"}' >> /tmp/curve.json
+
+          # 驗證 JSON 有效
+          jq . /tmp/curve.json > /dev/null 2>&1 || { echo "Invalid JSON"; exit 1; }
+
+          mkdir -p public
+          cp /tmp/curve.json public/yield-curve.json
+          echo "Generated yield-curve.json:"
+          cat public/yield-curve.json
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/yield-curve.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update yield-curve.json [skip ci]"
+            git push
+          fi

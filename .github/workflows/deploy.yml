@@ -26,8 +26,36 @@ jobs:
           # 🚨 已經幫你刪除咗 cache: 'npm' 嗰行！
 
       - name: Install Dependencies
-        # 🚨 已經幫你確保用緊 npm install
         run: npm install
+
+      - name: Fetch FRED yield curve
+        env:
+          FRED_API_KEY: ${{ secrets.VITE_FRED_API_KEY }}
+        run: |
+          mkdir -p public
+          SERIES="DGS1MO DGS3MO DGS6MO DGS1 DGS2 DGS3 DGS5 DGS7 DGS10 DGS20 DGS30"
+          YEARS="0.0833 0.25 0.5 1 2 3 5 7 10 20 30"
+          echo '{"points":[' > /tmp/curve.json
+          FIRST=true; i=0
+          for S in $SERIES; do
+            Y=$(echo $YEARS | cut -d' ' -f$((i+1)))
+            R=$(curl -sf "https://api.stlouisfed.org/fred/series/observations?series_id=${S}&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1" || echo '{}')
+            V=$(echo "$R" | jq -r '.observations[0].value // empty')
+            D=$(echo "$R" | jq -r '.observations[0].date // empty')
+            if [ -n "$V" ] && [ "$V" != "." ]; then
+              $FIRST || echo ',' >> /tmp/curve.json; FIRST=false
+              echo "{\"id\":\"${S}\",\"years\":${Y},\"yield\":${V},\"date\":\"${D}\"}" >> /tmp/curve.json
+            fi
+            i=$((i+1))
+          done
+          echo "],\"updatedAt\":\"$(date -u +%Y-%m-%d)\"}" >> /tmp/curve.json
+          if jq . /tmp/curve.json > /dev/null 2>&1; then
+            cp /tmp/curve.json public/yield-curve.json
+            echo "yield-curve.json: $(jq '.points|length' public/yield-curve.json) points"
+          else
+            echo "FRED fetch failed, keeping placeholder"
+          fi
+          cat public/yield-curve.json
 
       - name: Build Project
         run: npm run build

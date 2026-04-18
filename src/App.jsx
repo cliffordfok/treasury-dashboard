@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, BarChart3 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot, BarChart, Bar, Cell, LabelList } from 'recharts';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -330,6 +331,35 @@ export default function App() {
     return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
   }, [activeTrades, maturedTrades, closedTrades, receivedCoupons]);
 
+  // --- Chart Data ---
+  const yieldCurveChartData = useMemo(() => {
+    if (!yieldCurve?.points?.length) return null;
+    const curvePoints = yieldCurve.points.map(p => ({ years: p.years, yield: p.yield }));
+    const bondDots = activeTrades.map(t => {
+      const days = calculateDaysBetween(todayObj, t.maturityDate);
+      const remainingYears = days / 365.25;
+      const marketYtm = getMarketYTMFromCurve(yieldCurve, remainingYears);
+      return { cusip: t.cusip || t.type.toUpperCase(), x: remainingYears, y: marketYtm, side: t.side };
+    }).filter(d => d.y != null);
+    return { curvePoints, bondDots };
+  }, [yieldCurve, activeTrades]);
+
+  const ladderData = useMemo(() =>
+    [...activeTrades].map(t => ({
+      label: t.cusip || t.type.toUpperCase(),
+      years: +(calculateDaysBetween(todayObj, t.maturityDate) / 365.25).toFixed(1),
+      faceValue: t.faceValue,
+      side: t.side,
+    })).sort((a, b) => a.years - b.years),
+  [activeTrades]);
+
+  const couponCalendar = useMemo(() => {
+    const year = todayObj.getFullYear();
+    const byMonth = Array.from({ length: 12 }, () => 0);
+    allCoupons.filter(c => c.date.getFullYear() === year).forEach(c => { byMonth[c.date.getMonth()] += c.amount; });
+    return byMonth;
+  }, [allCoupons]);
+
   // --- Database Actions ---
   const saveTradeToDB = async (tradeData) => {
     if (!user) return;
@@ -495,6 +525,29 @@ export default function App() {
           <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">平均每月利息</p><p className="text-base sm:text-xl font-bold text-emerald-600 truncate">${portfolioMetrics.monthlyAvgIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
         </div>
       </div>
+      {yieldCurveChartData && (
+        <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
+          <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+            <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><TrendingUp className="mr-2 text-blue-500" size={18}/> 美債收益率曲線</h3>
+            <div className="flex items-center gap-3 text-[10px]">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>Buy</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"></span>Short</span>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={yieldCurveChartData.curvePoints} margin={{ top: 5, right: 15, bottom: 0, left: -15 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="years" tick={{ fontSize: 10 }} unit="yr" />
+              <YAxis tick={{ fontSize: 10 }} domain={['auto', 'auto']} unit="%" />
+              <Tooltip formatter={(v) => [`${Number(v).toFixed(2)}%`, '收益率']} labelFormatter={(v) => `${v} 年`} />
+              <Line type="monotone" dataKey="yield" stroke="#3b82f6" strokeWidth={2.5} dot={false} />
+              {yieldCurveChartData.bondDots.map(d => (
+                <ReferenceDot key={d.cusip} x={d.x} y={d.y} r={7} fill={d.side === 'sell' ? '#f87171' : '#10b981'} stroke="#fff" strokeWidth={2.5} label={{ value: d.cusip, position: 'top', fontSize: 9, fill: '#64748b' }} />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
       <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
         <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
           <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Wallet className="mr-2 text-emerald-500" size={18}/> 今年剩餘應收派息</h3>
@@ -511,6 +564,28 @@ export default function App() {
             ))}
           </div>
         )}
+      </div>
+      <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
+        <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+          <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Calendar className="mr-2 text-emerald-500" size={18}/> 年度收息日曆 · {todayObj.getFullYear()}</h3>
+          <span className="text-[11px] text-slate-400 font-medium">${couponCalendar.reduce((s, v) => s + v, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+        </div>
+        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2">
+          {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((label, m) => {
+            const total = couponCalendar[m];
+            const has = total !== 0;
+            const past = m < todayObj.getMonth();
+            const current = m === todayObj.getMonth();
+            return (
+              <div key={m} className={`p-2.5 sm:p-3 rounded-lg border text-center transition-colors ${has ? (past ? 'bg-emerald-50/50 border-emerald-200/60' : 'bg-emerald-50 border-emerald-200') : (past ? 'bg-slate-50/60 border-slate-100' : 'bg-slate-50 border-slate-200')} ${current ? 'ring-2 ring-blue-400 ring-offset-1' : ''}`}>
+                <p className={`text-[10px] font-semibold uppercase tracking-wide ${current ? 'text-blue-600' : 'text-slate-400'}`}>{label}</p>
+                <p className={`text-sm font-bold mt-1 ${has ? (total >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-slate-300'}`}>
+                  {has ? `$${Math.abs(total).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'}
+                </p>
+              </div>
+            );
+          })}
+        </div>
       </div>
       <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
         <div className="flex flex-wrap justify-between items-center gap-2 mb-4 border-b border-slate-100 pb-3">
@@ -605,6 +680,27 @@ export default function App() {
           );
         })()}
       </div>
+      {ladderData.length > 0 && (
+        <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
+          <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+            <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><BarChart3 className="mr-2 text-blue-500" size={18}/> 債券梯分佈 · Bond Ladder</h3>
+          </div>
+          <ResponsiveContainer width="100%" height={Math.max(140, ladderData.length * 50)}>
+            <BarChart data={ladderData} layout="vertical" margin={{ top: 5, right: 50, bottom: 5, left: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+              <XAxis type="number" tick={{ fontSize: 10 }} unit=" yr" />
+              <YAxis type="category" dataKey="label" tick={{ fontSize: 10 }} width={70} />
+              <Tooltip formatter={(v) => [`${v} 年`, '距離到期']} />
+              <Bar dataKey="years" radius={[0, 6, 6, 0]} barSize={24}>
+                <LabelList dataKey="faceValue" position="right" formatter={(v) => `$${Number(v).toLocaleString()}`} style={{ fontSize: 10, fill: '#64748b' }} />
+                {ladderData.map((e, i) => (
+                  <Cell key={i} fill={e.side === 'sell' ? '#fca5a5' : '#93c5fd'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
       <div className="bg-gradient-to-br from-indigo-50 via-blue-50 to-indigo-50 p-4 sm:p-6 rounded-xl shadow-sm border border-indigo-100">
         <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
           <div className="flex items-center gap-2 text-indigo-700">

@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, BarChart3 } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot, BarChart, Bar, Cell, LabelList } from 'recharts';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -344,18 +344,6 @@ export default function App() {
     return { curvePoints, bondDots };
   }, [yieldCurve, activeTrades]);
 
-  const ladderData = useMemo(() => {
-    const byYear = {};
-    activeTrades.forEach(t => {
-      const yr = new Date(t.maturityDate).getFullYear();
-      if (!byYear[yr]) byYear[yr] = { year: yr, total: 0, bonds: [] };
-      const val = t.faceValue * (t.side === 'sell' ? -1 : 1);
-      byYear[yr].total += val;
-      byYear[yr].bonds.push(t.cusip || t.type.toUpperCase());
-    });
-    return Object.values(byYear).sort((a, b) => a.year - b.year);
-  }, [activeTrades]);
-
   const couponCalendar = useMemo(() => {
     const year = todayObj.getFullYear();
     const byMonth = Array.from({ length: 12 }, () => 0);
@@ -592,7 +580,7 @@ export default function App() {
       </div>
       <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
         <div className="flex flex-wrap justify-between items-center gap-2 mb-4 border-b border-slate-100 pb-3">
-          <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={18}/> 債券到期倒數 & 本金回流</h3>
+          <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={18}/> 債券到期倒數</h3>
           <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-500">
             {yieldCurve?.updatedAt && <span className="bg-slate-100 px-2 py-0.5 rounded-md">FRED · {yieldCurve.updatedAt}</span>}
             {yieldCurveError && <span className="text-red-500 flex items-center max-w-[180px] truncate" title={yieldCurveError}><AlertCircle size={11} className="mr-1 flex-shrink-0"/>{yieldCurveError}</span>}
@@ -682,26 +670,6 @@ export default function App() {
             </div>
           );
         })()}
-        {ladderData.length > 0 && (
-          <>
-            <div className="border-t border-slate-100 mt-5 pt-4 flex justify-between items-center">
-              <h4 className="text-sm font-bold text-slate-600 flex items-center"><BarChart3 className="mr-1.5 text-blue-400" size={15}/> 到期本金回流 · Bond Ladder</h4>
-              <span className="text-[11px] text-slate-400 font-medium">Total ${activeTrades.reduce((s, t) => s + t.faceValue * (t.side === 'sell' ? -1 : 1), 0).toLocaleString()}</span>
-            </div>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={ladderData} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} />
-                <Tooltip formatter={(v) => [`$${Number(v).toLocaleString()}`, '到期本金']} labelFormatter={(v) => `${v} 年到期`} />
-                <Bar dataKey="total" radius={[6, 6, 0, 0]} barSize={40} fill="#60a5fa">
-                  <LabelList dataKey="total" position="top" formatter={(v) => `$${Number(v).toLocaleString()}`} style={{ fontSize: 10, fill: '#475569', fontWeight: 600 }} />
-                  <LabelList dataKey="bonds" position="center" formatter={(v) => Array.isArray(v) ? v.join(', ') : v} style={{ fontSize: 8, fill: '#fff' }} />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </>
-        )}
       </div>
       <div className="bg-gradient-to-br from-indigo-50 via-blue-50 to-indigo-50 p-4 sm:p-6 rounded-xl shadow-sm border border-indigo-100">
         <div className="flex flex-wrap justify-between items-center gap-3 mb-4">

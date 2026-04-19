@@ -344,14 +344,17 @@ export default function App() {
     return { curvePoints, bondDots };
   }, [yieldCurve, activeTrades]);
 
-  const ladderData = useMemo(() =>
-    [...activeTrades].map(t => ({
-      label: t.cusip || t.type.toUpperCase(),
-      years: +(calculateDaysBetween(todayObj, t.maturityDate) / 365.25).toFixed(1),
-      faceValue: t.faceValue,
-      side: t.side,
-    })).sort((a, b) => a.years - b.years),
-  [activeTrades]);
+  const ladderData = useMemo(() => {
+    const byYear = {};
+    activeTrades.forEach(t => {
+      const yr = new Date(t.maturityDate).getFullYear();
+      if (!byYear[yr]) byYear[yr] = { year: yr, total: 0, bonds: [] };
+      const val = t.faceValue * (t.side === 'sell' ? -1 : 1);
+      byYear[yr].total += val;
+      byYear[yr].bonds.push(t.cusip || t.type.toUpperCase());
+    });
+    return Object.values(byYear).sort((a, b) => a.year - b.year);
+  }, [activeTrades]);
 
   const couponCalendar = useMemo(() => {
     const year = todayObj.getFullYear();
@@ -535,14 +538,14 @@ export default function App() {
             </div>
           </div>
           <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={yieldCurveChartData.curvePoints} margin={{ top: 5, right: 15, bottom: 0, left: -15 }}>
+            <LineChart data={yieldCurveChartData.curvePoints} margin={{ top: 20, right: 15, bottom: 0, left: -15 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="years" tick={{ fontSize: 10 }} unit="yr" />
+              <XAxis dataKey="years" type="number" tick={{ fontSize: 10 }} unit="yr" domain={[0, 30]} />
               <YAxis tick={{ fontSize: 10 }} domain={['auto', 'auto']} unit="%" />
-              <Tooltip formatter={(v) => [`${Number(v).toFixed(2)}%`, '收益率']} labelFormatter={(v) => `${v} 年`} />
+              <Tooltip formatter={(v) => [`${Number(v).toFixed(2)}%`, '收益率']} labelFormatter={(v) => `${Number(v).toFixed(1)} 年`} />
               <Line type="monotone" dataKey="yield" stroke="#3b82f6" strokeWidth={2.5} dot={false} />
               {yieldCurveChartData.bondDots.map(d => (
-                <ReferenceDot key={d.cusip} x={d.x} y={d.y} r={7} fill={d.side === 'sell' ? '#f87171' : '#10b981'} stroke="#fff" strokeWidth={2.5} label={{ value: d.cusip, position: 'top', fontSize: 9, fill: '#64748b' }} />
+                <ReferenceDot key={d.cusip} x={d.x} y={d.y} r={7} fill={d.side === 'sell' ? '#f87171' : '#10b981'} stroke="#fff" strokeWidth={2.5} label={{ value: d.cusip, position: 'top', fontSize: 9, fill: '#475569', fontWeight: 600 }} />
               ))}
             </LineChart>
           </ResponsiveContainer>
@@ -683,19 +686,18 @@ export default function App() {
       {ladderData.length > 0 && (
         <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
           <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
-            <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><BarChart3 className="mr-2 text-blue-500" size={18}/> 債券梯分佈 · Bond Ladder</h3>
+            <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><BarChart3 className="mr-2 text-blue-500" size={18}/> 到期本金回流 · Bond Ladder</h3>
+            <span className="text-[11px] text-slate-400 font-medium">Total ${activeTrades.reduce((s, t) => s + t.faceValue * (t.side === 'sell' ? -1 : 1), 0).toLocaleString()}</span>
           </div>
-          <ResponsiveContainer width="100%" height={Math.max(140, ladderData.length * 50)}>
-            <BarChart data={ladderData} layout="vertical" margin={{ top: 5, right: 50, bottom: 5, left: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 10 }} unit=" yr" />
-              <YAxis type="category" dataKey="label" tick={{ fontSize: 10 }} width={70} />
-              <Tooltip formatter={(v) => [`${v} 年`, '距離到期']} />
-              <Bar dataKey="years" radius={[0, 6, 6, 0]} barSize={24}>
-                <LabelList dataKey="faceValue" position="right" formatter={(v) => `$${Number(v).toLocaleString()}`} style={{ fontSize: 10, fill: '#64748b' }} />
-                {ladderData.map((e, i) => (
-                  <Cell key={i} fill={e.side === 'sell' ? '#fca5a5' : '#93c5fd'} />
-                ))}
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={ladderData} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} />
+              <Tooltip formatter={(v) => [`$${Number(v).toLocaleString()}`, '到期本金']} labelFormatter={(v) => `${v} 年到期`} />
+              <Bar dataKey="total" radius={[6, 6, 0, 0]} barSize={40} fill="#60a5fa">
+                <LabelList dataKey="total" position="top" formatter={(v) => `$${Number(v).toLocaleString()}`} style={{ fontSize: 10, fill: '#475569', fontWeight: 600 }} />
+                <LabelList dataKey="bonds" position="center" formatter={(v) => Array.isArray(v) ? v.join(', ') : v} style={{ fontSize: 8, fill: '#fff' }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>

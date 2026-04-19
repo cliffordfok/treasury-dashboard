@@ -172,6 +172,36 @@ const safeYTM = (trade, days) => {
   return ((coupon + (100 - price) / years) / ((100 + price) / 2)) * 100;
 };
 
+const yieldToPrice = (trade, marketYieldPercent, daysToMaturity) => {
+  if (!Number.isFinite(marketYieldPercent) || !daysToMaturity || daysToMaturity <= 0) return null;
+  const y = marketYieldPercent / 100;
+  if (trade.type === 't-bill') {
+    return 100 / (1 + y * (daysToMaturity / 365));
+  }
+  const freq = Number(trade.couponFrequency) || 2;
+  const couponPerPeriod = (Number(trade.couponRate) || 0) / freq;
+  const yPerPeriod = y / freq;
+  if (yPerPeriod <= 0) return null;
+  const matDate = new Date(trade.maturityDate);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const intervalMonths = 12 / freq;
+  const periods = [];
+  let d = new Date(matDate);
+  while (d > today) {
+    periods.push(Math.ceil((d - today) / (1000 * 60 * 60 * 24)));
+    d = new Date(d); d.setMonth(d.getMonth() - intervalMonths);
+  }
+  if (periods.length === 0) return null;
+  periods.sort((a, b) => a - b);
+  const daysPerPeriod = 365.25 / freq;
+  let price = 0;
+  for (const dc of periods) {
+    price += couponPerPeriod / Math.pow(1 + yPerPeriod, dc / daysPerPeriod);
+  }
+  price += 100 / Math.pow(1 + yPerPeriod, periods[periods.length - 1] / daysPerPeriod);
+  return Math.round(price * 1000) / 1000;
+};
+
 const generateAllCoupons = (trade) => {
   if (trade.type === 't-bill' || !trade.couponFrequency || !trade.couponRate) return [];
   const coupons = [];
@@ -244,6 +274,28 @@ export default function App() {
       .finally(() => { if (!cancelled) setIsFetchingCurve(false); });
     return () => { cancelled = true; };
   }, []);
+
+  // --- 當 yield curve 載入後，自動用市場 yield 計算理論價格更新所有活躍持倉 ---
+  useEffect(() => {
+    if (!yieldCurve?.points?.length || !user || !isDbReady) return;
+    const curveDate = yieldCurve.updatedAt;
+    if (!curveDate) return;
+    const toUpdate = trades.filter(t =>
+      t.status !== 'closed' && !isMatured(t.maturityDate) && t.priceUpdatedAt !== curveDate
+    );
+    if (toUpdate.length === 0) return;
+    (async () => {
+      for (const trade of toUpdate) {
+        const days = calculateDaysBetween(new Date(), trade.maturityDate);
+        const remainingYears = days / 365.25;
+        const marketYield = getMarketYTMFromCurve(yieldCurve, remainingYears);
+        if (marketYield == null) continue;
+        const newMktPrice = yieldToPrice(trade, marketYield, days);
+        if (newMktPrice == null || !Number.isFinite(newMktPrice) || newMktPrice <= 0) continue;
+        await saveTradeToDB({ ...trade, currentMarketPrice: newMktPrice, priceUpdatedAt: curveDate });
+      }
+    })();
+  }, [yieldCurve, trades, user, isDbReady]);
 
   const handleRefreshCurve = async () => {
     setIsFetchingCurve(true);

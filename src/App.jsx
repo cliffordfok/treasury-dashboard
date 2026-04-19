@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
@@ -181,7 +181,7 @@ const yieldToPrice = (trade, marketYieldPercent, daysToMaturity) => {
   const freq = Number(trade.couponFrequency) || 2;
   const couponPerPeriod = (Number(trade.couponRate) || 0) / freq;
   const yPerPeriod = y / freq;
-  if (yPerPeriod <= 0) return null;
+  if (yPerPeriod <= -1) return null;
   const matDate = new Date(trade.maturityDate);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const intervalMonths = 12 / freq;
@@ -276,14 +276,16 @@ export default function App() {
   }, []);
 
   // --- 當 yield curve 載入後，自動用市場 yield 計算理論價格更新所有活躍持倉 ---
+  const priceUpdateRef = useRef(null);
   useEffect(() => {
     if (!yieldCurve?.points?.length || !user || !isDbReady) return;
     const curveDate = yieldCurve.updatedAt;
-    if (!curveDate) return;
+    if (!curveDate || priceUpdateRef.current === curveDate) return;
     const toUpdate = trades.filter(t =>
       t.status !== 'closed' && !isMatured(t.maturityDate) && t.priceUpdatedAt !== curveDate
     );
-    if (toUpdate.length === 0) return;
+    if (toUpdate.length === 0) { priceUpdateRef.current = curveDate; return; }
+    priceUpdateRef.current = curveDate;
     (async () => {
       for (const trade of toUpdate) {
         const days = calculateDaysBetween(new Date(), trade.maturityDate);
@@ -299,6 +301,7 @@ export default function App() {
 
   const handleRefreshCurve = async () => {
     setIsFetchingCurve(true);
+    priceUpdateRef.current = null;
     try {
       const curve = await fetchYieldCurve();
       setYieldCurve(curve);
@@ -346,7 +349,7 @@ export default function App() {
   const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
 
   const allCoupons = useMemo(() => trades.flatMap(generateAllCoupons), [trades]);
-  const todayObj = new Date(); todayObj.setHours(0,0,0,0);
+  const todayObj = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
   const receivedCoupons = useMemo(() => allCoupons.filter(c => c.date <= todayObj), [allCoupons, todayObj]);
   const upcomingCouponsList = useMemo(() => allCoupons.filter(c => c.date > todayObj && c.date.getFullYear() === todayObj.getFullYear()), [allCoupons, todayObj]);
 
@@ -354,8 +357,8 @@ export default function App() {
   const portfolioMetrics = useMemo(() => {
     let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let absoluteTotalMarketValue = 0; let totalRealizedPnL = 0; let annualCouponIncome = 0;
     receivedCoupons.forEach(c => totalRealizedPnL += c.amount);
-    closedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; totalRealizedPnL += (((t.closePrice - t.cleanPrice) * t.faceValue) / 100) * mult - (t.commission||0) - (t.closeCommission||0); });
-    maturedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; totalRealizedPnL += (((100 - t.cleanPrice) * t.faceValue) / 100) * mult - (t.commission||0); });
+    closedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; const cp = Number(t.closePrice) || 0; const bp = Number(t.cleanPrice) || 0; const fv = Number(t.faceValue) || 0; totalRealizedPnL += (((cp - bp) * fv) / 100) * mult - (Number(t.commission)||0) - (Number(t.closeCommission)||0); });
+    maturedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; const bp = Number(t.cleanPrice) || 0; const fv = Number(t.faceValue) || 0; totalRealizedPnL += (((100 - bp) * fv) / 100) * mult - (Number(t.commission)||0); });
     activeTrades.forEach(trade => {
       const price = Number(trade.currentMarketPrice);
       if (!Number.isFinite(price) || price <= 0) return;

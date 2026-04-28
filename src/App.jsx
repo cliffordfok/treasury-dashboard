@@ -254,6 +254,8 @@ export default function App() {
   const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2 };
   const [formData, setFormData] = useState(defaultForm);
   const [closeData, setCloseData] = useState({ closeDate: new Date().toISOString().split('T')[0], closePrice: '', closeCommission: 0 });
+  const [selectedBenchmark, setSelectedBenchmark] = useState('UST10Y');
+  const [importAuditLog, setImportAuditLog] = useState([]);
 
   // --- Firebase Auth 監聽 (改為 Google 登入) ---
   useEffect(() => {
@@ -406,6 +408,16 @@ export default function App() {
     return byMonth;
   }, [allCoupons]);
 
+  const benchmarkMetrics = useMemo(() => {
+    const benchmarkYearsMap = { SGOV: 0.25, SHY: 2, IEF: 7, TLT: 20, UST10Y: 10 };
+    const benchmarkYears = benchmarkYearsMap[selectedBenchmark] ?? 10;
+    const benchmarkYield = getMarketYTMFromCurve(yieldCurve, benchmarkYears);
+    const portfolioYield = Number.isFinite(portfolioMetrics.totalWeightYTM) ? portfolioMetrics.totalWeightYTM : 0;
+    const spread = benchmarkYield == null ? null : (portfolioYield - benchmarkYield);
+    return { benchmarkYears, benchmarkYield, portfolioYield, spread };
+  }, [selectedBenchmark, yieldCurve, portfolioMetrics.totalWeightYTM]);
+
+
   // --- Database Actions ---
   const saveTradeToDB = async (tradeData) => {
     if (!user) return;
@@ -500,17 +512,48 @@ export default function App() {
         const imported = JSON.parse(text);
         if (!Array.isArray(imported)) { alert('檔案格式錯誤：需要為交易陣列。'); return; }
         const existingIds = new Set(trades.map(t => t.id));
-        const isValid = (t) =>
-          t && t.id && t.type && t.side && t.maturityDate &&
-          Number.isFinite(Number(t.faceValue)) &&
-          Number.isFinite(Number(t.cleanPrice));
+        const existingFingerprints = new Set(trades.map(t => `${t.cusip || ''}|${t.tradeDate || ''}|${Number(t.faceValue) || 0}`));
+        const validTypes = new Set(['t-bill', 't-note', 't-bond', 'tips']);
+        const validSides = new Set(['buy', 'sell']);
+        const validFreq = new Set([1, 2, 4, 12]);
+        const errors = [];
         let added = 0;
-        for (const trade of imported) {
-          if (!isValid(trade) || existingIds.has(trade.id)) continue;
+
+        const isISODate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+
+        for (let i = 0; i < imported.length; i++) {
+          const trade = imported[i];
+          const prefix = `第 ${i + 1} 筆`;
+          if (!trade || typeof trade !== 'object') { errors.push(`${prefix}: 格式不是物件`); continue; }
+          if (!trade.id || existingIds.has(trade.id)) { errors.push(`${prefix}: 缺少或重複 id`); continue; }
+          if (!validTypes.has(trade.type)) { errors.push(`${prefix}: type 無效`); continue; }
+          if (!validSides.has(trade.side)) { errors.push(`${prefix}: side 無效`); continue; }
+          if (!isISODate(trade.tradeDate) || !isISODate(trade.maturityDate)) { errors.push(`${prefix}: 日期格式需為 YYYY-MM-DD`); continue; }
+          if (new Date(trade.maturityDate) <= new Date(trade.tradeDate)) { errors.push(`${prefix}: maturityDate 必須晚於 tradeDate`); continue; }
+          if (!Number.isFinite(Number(trade.faceValue)) || Number(trade.faceValue) <= 0) { errors.push(`${prefix}: faceValue 無效`); continue; }
+          if (!Number.isFinite(Number(trade.cleanPrice)) || Number(trade.cleanPrice) <= 0) { errors.push(`${prefix}: cleanPrice 無效`); continue; }
+          if (trade.type !== 't-bill' && !validFreq.has(Number(trade.couponFrequency || 2))) { errors.push(`${prefix}: couponFrequency 無效`); continue; }
+
+          const fp = `${trade.cusip || ''}|${trade.tradeDate || ''}|${Number(trade.faceValue) || 0}`;
+          if (existingFingerprints.has(fp)) { errors.push(`${prefix}: 疑似重複交易 (CUSIP+TradeDate+FaceValue)`); continue; }
+
           await saveTradeToDB(trade);
+          existingIds.add(trade.id);
+          existingFingerprints.add(fp);
           added++;
         }
-        alert(`匯入完成：新增 ${added} 筆交易，略過 ${imported.length - added} 筆（重複或無效）。`);
+
+        const skipped = imported.length - added;
+        setImportAuditLog(prev => [{
+          id: Date.now().toString(),
+          ts: new Date().toISOString(),
+          total: imported.length,
+          added,
+          skipped,
+          errors: errors.slice(0, 10),
+        }, ...prev].slice(0, 10));
+
+        alert(`匯入完成：新增 ${added} 筆交易，略過 ${skipped} 筆。`);
       } catch (err) { alert('匯入失敗：無法讀取或解析檔案。'); }
     };
     input.click();
@@ -569,6 +612,40 @@ export default function App() {
         <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
           <div className="p-2.5 sm:p-3 bg-emerald-50 text-emerald-600 rounded-lg flex-shrink-0"><Wallet size={20} className="sm:hidden" /><Wallet size={24} className="hidden sm:block" /></div>
           <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">平均每月利息</p><p className="text-base sm:text-xl font-bold text-emerald-600 truncate">${portfolioMetrics.monthlyAvgIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100">
+          <h3 className="text-sm sm:text-base font-bold text-slate-800 mb-3 flex items-center"><TrendingUp size={16} className="mr-2 text-blue-500"/> Benchmark 對比</h3>
+          <div className="flex items-center gap-2 mb-3">
+            <select value={selectedBenchmark} onChange={(e) => setSelectedBenchmark(e.target.value)} className="text-xs sm:text-sm border rounded-md px-2 py-1">
+              <option value="UST10Y">UST 10Y</option>
+              <option value="SGOV">SGOV (~3M)</option>
+              <option value="SHY">SHY (~2Y)</option>
+              <option value="IEF">IEF (~7Y)</option>
+              <option value="TLT">TLT (~20Y)</option>
+            </select>
+            <span className="text-[11px] text-slate-500">Curve tenor: {benchmarkMetrics.benchmarkYears}Y</span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Portfolio YTM</p><p className="font-bold">{benchmarkMetrics.portfolioYield.toFixed(2)}%</p></div>
+            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Benchmark YTM</p><p className="font-bold">{benchmarkMetrics.benchmarkYield == null ? '—' : `${benchmarkMetrics.benchmarkYield.toFixed(2)}%`}</p></div>
+            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Spread</p><p className={`font-bold ${benchmarkMetrics.spread == null ? 'text-slate-400' : benchmarkMetrics.spread >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{benchmarkMetrics.spread == null ? '—' : `${benchmarkMetrics.spread >= 0 ? '+' : ''}${benchmarkMetrics.spread.toFixed(2)}%`}</p></div>
+          </div>
+        </div>
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100">
+          <h3 className="text-sm sm:text-base font-bold text-slate-800 mb-3 flex items-center"><History size={16} className="mr-2 text-slate-600"/> 匯入稽核記錄</h3>
+          {importAuditLog.length === 0 ? <p className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3">尚未有匯入記錄。</p> : (
+            <div className="space-y-2">
+              {importAuditLog.map(log => (
+                <div key={log.id} className="text-xs border rounded-lg p-2.5 bg-slate-50">
+                  <p className="font-semibold text-slate-700">{new Date(log.ts).toLocaleString()} · 新增 {log.added} / {log.total}</p>
+                  {log.skipped > 0 && <p className="text-amber-700">略過 {log.skipped} 筆（詳見驗證規則）</p>}
+                  {log.errors?.length > 0 && <p className="text-slate-500 truncate" title={log.errors.join(' | ')}>例子：{log.errors[0]}</p>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       {yieldCurveChartData && (

@@ -24,8 +24,7 @@ const googleProvider = new GoogleAuthProvider(); // 初始化 Google 登入
 // --- Gemini API Configuration ---
 // Production builds must call a backend/proxy so the Gemini key never ships to browsers.
 const geminiProxyUrl = import.meta.env.VITE_GEMINI_PROXY_URL || "";
-const devGeminiApiKey = import.meta.env.DEV ? (import.meta.env.VITE_GEMINI_API_KEY || "") : "";
-const isGeminiConfigured = Boolean(geminiProxyUrl || devGeminiApiKey);
+const isGeminiConfigured = Boolean(geminiProxyUrl);
 
 // --- FRED API Configuration ---
 const fredApiKey = import.meta.env.VITE_FRED_API_KEY || "";
@@ -137,14 +136,7 @@ const generateText = async (prompt) => {
     });
     return result.text || result.response || "無法獲取 AI 回應。";
   }
-  if (!devGeminiApiKey) throw new Error('未設定 Gemini proxy');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${devGeminiApiKey}`;
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    systemInstruction: { parts: [{ text: "You are an expert US Treasury Bond portfolio manager. Provide concise, professional insights in Traditional Chinese (Hong Kong style)." }] }
-  };
-  const result = await fetchWithRetry(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  return result.candidates?.[0]?.content?.parts?.[0]?.text || "無法獲取 AI 回應。";
+  throw new Error('未設定 Gemini proxy');
 };
 
 const extractTradeData = async (rawText) => {
@@ -156,24 +148,7 @@ const extractTradeData = async (rawText) => {
     });
     return result.trade || result.data || result;
   }
-  if (!devGeminiApiKey) throw new Error('未設定 Gemini proxy');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${devGeminiApiKey}`;
-  const payload = {
-    contents: [{ parts: [{ text: `Extract the US Treasury bond trade details from the following text:\n\n${rawText}` }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: "OBJECT",
-        properties: {
-          cusip: { type: "STRING" }, type: { type: "STRING" }, side: { type: "STRING" }, tradeDate: { type: "STRING" }, maturityDate: { type: "STRING" },
-          faceValue: { type: "NUMBER" }, cleanPrice: { type: "NUMBER" }, couponRate: { type: "NUMBER" }, commission: { type: "NUMBER" }, couponFrequency: { type: "NUMBER" }
-        },
-        required: ["type", "side", "faceValue", "cleanPrice", "couponRate"]
-      }
-    }
-  };
-  const result = await fetchWithRetry(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  return JSON.parse(result.candidates?.[0]?.content?.parts?.[0]?.text);
+  throw new Error('未設定 Gemini proxy');
 };
 
 // --- Math & Date Engine ---

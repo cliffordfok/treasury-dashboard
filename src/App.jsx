@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
@@ -198,6 +198,40 @@ const yieldToPrice = (trade, marketYieldPercent, daysToMaturity) => {
   return Math.round(price * 1000) / 1000;
 };
 
+const solveYTMFromPrice = (trade, targetPrice, daysToMaturity) => {
+  if (!Number.isFinite(targetPrice) || targetPrice <= 0 || !daysToMaturity || daysToMaturity <= 0) return null;
+  if (trade.type === 't-bill') {
+    return ((100 - targetPrice) / targetPrice) * (365 / daysToMaturity) * 100;
+  }
+
+  let low = -50;
+  let high = 100;
+  let lowPrice = yieldToPrice(trade, low, daysToMaturity);
+  let highPrice = yieldToPrice(trade, high, daysToMaturity);
+  if (lowPrice == null || highPrice == null) return null;
+
+  while (lowPrice < targetPrice && low > -95) {
+    low -= 25;
+    lowPrice = yieldToPrice(trade, low, daysToMaturity);
+    if (lowPrice == null) return null;
+  }
+  while (highPrice > targetPrice && high < 500) {
+    high += 100;
+    highPrice = yieldToPrice(trade, high, daysToMaturity);
+    if (highPrice == null) return null;
+  }
+  if (targetPrice > lowPrice || targetPrice < highPrice) return null;
+
+  for (let i = 0; i < 80; i++) {
+    const mid = (low + high) / 2;
+    const price = yieldToPrice(trade, mid, daysToMaturity);
+    if (price == null) return null;
+    if (price > targetPrice) low = mid;
+    else high = mid;
+  }
+  return (low + high) / 2;
+};
+
 const generateAllCoupons = (trade) => {
   if (trade.type === 't-bill' || !trade.couponFrequency || !trade.couponRate) return [];
   const coupons = [];
@@ -285,7 +319,9 @@ export default function App() {
   const [isFetchingCurve, setIsFetchingCurve] = useState(false);
 
   const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2 };
+  const defaultYtmForm = { type: 't-note', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 10000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0 };
   const [formData, setFormData] = useState(defaultForm);
+  const [ytmForm, setYtmForm] = useState(defaultYtmForm);
   const [closeData, setCloseData] = useState({ closeDate: new Date().toISOString().split('T')[0], closePrice: '', closeCommission: 0 });
   const [selectedBenchmark, setSelectedBenchmark] = useState('UST10Y');
   const [importAuditLog, setImportAuditLog] = useState([]);
@@ -458,6 +494,54 @@ export default function App() {
     const spread = benchmarkYield == null ? null : (portfolioYield - benchmarkYield);
     return { benchmarkYears, benchmarkYield, portfolioYield, spread };
   }, [selectedBenchmark, yieldCurve, portfolioMetrics.totalWeightYTM]);
+
+  const ytmQuote = useMemo(() => {
+    const faceValue = toFiniteNumber(ytmForm.faceValue);
+    const cleanPrice = toFiniteNumber(ytmForm.cleanPrice);
+    const commission = toFiniteNumber(ytmForm.commission);
+    const couponRate = ytmForm.type === 't-bill' ? 0 : toFiniteNumber(ytmForm.couponRate);
+    const couponFrequency = ytmForm.type === 't-bill' ? 0 : toFiniteNumber(ytmForm.couponFrequency, 2);
+    const tradeDate = new Date(ytmForm.tradeDate);
+    const maturityDate = new Date(ytmForm.maturityDate);
+
+    if (!ytmForm.tradeDate || !ytmForm.maturityDate || maturityDate <= tradeDate || faceValue <= 0 || cleanPrice <= 0) {
+      return { isValid: false };
+    }
+
+    const days = calculateDaysBetween(tradeDate, maturityDate);
+    const years = days / 365.25;
+    const priceWithCommission = cleanPrice + ((commission / faceValue) * 100);
+    const trade = { type: ytmForm.type, couponRate, couponFrequency, maturityDate: ytmForm.maturityDate };
+    const grossYtm = solveYTMFromPrice(trade, cleanPrice, days);
+    const netYtm = solveYTMFromPrice(trade, priceWithCommission, days);
+    const principalCost = (cleanPrice * faceValue) / 100;
+    const totalCost = principalCost + commission;
+    const redemptionValue = faceValue;
+    const annualCoupon = ytmForm.type === 't-bill' ? 0 : faceValue * (couponRate / 100);
+    const couponEstimate = annualCoupon * years;
+    const maturityProfit = redemptionValue + couponEstimate - totalCost;
+    const breakevenPrice = 100 + ((couponEstimate - commission) / faceValue) * 100;
+    const marketYield = getMarketYTMFromCurve(yieldCurve, years);
+
+    return {
+      isValid: true,
+      days,
+      years,
+      faceValue,
+      cleanPrice,
+      priceWithCommission,
+      principalCost,
+      totalCost,
+      redemptionValue,
+      couponEstimate,
+      maturityProfit,
+      breakevenPrice,
+      grossYtm,
+      netYtm,
+      marketYield,
+      spreadToCurve: marketYield == null || netYtm == null ? null : netYtm - marketYield,
+    };
+  }, [ytmForm, yieldCurve]);
 
 
   // --- Database Actions ---
@@ -872,6 +956,138 @@ export default function App() {
     </div>
   );
 
+  const renderYtmCalculator = () => {
+    const update = (field, value) => setYtmForm(prev => ({ ...prev, [field]: value }));
+    const money = (value) => Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const pct = (value) => value == null || !Number.isFinite(value) ? '--' : `${value.toFixed(3)}%`;
+
+    return (
+      <div className="space-y-4 sm:space-y-6">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+          <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-wrap justify-between items-center gap-3">
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2"><Calculator size={18} className="text-blue-600"/> Pre-Trade YTM Calculator</h3>
+              <p className="text-xs text-slate-500 mt-1">Estimate gross and net YTM before buying a Treasury.</p>
+            </div>
+            <button onClick={() => setYtmForm(defaultYtmForm)} className="text-xs sm:text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg font-semibold transition-colors">Reset</button>
+          </div>
+
+          <div className="p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-5">
+            <div className="grid grid-cols-2 gap-3 content-start">
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label>
+                <select value={ytmForm.type} onChange={(e) => update('type', e.target.value)} className="w-full p-2 border rounded-lg text-sm bg-white">
+                  <option value="t-bill">T-Bill</option>
+                  <option value="t-note">T-Note</option>
+                  <option value="t-bond">T-Bond</option>
+                  <option value="tips">TIPS</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Face Value</label>
+                <input type="number" min="1" step="100" value={ytmForm.faceValue} onChange={(e) => update('faceValue', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label>
+                <input type="date" value={ytmForm.tradeDate} onChange={(e) => update('tradeDate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label>
+                <input type="date" value={ytmForm.maturityDate} onChange={(e) => update('maturityDate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label>
+                <input type="number" min="0.001" step="0.001" value={ytmForm.cleanPrice} onChange={(e) => update('cleanPrice', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Commission</label>
+                <input type="number" min="0" step="0.01" value={ytmForm.commission} onChange={(e) => update('commission', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              </div>
+              {ytmForm.type !== 't-bill' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate %</label>
+                    <input type="number" min="0" step="0.125" value={ytmForm.couponRate} onChange={(e) => update('couponRate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">Coupon Frequency</label>
+                    <select value={ytmForm.couponFrequency} onChange={(e) => update('couponFrequency', e.target.value)} className="w-full p-2 border rounded-lg text-sm bg-white">
+                      <option value="2">Semi-Annually</option>
+                      <option value="1">Annually</option>
+                      <option value="4">Quarterly</option>
+                      <option value="12">Monthly</option>
+                    </select>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              {!ytmQuote.isValid ? (
+                <div className="h-full min-h-[220px] rounded-xl border border-dashed border-slate-200 bg-slate-50 flex items-center justify-center text-sm text-slate-500 px-4 text-center">
+                  Enter a valid maturity date, price, and face value to calculate YTM.
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="p-3 rounded-lg bg-blue-50 border border-blue-100">
+                      <p className="text-[11px] text-blue-700 font-semibold">Net YTM</p>
+                      <p className="text-xl font-bold text-blue-700 mt-1">{pct(ytmQuote.netYtm)}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                      <p className="text-[11px] text-slate-500 font-semibold">Gross YTM</p>
+                      <p className="text-xl font-bold text-slate-800 mt-1">{pct(ytmQuote.grossYtm)}</p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100">
+                      <p className="text-[11px] text-emerald-700 font-semibold">Curve Spread</p>
+                      <p className={`text-xl font-bold mt-1 ${ytmQuote.spreadToCurve == null ? 'text-slate-400' : ytmQuote.spreadToCurve >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                        {ytmQuote.spreadToCurve == null ? '--' : `${ytmQuote.spreadToCurve >= 0 ? '+' : ''}${ytmQuote.spreadToCurve.toFixed(3)}%`}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="p-3 rounded-lg border bg-white">
+                      <p className="text-[11px] text-slate-500 font-semibold">All-in Price</p>
+                      <p className="font-bold text-slate-800">{ytmQuote.priceWithCommission.toFixed(3)}</p>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-white">
+                      <p className="text-[11px] text-slate-500 font-semibold">Days to Maturity</p>
+                      <p className="font-bold text-slate-800">{ytmQuote.days.toLocaleString()} days</p>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-white">
+                      <p className="text-[11px] text-slate-500 font-semibold">Total Cost</p>
+                      <p className="font-bold text-slate-800">${money(ytmQuote.totalCost)}</p>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-white">
+                      <p className="text-[11px] text-slate-500 font-semibold">Est. Profit to Maturity</p>
+                      <p className={`font-bold ${ytmQuote.maturityProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{ytmQuote.maturityProfit >= 0 ? '+' : ''}${money(ytmQuote.maturityProfit)}</p>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-white">
+                      <p className="text-[11px] text-slate-500 font-semibold">Est. Coupon Income</p>
+                      <p className="font-bold text-slate-800">${money(ytmQuote.couponEstimate)}</p>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-white">
+                      <p className="text-[11px] text-slate-500 font-semibold">Breakeven Price</p>
+                      <p className="font-bold text-slate-800">{ytmQuote.breakevenPrice.toFixed(3)}</p>
+                    </div>
+                  </div>
+
+                  {ytmQuote.marketYield != null && (
+                    <div className="p-3 rounded-lg bg-slate-900 text-white text-sm flex flex-wrap justify-between gap-2">
+                      <span className="text-slate-300">Interpolated FRED curve for {ytmQuote.years.toFixed(2)}Y</span>
+                      <span className="font-bold">{ytmQuote.marketYield.toFixed(3)}%</span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderTrades = () => {
     let displayedTrades = [];
     if (ledgerSubTab === 'active') displayedTrades = activeTrades;
@@ -951,15 +1167,18 @@ export default function App() {
         </div>
       </nav>
       <main className="max-w-6xl mx-auto px-3 sm:px-4 mt-4">
-        <div className="grid grid-cols-2 sm:flex sm:w-max gap-1 mb-5 bg-slate-200/70 p-1 rounded-xl shadow-inner">
+        <div className="grid grid-cols-3 sm:flex sm:w-max gap-1 mb-5 bg-slate-200/70 p-1 rounded-xl shadow-inner">
           <button onClick={() => setActiveTab('dashboard')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <PieChart size={15}/> Analytics
+          </button>
+          <button onClick={() => setActiveTab('ytm')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'ytm' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+            <Calculator size={15}/> YTM
           </button>
           <button onClick={() => setActiveTab('trades')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <History size={15}/> Trade Ledger
           </button>
         </div>
-        {activeTab === 'dashboard' ? renderDashboard() : renderTrades()}
+        {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : renderTrades()}
       </main>
 
       {isFormOpen && (

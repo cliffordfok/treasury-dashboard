@@ -19,31 +19,83 @@ jobs:
         env:
           FRED_API_KEY: ${{ secrets.VITE_FRED_API_KEY }}
         run: |
+          set -euo pipefail
+
+          if [ -z "${FRED_API_KEY:-}" ]; then
+            echo "::error::Missing repository secret VITE_FRED_API_KEY"
+            exit 1
+          fi
+
           SERIES="DGS1MO DGS3MO DGS6MO DGS1 DGS2 DGS3 DGS5 DGS7 DGS10 DGS20 DGS30"
           YEARS="0.0833 0.25 0.5 1 2 3 5 7 10 20 30"
 
+          fetch_series() {
+            local series_id="$1"
+            local url="https://api.stlouisfed.org/fred/series/observations?series_id=${series_id}&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1"
+            local body status attempt
+            body="$(mktemp)"
+
+            for attempt in 1 2 3; do
+              status="$(curl -sS --retry 2 --retry-delay 5 --retry-all-errors -w '%{http_code}' -o "$body" "$url" || true)"
+              if [ "$status" = "200" ]; then
+                cat "$body"
+                rm -f "$body"
+                return 0
+              fi
+
+              echo "FRED ${series_id} returned HTTP ${status} on attempt ${attempt}/3" >&2
+              sed -e 's/api_key=[^&]*/api_key=***REDACTED***/g' "$body" >&2 || true
+              sleep 10
+            done
+
+            rm -f "$body"
+            return 1
+          }
+
           echo '{"points":[' > /tmp/curve.json
           FIRST=true
+          POINTS=0
           i=0
+
           for SERIES_ID in $SERIES; do
-            YEAR=$(echo $YEARS | cut -d' ' -f$((i+1)))
-            RESP=$(curl -sf "https://api.stlouisfed.org/fred/series/observations?series_id=${SERIES_ID}&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1")
-            VALUE=$(echo "$RESP" | jq -r '.observations[0].value // empty')
-            DATE=$(echo "$RESP" | jq -r '.observations[0].date // empty')
-            if [ -n "$VALUE" ] && [ "$VALUE" != "." ]; then
-              if [ "$FIRST" = true ]; then FIRST=false; else echo ',' >> /tmp/curve.json; fi
-              echo "{\"id\":\"${SERIES_ID}\",\"years\":${YEAR},\"yield\":${VALUE},\"date\":\"${DATE}\"}" >> /tmp/curve.json
+            YEAR=$(echo "$YEARS" | cut -d' ' -f$((i+1)))
+
+            if RESP=$(fetch_series "$SERIES_ID"); then
+              VALUE=$(echo "$RESP" | jq -r '.observations[0].value // empty')
+              DATE=$(echo "$RESP" | jq -r '.observations[0].date // empty')
+
+              if [ -n "$VALUE" ] && [ "$VALUE" != "." ]; then
+                if [ "$FIRST" = true ]; then FIRST=false; else echo ',' >> /tmp/curve.json; fi
+                jq -n \
+                  --arg id "$SERIES_ID" \
+                  --argjson years "$YEAR" \
+                  --argjson yield "$VALUE" \
+                  --arg date "$DATE" \
+                  '{id: $id, years: $years, yield: $yield, date: $date}' >> /tmp/curve.json
+                POINTS=$((POINTS+1))
+              else
+                echo "FRED ${SERIES_ID} has no latest observation value; skipping" >&2
+              fi
+            else
+              echo "FRED ${SERIES_ID} failed after retries; skipping" >&2
             fi
+
             i=$((i+1))
           done
+
           echo '],"updatedAt":"'$(date -u +%Y-%m-%d)'"}' >> /tmp/curve.json
 
-          # 驗證 JSON 有效
-          jq . /tmp/curve.json > /dev/null 2>&1 || { echo "Invalid JSON"; exit 1; }
+          if [ "$POINTS" -eq 0 ]; then
+            echo "::error::FRED returned zero usable yield curve points"
+            cat /tmp/curve.json
+            exit 1
+          fi
+
+          jq . /tmp/curve.json > /dev/null
 
           mkdir -p public
           cp /tmp/curve.json public/yield-curve.json
-          echo "Generated yield-curve.json:"
+          echo "Generated yield-curve.json with ${POINTS} points:"
           cat public/yield-curve.json
 
       - name: Commit and push
@@ -54,6 +106,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update yield-curve.json [skip ci]"
+            git commit -m "chore: update yield-curve.json"
             git push
           fi

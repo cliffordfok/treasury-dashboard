@@ -1,23 +1,78 @@
 {"points":[
-{"id":"DGS1MO","years":0.0833,"yield":3.7,"date":"2026-05-05"}
+{
+  "id": "DGS1MO",
+  "years": 0.0833,
+  "yield": 3.72,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS3MO","years":0.25,"yield":3.69,"date":"2026-05-05"}
+{
+  "id": "DGS3MO",
+  "years": 0.25,
+  "yield": 3.69,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS6MO","years":0.5,"yield":3.75,"date":"2026-05-05"}
+{
+  "id": "DGS6MO",
+  "years": 0.5,
+  "yield": 3.74,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS1","years":1,"yield":3.77,"date":"2026-05-05"}
+{
+  "id": "DGS1",
+  "years": 1,
+  "yield": 3.76,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS2","years":2,"yield":3.93,"date":"2026-05-05"}
+{
+  "id": "DGS2",
+  "years": 2,
+  "yield": 3.92,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS3","years":3,"yield":3.97,"date":"2026-05-05"}
+{
+  "id": "DGS3",
+  "years": 3,
+  "yield": 3.94,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS5","years":5,"yield":4.08,"date":"2026-05-05"}
+{
+  "id": "DGS5",
+  "years": 5,
+  "yield": 4.04,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS7","years":7,"yield":4.25,"date":"2026-05-05"}
+{
+  "id": "DGS7",
+  "years": 7,
+  "yield": 4.22,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS10","years":10,"yield":4.43,"date":"2026-05-05"}
+{
+  "id": "DGS10",
+  "years": 10,
+  "yield": 4.41,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS20","years":20,"yield":4.98,"date":"2026-05-05"}
+{
+  "id": "DGS20",
+  "years": 20,
+  "yield": 4.96,
+  "date": "2026-05-07"
+}
 ,
-{"id":"DGS30","years":30,"yield":4.98,"date":"2026-05-05"}
-],"updatedAt":"2026-05-06"}
+{
+  "id": "DGS30",
+  "years": 30,
+  "yield": 4.97,
+  "date": "2026-05-07"
+}
+],"updatedAt":"2026-05-10"}

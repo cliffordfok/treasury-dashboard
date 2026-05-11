@@ -551,6 +551,32 @@ export default function App() {
     await setDoc(tradeRef, tradeData);
   };
 
+  const handleAddYtmToPortfolio = async () => {
+    if (!ytmQuote.isValid) return;
+    if (!user) {
+      alert('未能加入 Portfolio，請先確認已登入。');
+      return;
+    }
+    const tradeData = normalizeTradeForStorage({
+      id: makeTradeId(),
+      cusip: `${ytmForm.type.toUpperCase()} ${ytmForm.maturityDate}`,
+      type: ytmForm.type,
+      side: 'buy',
+      tradeDate: ytmForm.tradeDate,
+      maturityDate: ytmForm.maturityDate,
+      faceValue: ytmForm.faceValue,
+      cleanPrice: ytmForm.cleanPrice,
+      couponRate: ytmForm.type === 't-bill' ? 0 : ytmForm.couponRate,
+      couponFrequency: ytmForm.type === 't-bill' ? 0 : ytmForm.couponFrequency,
+      commission: ytmForm.commission,
+      currentMarketPrice: ytmForm.cleanPrice,
+      status: 'active',
+    });
+    await saveTradeToDB(tradeData);
+    setLedgerSubTab('active');
+    setActiveTab('trades');
+  };
+
   const deleteTradeFromDB = async (id) => {
     if (!user) return;
     await deleteDoc(doc(db, 'users', user.uid, 'trades', id));
@@ -1079,6 +1105,14 @@ export default function App() {
                       <span className="font-bold">{ytmQuote.marketYield.toFixed(3)}%</span>
                     </div>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={handleAddYtmToPortfolio}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Plus size={16} /> 加入 Portfolio
+                  </button>
                 </>
               )}
             </div>

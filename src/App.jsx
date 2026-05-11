@@ -319,7 +319,7 @@ export default function App() {
   const [isFetchingCurve, setIsFetchingCurve] = useState(false);
 
   const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2 };
-  const defaultYtmForm = { type: 't-note', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 10000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0 };
+  const defaultYtmForm = { type: 't-note', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0 };
   const [formData, setFormData] = useState(defaultForm);
   const [ytmForm, setYtmForm] = useState(defaultYtmForm);
   const [closeData, setCloseData] = useState({ closeDate: new Date().toISOString().split('T')[0], closePrice: '', closeCommission: 0 });
@@ -966,16 +966,16 @@ export default function App() {
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-wrap justify-between items-center gap-3">
             <div>
-              <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2"><Calculator size={18} className="text-blue-600"/> Pre-Trade YTM Calculator</h3>
-              <p className="text-xs text-slate-500 mt-1">Estimate gross and net YTM before buying a Treasury.</p>
+              <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2"><Calculator size={18} className="text-blue-600"/> 買入前 YTM 試算器</h3>
+              <p className="text-xs text-slate-500 mt-1">買入美債前，估算未計及已計入手續費後的到期收益率。</p>
             </div>
-            <button onClick={() => setYtmForm(defaultYtmForm)} className="text-xs sm:text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg font-semibold transition-colors">Reset</button>
+            <button onClick={() => setYtmForm(defaultYtmForm)} className="text-xs sm:text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg font-semibold transition-colors">重設</button>
           </div>
 
           <div className="p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-5">
             <div className="grid grid-cols-2 gap-3 content-start">
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">債券類型</label>
                 <select value={ytmForm.type} onChange={(e) => update('type', e.target.value)} className="w-full p-2 border rounded-lg text-sm bg-white">
                   <option value="t-bill">T-Bill</option>
                   <option value="t-note">T-Note</option>
@@ -984,38 +984,38 @@ export default function App() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Face Value</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">面值</label>
                 <input type="number" min="1" step="100" value={ytmForm.faceValue} onChange={(e) => update('faceValue', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">交易日期</label>
                 <input type="date" value={ytmForm.tradeDate} onChange={(e) => update('tradeDate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">到期日</label>
                 <input type="date" value={ytmForm.maturityDate} onChange={(e) => update('maturityDate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">潔淨價格</label>
                 <input type="number" min="0.001" step="0.001" value={ytmForm.cleanPrice} onChange={(e) => update('cleanPrice', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Commission</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">手續費</label>
                 <input type="number" min="0" step="0.01" value={ytmForm.commission} onChange={(e) => update('commission', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               {ytmForm.type !== 't-bill' && (
                 <>
                   <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate %</label>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">票息率 (%)</label>
                     <input type="number" min="0" step="0.125" value={ytmForm.couponRate} onChange={(e) => update('couponRate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Coupon Frequency</label>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label>
                     <select value={ytmForm.couponFrequency} onChange={(e) => update('couponFrequency', e.target.value)} className="w-full p-2 border rounded-lg text-sm bg-white">
-                      <option value="2">Semi-Annually</option>
-                      <option value="1">Annually</option>
-                      <option value="4">Quarterly</option>
-                      <option value="12">Monthly</option>
+                      <option value="2">半年一次</option>
+                      <option value="1">每年一次</option>
+                      <option value="4">每季一次</option>
+                      <option value="12">每月一次</option>
                     </select>
                   </div>
                 </>
@@ -1025,21 +1025,21 @@ export default function App() {
             <div className="space-y-3">
               {!ytmQuote.isValid ? (
                 <div className="h-full min-h-[220px] rounded-xl border border-dashed border-slate-200 bg-slate-50 flex items-center justify-center text-sm text-slate-500 px-4 text-center">
-                  Enter a valid maturity date, price, and face value to calculate YTM.
+                  請輸入有效的到期日、價格及面值以計算 YTM。
                 </div>
               ) : (
                 <>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     <div className="p-3 rounded-lg bg-blue-50 border border-blue-100">
-                      <p className="text-[11px] text-blue-700 font-semibold">Net YTM</p>
+                      <p className="text-[11px] text-blue-700 font-semibold">淨 YTM</p>
                       <p className="text-xl font-bold text-blue-700 mt-1">{pct(ytmQuote.netYtm)}</p>
                     </div>
                     <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                      <p className="text-[11px] text-slate-500 font-semibold">Gross YTM</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">未計費用 YTM</p>
                       <p className="text-xl font-bold text-slate-800 mt-1">{pct(ytmQuote.grossYtm)}</p>
                     </div>
                     <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100">
-                      <p className="text-[11px] text-emerald-700 font-semibold">Curve Spread</p>
+                      <p className="text-[11px] text-emerald-700 font-semibold">曲線息差</p>
                       <p className={`text-xl font-bold mt-1 ${ytmQuote.spreadToCurve == null ? 'text-slate-400' : ytmQuote.spreadToCurve >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
                         {ytmQuote.spreadToCurve == null ? '--' : `${ytmQuote.spreadToCurve >= 0 ? '+' : ''}${ytmQuote.spreadToCurve.toFixed(3)}%`}
                       </p>
@@ -1048,34 +1048,34 @@ export default function App() {
 
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">All-in Price</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">全包價格</p>
                       <p className="font-bold text-slate-800">{ytmQuote.priceWithCommission.toFixed(3)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">Days to Maturity</p>
-                      <p className="font-bold text-slate-800">{ytmQuote.days.toLocaleString()} days</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">距離到期</p>
+                      <p className="font-bold text-slate-800">{ytmQuote.days.toLocaleString()} 日</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">Total Cost</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">總成本</p>
                       <p className="font-bold text-slate-800">${money(ytmQuote.totalCost)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">Est. Profit to Maturity</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">到期估算利潤</p>
                       <p className={`font-bold ${ytmQuote.maturityProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{ytmQuote.maturityProfit >= 0 ? '+' : ''}${money(ytmQuote.maturityProfit)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">Est. Coupon Income</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">估算票息收入</p>
                       <p className="font-bold text-slate-800">${money(ytmQuote.couponEstimate)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">Breakeven Price</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">打和價格</p>
                       <p className="font-bold text-slate-800">{ytmQuote.breakevenPrice.toFixed(3)}</p>
                     </div>
                   </div>
 
                   {ytmQuote.marketYield != null && (
                     <div className="p-3 rounded-lg bg-slate-900 text-white text-sm flex flex-wrap justify-between gap-2">
-                      <span className="text-slate-300">Interpolated FRED curve for {ytmQuote.years.toFixed(2)}Y</span>
+                      <span className="text-slate-300">FRED 曲線插值（{ytmQuote.years.toFixed(2)} 年）</span>
                       <span className="font-bold">{ytmQuote.marketYield.toFixed(3)}%</span>
                     </div>
                   )}
@@ -1172,7 +1172,7 @@ export default function App() {
             <PieChart size={15}/> Analytics
           </button>
           <button onClick={() => setActiveTab('ytm')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'ytm' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
-            <Calculator size={15}/> YTM
+            <Calculator size={15}/> YTM 試算
           </button>
           <button onClick={() => setActiveTab('trades')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <History size={15}/> Trade Ledger

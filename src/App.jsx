@@ -996,7 +996,7 @@ export default function App() {
                 <input type="date" value={ytmForm.maturityDate} onChange={(e) => update('maturityDate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">潔淨價格</label>
+                <label className="block text-xs font-medium text-slate-500 mb-1">市場報價（潔淨價格）</label>
                 <input type="number" min="0.001" step="0.001" value={ytmForm.cleanPrice} onChange={(e) => update('cleanPrice', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               <div>

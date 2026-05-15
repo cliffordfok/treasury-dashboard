@@ -2,8 +2,8 @@ name: Fetch FRED Yield Curve
 
 on:
   schedule:
-    # 每日 UTC 22:00（美股收市後 ~6pm ET）更新一次
-    - cron: '0 22 * * 1-5'
+    # 每個美國交易日 UTC 23:00（香港時間早上 7:00）更新一次
+    - cron: '0 23 * * 1-5'
   workflow_dispatch: # 手動觸發
 
 permissions:

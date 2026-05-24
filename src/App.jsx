@@ -25,6 +25,10 @@ const googleProvider = new GoogleAuthProvider(); // 初始化 Google 登入
 // Production builds must call a backend/proxy so the Gemini key never ships to browsers.
 const geminiProxyUrl = import.meta.env.VITE_GEMINI_PROXY_URL || "";
 const isGeminiConfigured = Boolean(geminiProxyUrl);
+const AI_ANALYSIS_MODELS = [
+  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+  { id: 'deepseek-v4-pro', label: 'DeepSeek-V4-Pro' },
+];
 
 // --- FRED API Configuration ---
 const fredApiKey = import.meta.env.VITE_FRED_API_KEY || "";
@@ -127,12 +131,12 @@ const fetchWithRetry = async (url, options, retries = 5) => {
   }
 };
 
-const generateText = async (prompt) => {
+const generateText = async (prompt, model = AI_ANALYSIS_MODELS[0].id) => {
   if (geminiProxyUrl) {
     const result = await fetchWithRetry(geminiProxyUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task: 'generateText', prompt }),
+      body: JSON.stringify({ task: 'generateText', prompt, model }),
     });
     return result.text || result.response || "無法獲取 AI 回應。";
   }
@@ -411,6 +415,7 @@ export default function App() {
   const [aiInsights, setAiInsights] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [insightError, setInsightError] = useState('');
+  const [selectedAiModel, setSelectedAiModel] = useState(AI_ANALYSIS_MODELS[0].id);
   const [rawTradeText, setRawTradeText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
 
@@ -771,7 +776,7 @@ export default function App() {
         Total Market Value: $${portfolioMetrics.totalMarketValue.toFixed(2)}, Total Unrealized PnL: $${portfolioMetrics.totalUnrealizedPnL.toFixed(2)}, Weighted Average YTM: ${weightedYtmText}
         Detailed holdings: ${activeTrades.map(t => `- ${t.side.toUpperCase()} ${t.type.toUpperCase()}, Face Value: $${t.faceValue}, Matures: ${t.maturityDate}`).join('\n')}
         Provide a short analysis on interest rate risk, reinvestment risk, and strategic recommendation. Keep it under 3 paragraphs with bullet points. Respond in Traditional Chinese (HK).`;
-      const response = await generateText(prompt);
+      const response = await generateText(prompt, selectedAiModel);
       setAiInsights(response);
     } catch (err) { setInsightError('分析時發生錯誤。請確保已設定 API Key。'); } finally { setIsAnalyzing(false); }
   };
@@ -1105,11 +1110,16 @@ export default function App() {
         <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
           <div className="flex items-center gap-2 text-indigo-700">
             <div className="p-1.5 bg-white/70 rounded-lg shadow-sm"><Bot size={20} /></div>
-            <h3 className="text-base sm:text-lg font-bold">Gemini 投資組合分析</h3>
+            <h3 className="text-base sm:text-lg font-bold">AI 投資組合分析</h3>
           </div>
-          <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0 || !isGeminiConfigured} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
-            {isAnalyzing ? <Loader2 size={15} className="animate-spin mr-1.5" /> : <Sparkles size={15} className="mr-1.5" />} 智能分析
-          </button>
+          <div className="flex items-center gap-2">
+            <select value={selectedAiModel} onChange={(e) => setSelectedAiModel(e.target.value)} disabled={isAnalyzing} className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm disabled:opacity-60">
+              {AI_ANALYSIS_MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}
+            </select>
+            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0 || !isGeminiConfigured} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
+              {isAnalyzing ? <Loader2 size={15} className="animate-spin mr-1.5" /> : <Sparkles size={15} className="mr-1.5" />} 智能分析
+            </button>
+          </div>
         </div>
         {insightError && <p className="text-sm text-red-600 flex items-center mt-2 mb-2"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
         {aiInsights ? <div className="bg-white/90 p-4 rounded-lg text-sm text-slate-700 leading-relaxed whitespace-pre-wrap border border-white shadow-inner">{aiInsights}</div> : <p className="text-sm text-indigo-400/90 italic">點擊按鈕，讓 AI 為你分析現時債券梯的久期風險及資金流動性建議。</p>}

@@ -175,6 +175,7 @@ const getTBillInvestmentYield = (price, days) => {
   // Investment yield, not bank discount yield.
   return ((100 - price) / price) * (365 / days) * 100;
 };
+const roundMarketPriceForStorage = (price) => Math.round(price * 1000) / 1000;
 
 const yieldToPrice = (trade, marketYieldPercent, valuationDate) => {
   if (!Number.isFinite(marketYieldPercent)) return null;
@@ -205,7 +206,7 @@ const yieldToPrice = (trade, marketYieldPercent, valuationDate) => {
     price += couponPerPeriod / Math.pow(1 + yPerPeriod, dc / daysPerPeriod);
   }
   price += 100 / Math.pow(1 + yPerPeriod, periods[periods.length - 1] / daysPerPeriod);
-  return Math.round(price * 1000) / 1000;
+  return price;
 };
 
 const solveYTMFromPrice = (trade, targetPrice, valuationDate) => {
@@ -394,7 +395,7 @@ export default function App() {
           if (marketYield == null) continue;
           const newMktPrice = yieldToPrice(trade, marketYield, valuationDate);
           if (newMktPrice == null || !Number.isFinite(newMktPrice) || newMktPrice <= 0) continue;
-          await saveTradeToDB({ ...trade, currentMarketPrice: newMktPrice, priceUpdatedAt: curveDate });
+          await saveTradeToDB({ ...trade, currentMarketPrice: roundMarketPriceForStorage(newMktPrice), priceUpdatedAt: curveDate });
         } catch (err) {
           failed = true;
           console.error('Market price update failed:', trade.id, err);
@@ -455,6 +456,7 @@ export default function App() {
   const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
 
   const allCoupons = useMemo(() => trades.flatMap(generateAllCoupons), [trades]);
+  // Dashboard valuation date is fixed at page load; reload the app to refresh it.
   const todayObj = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
   const receivedCoupons = useMemo(() => allCoupons.filter(c => c.date <= todayObj), [allCoupons, todayObj]);
   const upcomingCouponsList = useMemo(() => allCoupons.filter(c => c.date > todayObj && c.date.getFullYear() === todayObj.getFullYear()), [allCoupons, todayObj]);
@@ -648,7 +650,7 @@ export default function App() {
       return;
     }
     const trade = trades.find(t => t.id === id);
-    if (trade) await saveTradeToDB({ ...trade, currentMarketPrice: n });
+    if (trade) await saveTradeToDB({ ...trade, currentMarketPrice: roundMarketPriceForStorage(n) });
     setEditingPriceId(null);
   };
 

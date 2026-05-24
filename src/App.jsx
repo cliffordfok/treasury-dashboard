@@ -155,21 +155,34 @@ const extractTradeData = async (rawText) => {
 const isMatured = (maturityDateStr) => {
   const today = new Date(); today.setHours(0, 0, 0, 0); return new Date(maturityDateStr) < today;
 };
-const calculateDaysBetween = (date1, date2) => Math.ceil(Math.abs(new Date(date2) - new Date(date1)) / (1000 * 60 * 60 * 24));
-
-const safeYTM = (trade, days) => {
-  const price = Number(trade.currentMarketPrice);
-  if (!Number.isFinite(price) || price <= 0 || !days || days <= 0) return 0;
-  const years = days / 365.25;
-  if (trade.type === 't-bill') {
-    return ((100 - price) / price) * (365 / days) * 100;
-  }
-  const coupon = Number(trade.couponRate) || 0;
-  return ((coupon + (100 - price) / years) / ((100 + price) / 2)) * 100;
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+const toDateAtMidnight = (value) => {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date;
+};
+const calculateDaysBetween = (date1, date2) => Math.ceil(Math.abs(new Date(date2) - new Date(date1)) / MS_PER_DAY);
+const calculateForwardDaysBetween = (date1, date2) => {
+  const start = toDateAtMidnight(date1);
+  const end = toDateAtMidnight(date2);
+  if (!start || !end) return null;
+  return Math.ceil((end - start) / MS_PER_DAY);
 };
 
-const yieldToPrice = (trade, marketYieldPercent, daysToMaturity) => {
-  if (!Number.isFinite(marketYieldPercent) || !daysToMaturity || daysToMaturity <= 0) return null;
+const getTBillInvestmentYield = (price, days) => {
+  if (!Number.isFinite(price) || price <= 0 || !days || days <= 0) return null;
+  // Investment yield, not bank discount yield.
+  return ((100 - price) / price) * (365 / days) * 100;
+};
+const roundMarketPriceForStorage = (price) => Math.round(price * 1000) / 1000;
+
+const yieldToPrice = (trade, marketYieldPercent, valuationDate) => {
+  if (!Number.isFinite(marketYieldPercent)) return null;
+  const matDate = toDateAtMidnight(trade.maturityDate);
+  const valuation = toDateAtMidnight(valuationDate);
+  const daysToMaturity = calculateForwardDaysBetween(valuation, matDate);
+  if (!matDate || !valuation || !daysToMaturity || daysToMaturity <= 0) return null;
   const y = marketYieldPercent / 100;
   if (trade.type === 't-bill') {
     return 100 / (1 + y * (daysToMaturity / 365));
@@ -178,13 +191,11 @@ const yieldToPrice = (trade, marketYieldPercent, daysToMaturity) => {
   const couponPerPeriod = (Number(trade.couponRate) || 0) / freq;
   const yPerPeriod = y / freq;
   if (yPerPeriod <= -1) return null;
-  const matDate = new Date(trade.maturityDate);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
   const intervalMonths = 12 / freq;
   const periods = [];
   let d = new Date(matDate);
-  while (d > today) {
-    periods.push(Math.ceil((d - today) / (1000 * 60 * 60 * 24)));
+  while (d > valuation) {
+    periods.push(Math.ceil((d - valuation) / MS_PER_DAY));
     d = new Date(d); d.setMonth(d.getMonth() - intervalMonths);
   }
   if (periods.length === 0) return null;
@@ -195,41 +206,54 @@ const yieldToPrice = (trade, marketYieldPercent, daysToMaturity) => {
     price += couponPerPeriod / Math.pow(1 + yPerPeriod, dc / daysPerPeriod);
   }
   price += 100 / Math.pow(1 + yPerPeriod, periods[periods.length - 1] / daysPerPeriod);
-  return Math.round(price * 1000) / 1000;
+  return price;
 };
 
-const solveYTMFromPrice = (trade, targetPrice, daysToMaturity) => {
-  if (!Number.isFinite(targetPrice) || targetPrice <= 0 || !daysToMaturity || daysToMaturity <= 0) return null;
+const solveYTMFromPrice = (trade, targetPrice, valuationDate) => {
+  if (!Number.isFinite(targetPrice) || targetPrice <= 0) return null;
+  const daysToMaturity = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
+  if (!daysToMaturity || daysToMaturity <= 0) return null;
   if (trade.type === 't-bill') {
-    return ((100 - targetPrice) / targetPrice) * (365 / daysToMaturity) * 100;
+    return getTBillInvestmentYield(targetPrice, daysToMaturity);
   }
 
   let low = -50;
   let high = 100;
-  let lowPrice = yieldToPrice(trade, low, daysToMaturity);
-  let highPrice = yieldToPrice(trade, high, daysToMaturity);
+  let lowPrice = yieldToPrice(trade, low, valuationDate);
+  let highPrice = yieldToPrice(trade, high, valuationDate);
   if (lowPrice == null || highPrice == null) return null;
 
   while (lowPrice < targetPrice && low > -95) {
     low -= 25;
-    lowPrice = yieldToPrice(trade, low, daysToMaturity);
+    lowPrice = yieldToPrice(trade, low, valuationDate);
     if (lowPrice == null) return null;
   }
   while (highPrice > targetPrice && high < 500) {
     high += 100;
-    highPrice = yieldToPrice(trade, high, daysToMaturity);
+    highPrice = yieldToPrice(trade, high, valuationDate);
     if (highPrice == null) return null;
   }
   if (targetPrice > lowPrice || targetPrice < highPrice) return null;
 
   for (let i = 0; i < 80; i++) {
     const mid = (low + high) / 2;
-    const price = yieldToPrice(trade, mid, daysToMaturity);
+    const price = yieldToPrice(trade, mid, valuationDate);
     if (price == null) return null;
     if (price > targetPrice) low = mid;
     else high = mid;
   }
   return (low + high) / 2;
+};
+
+const getTradeYTM = (trade, valuationDate) => {
+  const price = Number(trade.currentMarketPrice);
+  const daysToMaturity = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
+  if (!Number.isFinite(price) || price <= 0 || !daysToMaturity || daysToMaturity <= 0) return null;
+  if (trade.type === 't-bill') return getTBillInvestmentYield(price, daysToMaturity);
+  if (trade.type === 't-note' || trade.type === 't-bond') {
+    return solveYTMFromPrice(trade, price, valuationDate);
+  }
+  return null;
 };
 
 const generateAllCoupons = (trade) => {
@@ -362,13 +386,16 @@ export default function App() {
       let failed = false;
       for (const trade of toUpdate) {
         try {
-          const days = calculateDaysBetween(new Date(), trade.maturityDate);
+          const valuationDate = new Date();
+          valuationDate.setHours(0, 0, 0, 0);
+          const days = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
+          if (!days || days <= 0) continue;
           const remainingYears = days / 365.25;
           const marketYield = getMarketYTMFromCurve(yieldCurve, remainingYears);
           if (marketYield == null) continue;
-          const newMktPrice = yieldToPrice(trade, marketYield, days);
+          const newMktPrice = yieldToPrice(trade, marketYield, valuationDate);
           if (newMktPrice == null || !Number.isFinite(newMktPrice) || newMktPrice <= 0) continue;
-          await saveTradeToDB({ ...trade, currentMarketPrice: newMktPrice, priceUpdatedAt: curveDate });
+          await saveTradeToDB({ ...trade, currentMarketPrice: roundMarketPriceForStorage(newMktPrice), priceUpdatedAt: curveDate });
         } catch (err) {
           failed = true;
           console.error('Market price update failed:', trade.id, err);
@@ -429,13 +456,14 @@ export default function App() {
   const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
 
   const allCoupons = useMemo(() => trades.flatMap(generateAllCoupons), [trades]);
+  // Dashboard valuation date is fixed at page load; reload the app to refresh it.
   const todayObj = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
   const receivedCoupons = useMemo(() => allCoupons.filter(c => c.date <= todayObj), [allCoupons, todayObj]);
   const upcomingCouponsList = useMemo(() => allCoupons.filter(c => c.date > todayObj && c.date.getFullYear() === todayObj.getFullYear()), [allCoupons, todayObj]);
 
   // --- PnL Calculations ---
   const portfolioMetrics = useMemo(() => {
-    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let absoluteTotalMarketValue = 0; let totalRealizedPnL = 0; let annualCouponIncome = 0;
+    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let absoluteTotalMarketValue = 0; let totalYtmMarketValue = 0; let totalRealizedPnL = 0; let annualCouponIncome = 0;
     receivedCoupons.forEach(c => totalRealizedPnL += c.amount);
     closedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; const cp = Number(t.closePrice) || 0; const bp = Number(t.cleanPrice) || 0; const fv = Number(t.faceValue) || 0; totalRealizedPnL += (((cp - bp) * fv) / 100) * mult - (Number(t.commission)||0) - (Number(t.closeCommission)||0); });
     maturedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; const bp = Number(t.cleanPrice) || 0; const fv = Number(t.faceValue) || 0; totalRealizedPnL += (((100 - bp) * fv) / 100) * mult - (Number(t.commission)||0); });
@@ -459,25 +487,29 @@ export default function App() {
       if (!Number.isFinite(price) || price <= 0) return;
       const mult = trade.side === 'sell' ? -1 : 1;
       const marketVal = ((price * (Number(trade.faceValue) || 0)) / 100) * mult;
-      const weight = Math.abs(marketVal) / (absoluteTotalMarketValue || 1);
-      const daysToMat = calculateDaysBetween(todayObj, trade.maturityDate);
-      totalWeightYTM += safeYTM(trade, daysToMat) * weight;
+      const ytm = getTradeYTM(trade, todayObj);
+      if (ytm == null) return;
+      const absoluteMarketVal = Math.abs(marketVal);
+      totalWeightYTM += ytm * absoluteMarketVal;
+      totalYtmMarketValue += absoluteMarketVal;
     });
+    totalWeightYTM = totalYtmMarketValue > 0 ? totalWeightYTM / totalYtmMarketValue : null;
     return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
-  }, [activeTrades, maturedTrades, closedTrades, receivedCoupons]);
+  }, [activeTrades, maturedTrades, closedTrades, receivedCoupons, todayObj]);
 
   // --- Chart Data ---
   const yieldCurveChartData = useMemo(() => {
     if (!yieldCurve?.points?.length) return null;
     const curvePoints = yieldCurve.points.map(p => ({ years: p.years, yield: p.yield }));
     const bondDots = activeTrades.map(t => {
-      const days = calculateDaysBetween(todayObj, t.maturityDate);
+      const days = calculateForwardDaysBetween(todayObj, t.maturityDate);
+      if (!days || days <= 0) return null;
       const remainingYears = days / 365.25;
       const marketYtm = getMarketYTMFromCurve(yieldCurve, remainingYears);
       return { cusip: t.cusip || t.type.toUpperCase(), x: remainingYears, y: marketYtm, side: t.side };
-    }).filter(d => d.y != null);
+    }).filter(d => d?.y != null);
     return { curvePoints, bondDots };
-  }, [yieldCurve, activeTrades]);
+  }, [yieldCurve, activeTrades, todayObj]);
 
   const couponCalendar = useMemo(() => {
     const year = todayObj.getFullYear();
@@ -490,8 +522,8 @@ export default function App() {
     const benchmarkYearsMap = { SGOV: 0.25, SHY: 2, IEF: 7, TLT: 20, UST10Y: 10 };
     const benchmarkYears = benchmarkYearsMap[selectedBenchmark] ?? 10;
     const benchmarkYield = getMarketYTMFromCurve(yieldCurve, benchmarkYears);
-    const portfolioYield = Number.isFinite(portfolioMetrics.totalWeightYTM) ? portfolioMetrics.totalWeightYTM : 0;
-    const spread = benchmarkYield == null ? null : (portfolioYield - benchmarkYield);
+    const portfolioYield = Number.isFinite(portfolioMetrics.totalWeightYTM) ? portfolioMetrics.totalWeightYTM : null;
+    const spread = benchmarkYield == null || portfolioYield == null ? null : (portfolioYield - benchmarkYield);
     return { benchmarkYears, benchmarkYield, portfolioYield, spread };
   }, [selectedBenchmark, yieldCurve, portfolioMetrics.totalWeightYTM]);
 
@@ -501,19 +533,20 @@ export default function App() {
     const commission = toFiniteNumber(ytmForm.commission);
     const couponRate = ytmForm.type === 't-bill' ? 0 : toFiniteNumber(ytmForm.couponRate);
     const couponFrequency = ytmForm.type === 't-bill' ? 0 : toFiniteNumber(ytmForm.couponFrequency, 2);
-    const tradeDate = new Date(ytmForm.tradeDate);
-    const maturityDate = new Date(ytmForm.maturityDate);
+    const tradeDate = toDateAtMidnight(ytmForm.tradeDate);
+    const maturityDate = toDateAtMidnight(ytmForm.maturityDate);
 
-    if (!ytmForm.tradeDate || !ytmForm.maturityDate || maturityDate <= tradeDate || faceValue <= 0 || cleanPrice <= 0) {
+    if (!ytmForm.tradeDate || !ytmForm.maturityDate || !tradeDate || !maturityDate || maturityDate <= tradeDate || faceValue <= 0 || cleanPrice <= 0) {
       return { isValid: false };
     }
 
-    const days = calculateDaysBetween(tradeDate, maturityDate);
+    const days = calculateForwardDaysBetween(tradeDate, maturityDate);
+    if (!days || days <= 0) return { isValid: false };
     const years = days / 365.25;
     const priceWithCommission = cleanPrice + ((commission / faceValue) * 100);
     const trade = { type: ytmForm.type, couponRate, couponFrequency, maturityDate: ytmForm.maturityDate };
-    const grossYtm = solveYTMFromPrice(trade, cleanPrice, days);
-    const netYtm = solveYTMFromPrice(trade, priceWithCommission, days);
+    const grossYtm = solveYTMFromPrice(trade, cleanPrice, tradeDate);
+    const netYtm = solveYTMFromPrice(trade, priceWithCommission, tradeDate);
     const principalCost = (cleanPrice * faceValue) / 100;
     const totalCost = principalCost + commission;
     const redemptionValue = faceValue;
@@ -617,7 +650,7 @@ export default function App() {
       return;
     }
     const trade = trades.find(t => t.id === id);
-    if (trade) await saveTradeToDB({ ...trade, currentMarketPrice: n });
+    if (trade) await saveTradeToDB({ ...trade, currentMarketPrice: roundMarketPriceForStorage(n) });
     setEditingPriceId(null);
   };
 
@@ -637,8 +670,9 @@ export default function App() {
     if (!isGeminiConfigured) { setInsightError('未設定 Gemini proxy，智能分析暫時不可用。'); return; }
     setIsAnalyzing(true); setInsightError('');
     try {
+      const weightedYtmText = portfolioMetrics.totalWeightYTM == null ? 'Unavailable' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`;
       const prompt = `Here is a summary of a user's ACTIVE US Treasury bond portfolio:
-        Total Market Value: $${portfolioMetrics.totalMarketValue.toFixed(2)}, Total Unrealized PnL: $${portfolioMetrics.totalUnrealizedPnL.toFixed(2)}, Weighted Average YTM: ${portfolioMetrics.totalWeightYTM.toFixed(2)}%
+        Total Market Value: $${portfolioMetrics.totalMarketValue.toFixed(2)}, Total Unrealized PnL: $${portfolioMetrics.totalUnrealizedPnL.toFixed(2)}, Weighted Average YTM: ${weightedYtmText}
         Detailed holdings: ${activeTrades.map(t => `- ${t.side.toUpperCase()} ${t.type.toUpperCase()}, Face Value: $${t.faceValue}, Matures: ${t.maturityDate}`).join('\n')}
         Provide a short analysis on interest rate risk, reinvestment risk, and strategic recommendation. Keep it under 3 paragraphs with bullet points. Respond in Traditional Chinese (HK).`;
       const response = await generateText(prompt);
@@ -770,7 +804,7 @@ export default function App() {
         </div>
         <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
           <div className="p-2.5 sm:p-3 bg-amber-50 text-amber-600 rounded-lg flex-shrink-0"><TrendingUp size={20} className="sm:hidden" /><TrendingUp size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">Weighted Avg YTM</p><p className="text-base sm:text-xl font-bold text-slate-800">{portfolioMetrics.totalWeightYTM.toFixed(2)}%</p></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">Weighted Avg YTM</p><p className={`text-base sm:text-xl font-bold ${portfolioMetrics.totalWeightYTM == null ? 'text-slate-400' : 'text-slate-800'}`}>{portfolioMetrics.totalWeightYTM == null ? '--' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`}</p></div>
         </div>
         <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
           <div className="p-2.5 sm:p-3 bg-emerald-50 text-emerald-600 rounded-lg flex-shrink-0"><Wallet size={20} className="sm:hidden" /><Wallet size={24} className="hidden sm:block" /></div>
@@ -791,7 +825,7 @@ export default function App() {
             <span className="text-[11px] text-slate-500">Curve tenor: {benchmarkMetrics.benchmarkYears}Y</span>
           </div>
           <div className="grid grid-cols-3 gap-2">
-            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Portfolio YTM</p><p className="font-bold">{benchmarkMetrics.portfolioYield.toFixed(2)}%</p></div>
+            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Portfolio YTM</p><p className={`font-bold ${benchmarkMetrics.portfolioYield == null ? 'text-slate-400' : ''}`}>{benchmarkMetrics.portfolioYield == null ? '--' : `${benchmarkMetrics.portfolioYield.toFixed(2)}%`}</p></div>
             <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Benchmark YTM</p><p className="font-bold">{benchmarkMetrics.benchmarkYield == null ? '—' : `${benchmarkMetrics.benchmarkYield.toFixed(2)}%`}</p></div>
             <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Spread</p><p className={`font-bold ${benchmarkMetrics.spread == null ? 'text-slate-400' : benchmarkMetrics.spread >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{benchmarkMetrics.spread == null ? '—' : `${benchmarkMetrics.spread >= 0 ? '+' : ''}${benchmarkMetrics.spread.toFixed(2)}%`}</p></div>
           </div>
@@ -902,11 +936,12 @@ export default function App() {
             <div className="space-y-2.5">
               {sorted.map(trade => {
                 const days = calculateDaysBetween(todayObj, trade.maturityDate);
-                const ytm = safeYTM(trade, days);
+                const forwardDays = calculateForwardDaysBetween(todayObj, trade.maturityDate);
+                const ytm = getTradeYTM(trade, todayObj);
                 const pct = Math.min((days / maxDays) * 100, 100);
                 const color = getColor(days);
-                const marketYtm = getMarketYTMFromCurve(yieldCurve, days / 365.25);
-                const delta = marketYtm != null ? ytm - marketYtm : null;
+                const marketYtm = forwardDays && forwardDays > 0 ? getMarketYTMFromCurve(yieldCurve, forwardDays / 365.25) : null;
+                const delta = marketYtm != null && ytm != null ? ytm - marketYtm : null;
                 return (
                   <div key={trade.id} className="p-2.5 sm:p-0 sm:bg-transparent rounded-lg bg-slate-50/60 sm:rounded-none space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-3">
                     {/* Mobile：上排為 CUSIP + YTM/Market；Desktop 保持橫向 */}
@@ -919,16 +954,18 @@ export default function App() {
                       <div className="flex items-center gap-3 sm:hidden">
                         <div className="text-right">
                           <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">YTM</p>
-                          <p className="text-xs font-bold text-amber-600">{ytm.toFixed(2)}%</p>
+                          <p className={`text-xs font-bold ${ytm == null ? 'text-slate-300' : 'text-amber-600'}`}>{ytm == null ? '--' : `${ytm.toFixed(2)}%`}</p>
                         </div>
                         <div className="text-right">
                           <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">Market</p>
                           {marketYtm != null ? (
                             <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
                               {marketYtm.toFixed(2)}%
-                              <span className={`ml-1 text-[10px] ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                                {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
-                              </span>
+                              {delta != null && (
+                                <span className={`ml-1 text-[10px] ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                                  {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
+                                </span>
+                              )}
                             </p>
                           ) : (
                             <p className="text-xs text-slate-300">—</p>
@@ -944,16 +981,18 @@ export default function App() {
                     {/* Desktop-only YTM / Market columns */}
                     <div className="hidden sm:block w-16 flex-shrink-0 text-right">
                       <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">YTM</p>
-                      <p className="text-xs font-bold text-amber-600">{ytm.toFixed(2)}%</p>
+                      <p className={`text-xs font-bold ${ytm == null ? 'text-slate-300' : 'text-amber-600'}`}>{ytm == null ? '--' : `${ytm.toFixed(2)}%`}</p>
                     </div>
                     <div className="hidden sm:block w-24 flex-shrink-0 text-right">
                       <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">Market</p>
                       {marketYtm != null ? (
                         <p className="text-xs font-bold text-slate-700">
                           {marketYtm.toFixed(2)}%
-                          <span className={`ml-1 text-[10px] ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                            {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
-                          </span>
+                          {delta != null && (
+                            <span className={`ml-1 text-[10px] ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                              {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
+                            </span>
+                          )}
                         </p>
                       ) : (
                         <p className="text-xs text-slate-300">—</p>

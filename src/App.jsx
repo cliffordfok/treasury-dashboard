@@ -176,6 +176,76 @@ const getTBillInvestmentYield = (price, days) => {
   return ((100 - price) / price) * (365 / days) * 100;
 };
 const roundMarketPriceForStorage = (price) => Math.round(price * 1000) / 1000;
+const isCouponTreasury = (trade) => trade?.type === 't-note' || trade?.type === 't-bond';
+const addMonths = (date, months) => {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+};
+const isSameDate = (a, b) => a && b && a.getTime() === b.getTime();
+
+const getCouponDates = (trade) => {
+  if (!isCouponTreasury(trade)) return [];
+  const maturityDate = toDateAtMidnight(trade.maturityDate);
+  const frequency = Number(trade.couponFrequency);
+  if (!maturityDate || !Number.isFinite(frequency) || frequency <= 0) return [];
+  const intervalMonths = 12 / frequency;
+  const dates = [];
+  let d = new Date(maturityDate);
+  for (let i = 0; i < frequency * 50; i++) {
+    dates.push(new Date(d));
+    d = addMonths(d, -intervalMonths);
+  }
+  return dates.sort((a, b) => a - b);
+};
+
+const getPreviousNextCouponDates = (trade, settlementDate) => {
+  if (!isCouponTreasury(trade)) return null;
+  const settlement = toDateAtMidnight(settlementDate);
+  const maturityDate = toDateAtMidnight(trade.maturityDate);
+  const frequency = Number(trade.couponFrequency);
+  if (!settlement || !maturityDate || settlement >= maturityDate || !Number.isFinite(frequency) || frequency <= 0) return null;
+  const intervalMonths = 12 / frequency;
+  let next = new Date(maturityDate);
+  for (let i = 0; i < frequency * 50; i++) {
+    const previous = addMonths(next, -intervalMonths);
+    if (previous <= settlement && settlement < next) return { previous, next };
+    if (isSameDate(previous, settlement)) return { previous, next };
+    next = previous;
+  }
+  return null;
+};
+
+const calculateAccruedInterestPer100 = (trade, settlementDate) => {
+  if (!isCouponTreasury(trade)) return 0;
+  const couponRate = Number(trade.couponRate);
+  const frequency = Number(trade.couponFrequency);
+  if (!Number.isFinite(couponRate) || couponRate <= 0 || !Number.isFinite(frequency) || frequency <= 0) return 0;
+  const couponWindow = getPreviousNextCouponDates(trade, settlementDate);
+  if (!couponWindow) return 0;
+  const daysAccrued = calculateForwardDaysBetween(couponWindow.previous, settlementDate);
+  const daysInPeriod = calculateForwardDaysBetween(couponWindow.previous, couponWindow.next);
+  if (!daysAccrued || daysAccrued <= 0 || !daysInPeriod || daysInPeriod <= 0) return 0;
+  const accruedFraction = daysAccrued / daysInPeriod;
+  return (couponRate / frequency) * accruedFraction;
+};
+
+const getDirtyPrice = (cleanPrice, accruedInterestPer100) => {
+  const clean = Number(cleanPrice);
+  const accrued = Number(accruedInterestPer100);
+  if (!Number.isFinite(clean) || clean <= 0) return null;
+  return clean + (Number.isFinite(accrued) ? accrued : 0);
+};
+
+const getAccruedInterestPer100 = (trade, settlementDate) => {
+  if (!isCouponTreasury(trade)) return 0;
+  const manual = trade.accruedInterestPer100;
+  if (manual !== undefined && manual !== null && String(manual).trim() !== '') {
+    const manualNumber = Number(manual);
+    return Number.isFinite(manualNumber) && manualNumber >= 0 ? manualNumber : 0;
+  }
+  return calculateAccruedInterestPer100(trade, settlementDate);
+};
 
 const yieldToPrice = (trade, marketYieldPercent, valuationDate) => {
   if (!Number.isFinite(marketYieldPercent)) return null;
@@ -246,12 +316,14 @@ const solveYTMFromPrice = (trade, targetPrice, valuationDate) => {
 };
 
 const getTradeYTM = (trade, valuationDate) => {
-  const price = Number(trade.currentMarketPrice);
+  const cleanPrice = Number(trade.currentMarketPrice);
   const daysToMaturity = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
-  if (!Number.isFinite(price) || price <= 0 || !daysToMaturity || daysToMaturity <= 0) return null;
-  if (trade.type === 't-bill') return getTBillInvestmentYield(price, daysToMaturity);
+  if (!Number.isFinite(cleanPrice) || cleanPrice <= 0 || !daysToMaturity || daysToMaturity <= 0) return null;
+  if (trade.type === 't-bill') return getTBillInvestmentYield(cleanPrice, daysToMaturity);
   if (trade.type === 't-note' || trade.type === 't-bond') {
-    return solveYTMFromPrice(trade, price, valuationDate);
+    const accruedInterestPer100 = getAccruedInterestPer100(trade, valuationDate);
+    const dirtyPrice = getDirtyPrice(cleanPrice, accruedInterestPer100);
+    return solveYTMFromPrice(trade, dirtyPrice, valuationDate);
   }
   return null;
 };
@@ -304,6 +376,11 @@ const normalizeTradeForStorage = (trade) => {
     currentMarketPrice: toFiniteNumber(trade.currentMarketPrice, cleanPrice),
     status,
   };
+  if (isCouponTreasury(normalized) && trade.accruedInterestPer100 !== undefined && trade.accruedInterestPer100 !== null && String(trade.accruedInterestPer100).trim() !== '') {
+    normalized.accruedInterestPer100 = Math.max(0, toFiniteNumber(trade.accruedInterestPer100));
+  } else {
+    delete normalized.accruedInterestPer100;
+  }
   if (status === 'closed') {
     normalized.closeDate = trade.closeDate || trade.maturityDate;
     normalized.closePrice = toFiniteNumber(trade.closePrice, normalized.currentMarketPrice);
@@ -342,8 +419,8 @@ export default function App() {
   const [yieldCurveError, setYieldCurveError] = useState('');
   const [isFetchingCurve, setIsFetchingCurve] = useState(false);
 
-  const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2 };
-  const defaultYtmForm = { type: 't-note', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0 };
+  const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2, accruedInterestPer100: '' };
+  const defaultYtmForm = { type: 't-note', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0, accruedInterestPer100: '' };
   const [formData, setFormData] = useState(defaultForm);
   const [ytmForm, setYtmForm] = useState(defaultYtmForm);
   const [closeData, setCloseData] = useState({ closeDate: new Date().toISOString().split('T')[0], closePrice: '', closeCommission: 0 });
@@ -395,7 +472,10 @@ export default function App() {
           if (marketYield == null) continue;
           const newMktPrice = yieldToPrice(trade, marketYield, valuationDate);
           if (newMktPrice == null || !Number.isFinite(newMktPrice) || newMktPrice <= 0) continue;
-          await saveTradeToDB({ ...trade, currentMarketPrice: roundMarketPriceForStorage(newMktPrice), priceUpdatedAt: curveDate });
+          const accruedInterestPer100 = getAccruedInterestPer100(trade, valuationDate);
+          const cleanMarketPrice = isCouponTreasury(trade) ? newMktPrice - accruedInterestPer100 : newMktPrice;
+          if (!Number.isFinite(cleanMarketPrice) || cleanMarketPrice <= 0) continue;
+          await saveTradeToDB({ ...trade, currentMarketPrice: roundMarketPriceForStorage(cleanMarketPrice), priceUpdatedAt: curveDate });
         } catch (err) {
           failed = true;
           console.error('Market price update failed:', trade.id, err);
@@ -463,7 +543,7 @@ export default function App() {
 
   // --- PnL Calculations ---
   const portfolioMetrics = useMemo(() => {
-    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let absoluteTotalMarketValue = 0; let totalYtmMarketValue = 0; let totalRealizedPnL = 0; let annualCouponIncome = 0;
+    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let totalAccruedInterest = 0; let totalFullMarketValue = 0; let totalYtmMarketValue = 0; let totalRealizedPnL = 0; let annualCouponIncome = 0;
     receivedCoupons.forEach(c => totalRealizedPnL += c.amount);
     closedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; const cp = Number(t.closePrice) || 0; const bp = Number(t.cleanPrice) || 0; const fv = Number(t.faceValue) || 0; totalRealizedPnL += (((cp - bp) * fv) / 100) * mult - (Number(t.commission)||0) - (Number(t.closeCommission)||0); });
     maturedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; const bp = Number(t.cleanPrice) || 0; const fv = Number(t.faceValue) || 0; totalRealizedPnL += (((100 - bp) * fv) / 100) * mult - (Number(t.commission)||0); });
@@ -474,19 +554,25 @@ export default function App() {
       const cleanPrice = Number(trade.cleanPrice) || 0;
       const mult = trade.side === 'sell' ? -1 : 1;
       const marketVal = ((price * faceValue) / 100) * mult;
+      const accruedInterestPer100 = getAccruedInterestPer100(trade, todayObj);
+      const accruedValue = ((accruedInterestPer100 * faceValue) / 100) * mult;
       totalMarketValue += marketVal;
+      totalAccruedInterest += accruedValue;
       totalUnrealizedPnL += ((((price - cleanPrice) * faceValue) / 100) * mult) - (trade.commission||0);
       totalFace += faceValue * mult;
-      absoluteTotalMarketValue += Math.abs(marketVal);
       if (trade.type !== 't-bill' && trade.couponRate) {
         annualCouponIncome += (faceValue * (Number(trade.couponRate) / 100)) * mult;
       }
     });
+    totalFullMarketValue = totalMarketValue + totalAccruedInterest;
     activeTrades.forEach(trade => {
-      const price = Number(trade.currentMarketPrice);
-      if (!Number.isFinite(price) || price <= 0) return;
+      const cleanPrice = Number(trade.currentMarketPrice);
+      if (!Number.isFinite(cleanPrice) || cleanPrice <= 0) return;
       const mult = trade.side === 'sell' ? -1 : 1;
-      const marketVal = ((price * (Number(trade.faceValue) || 0)) / 100) * mult;
+      const accruedInterestPer100 = getAccruedInterestPer100(trade, todayObj);
+      const dirtyPrice = isCouponTreasury(trade) ? getDirtyPrice(cleanPrice, accruedInterestPer100) : cleanPrice;
+      if (!Number.isFinite(dirtyPrice) || dirtyPrice <= 0) return;
+      const marketVal = ((dirtyPrice * (Number(trade.faceValue) || 0)) / 100) * mult;
       const ytm = getTradeYTM(trade, todayObj);
       if (ytm == null) return;
       const absoluteMarketVal = Math.abs(marketVal);
@@ -494,7 +580,7 @@ export default function App() {
       totalYtmMarketValue += absoluteMarketVal;
     });
     totalWeightYTM = totalYtmMarketValue > 0 ? totalWeightYTM / totalYtmMarketValue : null;
-    return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
+    return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalAccruedInterest, totalFullMarketValue, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
   }, [activeTrades, maturedTrades, closedTrades, receivedCoupons, todayObj]);
 
   // --- Chart Data ---
@@ -543,11 +629,16 @@ export default function App() {
     const days = calculateForwardDaysBetween(tradeDate, maturityDate);
     if (!days || days <= 0) return { isValid: false };
     const years = days / 365.25;
-    const priceWithCommission = cleanPrice + ((commission / faceValue) * 100);
-    const trade = { type: ytmForm.type, couponRate, couponFrequency, maturityDate: ytmForm.maturityDate };
+    const trade = { type: ytmForm.type, couponRate, couponFrequency, maturityDate: ytmForm.maturityDate, accruedInterestPer100: ytmForm.accruedInterestPer100 };
+    const accruedInterestPer100 = getAccruedInterestPer100(trade, tradeDate);
+    const dirtyPrice = getDirtyPrice(cleanPrice, accruedInterestPer100);
+    if (dirtyPrice == null) return { isValid: false };
+    const priceWithCommission = dirtyPrice + ((commission / faceValue) * 100);
     const grossYtm = solveYTMFromPrice(trade, cleanPrice, tradeDate);
     const netYtm = solveYTMFromPrice(trade, priceWithCommission, tradeDate);
-    const principalCost = (cleanPrice * faceValue) / 100;
+    const cleanPrincipalCost = (cleanPrice * faceValue) / 100;
+    const accruedInterestValue = (accruedInterestPer100 * faceValue) / 100;
+    const principalCost = (dirtyPrice * faceValue) / 100;
     const totalCost = principalCost + commission;
     const redemptionValue = faceValue;
     const annualCoupon = ytmForm.type === 't-bill' ? 0 : faceValue * (couponRate / 100);
@@ -562,7 +653,11 @@ export default function App() {
       years,
       faceValue,
       cleanPrice,
+      accruedInterestPer100,
+      accruedInterestValue,
+      dirtyPrice,
       priceWithCommission,
+      cleanPrincipalCost,
       principalCost,
       totalCost,
       redemptionValue,
@@ -602,6 +697,7 @@ export default function App() {
       couponRate: ytmForm.type === 't-bill' ? 0 : ytmForm.couponRate,
       couponFrequency: ytmForm.type === 't-bill' ? 0 : ytmForm.couponFrequency,
       commission: ytmForm.commission,
+      accruedInterestPer100: ytmForm.accruedInterestPer100,
       currentMarketPrice: ytmForm.cleanPrice,
       status: 'active',
     });
@@ -796,7 +892,7 @@ export default function App() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
           <div className="p-2.5 sm:p-3 bg-blue-50 text-blue-600 rounded-lg flex-shrink-0"><DollarSign size={20} className="sm:hidden" /><DollarSign size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">Active Market Value</p><p className="text-base sm:text-xl font-bold text-slate-800 truncate">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">Clean Market Value</p><p className="text-base sm:text-xl font-bold text-slate-800 truncate">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p><p className="text-[10px] text-slate-400 truncate">Full ${portfolioMetrics.totalFullMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} · Accrued ${portfolioMetrics.totalAccruedInterest.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
         </div>
         <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
           <div className={`p-2.5 sm:p-3 rounded-lg flex-shrink-0 ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}><Activity size={20} className="sm:hidden" /><Activity size={24} className="hidden sm:block" /></div>
@@ -1041,7 +1137,7 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3 content-start">
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">債券類型</label>
-                <select value={ytmForm.type} onChange={(e) => update('type', e.target.value)} className="w-full p-2 border rounded-lg text-sm bg-white">
+                <select value={ytmForm.type} onChange={(e) => setYtmForm(prev => ({ ...prev, type: e.target.value, accruedInterestPer100: e.target.value === 't-bill' ? '' : prev.accruedInterestPer100 }))} className="w-full p-2 border rounded-lg text-sm bg-white">
                   <option value="t-bill">T-Bill</option>
                   <option value="t-note">T-Note</option>
                   <option value="t-bond">T-Bond</option>
@@ -1083,6 +1179,12 @@ export default function App() {
                       <option value="12">每月一次</option>
                     </select>
                   </div>
+                  {isCouponTreasury(ytmForm) && (
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium text-slate-500 mb-1">Accrued Interest / 100 (optional)</label>
+                      <input type="number" min="0" step="0.001" value={ytmForm.accruedInterestPer100} onChange={(e) => update('accruedInterestPer100', e.target.value)} placeholder="Auto" className="w-full p-2 border rounded-lg text-sm" />
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -1096,11 +1198,11 @@ export default function App() {
                 <>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     <div className="p-3 rounded-lg bg-blue-50 border border-blue-100">
-                      <p className="text-[11px] text-blue-700 font-semibold">淨 YTM</p>
+                      <p className="text-[11px] text-blue-700 font-semibold">Net Settlement YTM</p>
                       <p className="text-xl font-bold text-blue-700 mt-1">{pct(ytmQuote.netYtm)}</p>
                     </div>
                     <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                      <p className="text-[11px] text-slate-500 font-semibold">未計費用 YTM</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">Clean-price reference YTM</p>
                       <p className="text-xl font-bold text-slate-800 mt-1">{pct(ytmQuote.grossYtm)}</p>
                     </div>
                     <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100">
@@ -1113,7 +1215,19 @@ export default function App() {
 
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">全包價格</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">Clean Price</p>
+                      <p className="font-bold text-slate-800">{ytmQuote.cleanPrice.toFixed(3)}</p>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-white">
+                      <p className="text-[11px] text-slate-500 font-semibold">Accrued Interest / 100</p>
+                      <p className="font-bold text-slate-800">{ytmQuote.accruedInterestPer100.toFixed(3)}</p>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-white">
+                      <p className="text-[11px] text-slate-500 font-semibold">Dirty Price</p>
+                      <p className="font-bold text-slate-800">{ytmQuote.dirtyPrice.toFixed(3)}</p>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-white">
+                      <p className="text-[11px] text-slate-500 font-semibold">Dirty + Commission / 100</p>
                       <p className="font-bold text-slate-800">{ytmQuote.priceWithCommission.toFixed(3)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
@@ -1183,7 +1297,7 @@ export default function App() {
           ) : (
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-white text-slate-600 font-medium border-b border-slate-200">
-                <tr><th className="p-4">CUSIP</th><th className="p-4">Action/Type</th><th className="p-4 text-right">Face Value</th><th className="p-4 text-right">Cost (Clean)</th>{ledgerSubTab === 'active' ? <><th className="p-4 text-right text-blue-600">Market Price ✏️</th><th className="p-4 text-right">Unrealized PnL</th></> : <><th className="p-4 text-right">Close Price</th><th className="p-4 text-right text-emerald-600">Realized PnL</th></>}<th className="p-4 text-center">Action</th></tr>
+                <tr><th className="p-4">CUSIP</th><th className="p-4">Action/Type</th><th className="p-4 text-right">Face Value</th><th className="p-4 text-right">Cost (Clean)</th>{ledgerSubTab === 'active' ? <><th className="p-4 text-right text-blue-600">Clean Market Price</th><th className="p-4 text-right">Unrealized PnL</th></> : <><th className="p-4 text-right">Close Price</th><th className="p-4 text-right text-emerald-600">Realized PnL</th></>}<th className="p-4 text-center">Action</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {displayedTrades.length === 0 ? <tr><td colSpan="8" className="p-8 text-center text-slate-400">無紀錄。</td></tr> : displayedTrades.map(trade => {
@@ -1191,6 +1305,8 @@ export default function App() {
                   const faceValue = toFiniteNumber(trade.faceValue);
                   const cleanPrice = toFiniteNumber(trade.cleanPrice);
                   const marketPrice = toFiniteNumber(trade.currentMarketPrice, cleanPrice);
+                  const accruedInterestPer100 = getAccruedInterestPer100(trade, todayObj);
+                  const dirtyPrice = getDirtyPrice(marketPrice, accruedInterestPer100) || marketPrice;
                   const closePrice = toFiniteNumber(trade.closePrice, marketPrice);
                   if (trade.status === 'closed') pnl = (((closePrice - cleanPrice) * faceValue) / 100) * mult - (toFiniteNumber(trade.commission)) - (toFiniteNumber(trade.closeCommission)); else if (isMaturedBond) pnl = (((100 - cleanPrice) * faceValue) / 100) * mult - (toFiniteNumber(trade.commission)); else pnl = ((((marketPrice - cleanPrice) * faceValue) / 100) * mult) - (toFiniteNumber(trade.commission));
                   return (
@@ -1199,7 +1315,7 @@ export default function App() {
                       <td className="p-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-sm ${trade.side === 'sell' ? 'bg-red-500' : 'bg-emerald-500'} mr-1`}>{trade.side.toUpperCase()}</span><span className="px-2 py-0.5 rounded text-[10px] uppercase font-bold bg-slate-200 text-slate-700">{trade.type}</span>{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉 ({trade.closeDate})</div>}</td>
                       <td className="p-4 text-right">${faceValue.toLocaleString()}</td><td className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
                       {ledgerSubTab === 'active' ? (
-                        <><td className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">Save</button></div>) : (<span className="cursor-pointer text-blue-600 font-medium flex items-center justify-end" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></span>)}</td><td className={`p-4 text-right font-bold ${pnl>=0?'text-green-600':'text-red-600'}`}>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</td></>
+                        <><td className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">Save</button></div>) : (<div className="text-right"><span className="cursor-pointer text-blue-600 font-medium flex items-center justify-end" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></span>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">Accrued {accruedInterestPer100.toFixed(3)} · Dirty {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td className={`p-4 text-right font-bold ${pnl>=0?'text-green-600':'text-red-600'}`}>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</td></>
                       ) : (
                         <><td className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000 (Par)'}</td><td className={`p-4 text-right font-bold ${pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</td></>
                       )}
@@ -1260,9 +1376,15 @@ export default function App() {
             <div className="p-5 bg-slate-50 border-b flex justify-between items-center"><h2 className="text-lg font-bold">{editingTradeId ? 'Edit Trade' : 'Record New Trade'}</h2><button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button></div>
             {!editingTradeId && (<div className="px-5 pt-4"><div className="flex bg-slate-100 p-1 rounded-lg"><button type="button" onClick={() => setSmartInputMode(false)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${!smartInputMode ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>手動輸入</button><button type="button" onClick={() => setSmartInputMode(true)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${smartInputMode ? 'bg-indigo-500 text-white shadow' : 'text-slate-500'}`}>✨ 智能貼上</button></div></div>)}
             <div className="p-5 overflow-y-auto max-h-[60vh]">
-              {smartInputMode && !editingTradeId ? (<div className="space-y-4"><textarea value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" /><button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !isGeminiConfigured} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button></div>) : (
+              {smartInputMode && !editingTradeId ? (<div className="space-y-4"><textarea value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" /><button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !isGeminiConfigured} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button></div>) : (<>
                 <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">CUSIP / 名稱</label><input required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label><select required name="type" value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, couponRate: e.target.value==='t-bill'?0:formData.couponRate})} className="w-full p-2 border rounded-lg text-sm"><option value="t-bill">T-Bill</option><option value="t-note">T-Note</option><option value="t-bond">T-Bond</option><option value="tips">TIPS</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Action</label><select required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">BUY (買入)</option><option value="sell">SELL (沽空)</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label><input required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label><input required type="date" name="maturityDate" value={formData.maturityDate} onChange={(e)=>setFormData({...formData, maturityDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Face Value ($)</label><input required type="number" name="faceValue" value={formData.faceValue} onChange={(e)=>setFormData({...formData, faceValue: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label><input required type="number" step="0.001" name="cleanPrice" value={formData.cleanPrice} onChange={(e)=>setFormData({...formData, cleanPrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Commission ($)</label><input type="number" step="0.01" name="commission" value={formData.commission} onChange={(e)=>setFormData({...formData, commission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>{formData.type !== 't-bill' && (<><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate (%)</label><input required type="number" step="0.125" name="couponRate" value={formData.couponRate} onChange={(e)=>setFormData({...formData, couponRate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label><select name="couponFrequency" value={formData.couponFrequency} onChange={(e)=>setFormData({...formData, couponFrequency: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="12">Monthly</option><option value="4">Quarterly</option><option value="2">Semi-Annually</option><option value="1">Annually</option></select></div></>)}</div></form>
-              )}
+                {isCouponTreasury(formData) && (
+                  <div className="mt-4">
+                    <label className="block text-xs font-medium text-slate-500 mb-1">Accrued Interest / 100 (optional)</label>
+                    <input type="number" min="0" step="0.001" value={formData.accruedInterestPer100 || ''} onChange={(e)=>setFormData({...formData, accruedInterestPer100: e.target.value})} placeholder="Auto" className="w-full p-2 border rounded-lg text-sm" />
+                  </div>
+                )}
+              </>)}
             </div>
             <div className="p-5 border-t bg-slate-50 flex justify-end space-x-3"><button onClick={() => setIsFormOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg">Cancel</button>{!smartInputMode && <button type="submit" form="tradeForm" className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm">Save Trade</button>}</div>
           </div>

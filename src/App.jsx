@@ -1010,7 +1010,10 @@ export default function App() {
       </div>
       <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
         <div className="flex flex-wrap justify-between items-center gap-2 mb-4 border-b border-slate-100 pb-3">
-          <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={18}/> 債券到期倒數</h3>
+          <div>
+            <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={18}/> 債券到期倒數</h3>
+            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-1">Current YTM is calculated from current clean market price + accrued interest, using today as valuation date.</p>
+          </div>
           <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-500">
             {yieldCurve?.updatedAt && <span className="bg-slate-100 px-2 py-0.5 rounded-md">FRED · {yieldCurve.updatedAt}</span>}
             {yieldCurveError && <span className="text-red-500 flex items-center max-w-[180px] truncate" title={yieldCurveError}><AlertCircle size={11} className="mr-1 flex-shrink-0"/>{yieldCurveError}</span>}
@@ -1054,11 +1057,11 @@ export default function App() {
                       {/* Mobile-only YTM / Market 顯示喺右上 */}
                       <div className="flex items-center gap-3 sm:hidden">
                         <div className="text-right">
-                          <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">YTM</p>
+                          <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">現價 YTM</p>
                           <p className={`text-xs font-bold ${ytm == null ? 'text-slate-300' : 'text-amber-600'}`}>{ytm == null ? '--' : `${ytm.toFixed(2)}%`}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">Market</p>
+                          <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">曲線 YTM</p>
                           {marketYtm != null ? (
                             <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
                               {marketYtm.toFixed(2)}%
@@ -1081,11 +1084,11 @@ export default function App() {
                     </div>
                     {/* Desktop-only YTM / Market columns */}
                     <div className="hidden sm:block w-16 flex-shrink-0 text-right">
-                      <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">YTM</p>
+                      <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">現價 YTM</p>
                       <p className={`text-xs font-bold ${ytm == null ? 'text-slate-300' : 'text-amber-600'}`}>{ytm == null ? '--' : `${ytm.toFixed(2)}%`}</p>
                     </div>
                     <div className="hidden sm:block w-24 flex-shrink-0 text-right">
-                      <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">Market</p>
+                      <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">曲線 YTM</p>
                       {marketYtm != null ? (
                         <p className="text-xs font-bold text-slate-700">
                           {marketYtm.toFixed(2)}%

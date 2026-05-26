@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
@@ -26,6 +26,7 @@ const googleProvider = new GoogleAuthProvider(); // 初始化 Google 登入
 const aiProxyUrl = import.meta.env.VITE_AI_PROXY_URL || import.meta.env.VITE_GEMINI_PROXY_URL || "";
 const isAiConfigured = Boolean(aiProxyUrl);
 const AI_ANALYSIS_MODEL = 'deepseek-v4-pro';
+const AI_USER_KEY_STORAGE_KEY = 'treasuryDashboard.deepseekApiKey';
 
 // --- FRED API Configuration ---
 const fredApiKey = import.meta.env.VITE_FRED_API_KEY || "";
@@ -128,11 +129,18 @@ const fetchWithRetry = async (url, options, retries = 5) => {
   }
 };
 
-const generateText = async (prompt) => {
+const getAiRequestHeaders = (userApiKey = '') => {
+  const headers = { 'Content-Type': 'application/json' };
+  const key = String(userApiKey || '').trim();
+  if (key) headers['X-DeepSeek-API-Key'] = key;
+  return headers;
+};
+
+const generateText = async (prompt, userApiKey = '') => {
   if (aiProxyUrl) {
     const result = await fetchWithRetry(aiProxyUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAiRequestHeaders(userApiKey),
       body: JSON.stringify({ task: 'generateText', prompt, model: AI_ANALYSIS_MODEL }),
     });
     return result.text || result.response || "無法獲取 AI 回應。";
@@ -140,11 +148,11 @@ const generateText = async (prompt) => {
   throw new Error('未設定 AI proxy');
 };
 
-const extractTradeData = async (rawText) => {
+const extractTradeData = async (rawText, userApiKey = '') => {
   if (aiProxyUrl) {
     const result = await fetchWithRetry(aiProxyUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAiRequestHeaders(userApiKey),
       body: JSON.stringify({ task: 'extractTradeData', rawText }),
     });
     return result.trade || result.data || result;
@@ -414,6 +422,12 @@ export default function App() {
   const [insightError, setInsightError] = useState('');
   const [rawTradeText, setRawTradeText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
+  const [userDeepSeekApiKey, setUserDeepSeekApiKey] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return window.localStorage.getItem(AI_USER_KEY_STORAGE_KEY) || '';
+  });
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [isApiKeyOpen, setIsApiKeyOpen] = useState(false);
 
   // --- FRED Yield Curve ---
   const [yieldCurve, setYieldCurve] = useState(null);
@@ -427,6 +441,7 @@ export default function App() {
   const [closeData, setCloseData] = useState({ closeDate: new Date().toISOString().split('T')[0], closePrice: '', closeCommission: 0 });
   const [selectedBenchmark, setSelectedBenchmark] = useState('UST10Y');
   const [importAuditLog, setImportAuditLog] = useState([]);
+  const hasUserDeepSeekApiKey = Boolean(userDeepSeekApiKey.trim());
 
   // --- Firebase Auth 監聽 (改為 Google 登入) ---
   useEffect(() => {
@@ -751,12 +766,34 @@ export default function App() {
     setEditingPriceId(null);
   };
 
+  const openApiKeySettings = () => {
+    setApiKeyDraft(userDeepSeekApiKey);
+    setIsApiKeyOpen(true);
+  };
+
+  const handleSaveApiKey = () => {
+    const key = apiKeyDraft.trim();
+    if (typeof window !== 'undefined') {
+      if (key) window.localStorage.setItem(AI_USER_KEY_STORAGE_KEY, key);
+      else window.localStorage.removeItem(AI_USER_KEY_STORAGE_KEY);
+    }
+    setUserDeepSeekApiKey(key);
+    setIsApiKeyOpen(false);
+  };
+
+  const handleClearApiKey = () => {
+    if (typeof window !== 'undefined') window.localStorage.removeItem(AI_USER_KEY_STORAGE_KEY);
+    setUserDeepSeekApiKey('');
+    setApiKeyDraft('');
+    setIsApiKeyOpen(false);
+  };
+
   const handleSmartParse = async () => {
     if (!rawTradeText.trim()) return;
     if (!isAiConfigured) { alert("未設定 AI proxy，智能讀取暫時不可用。"); return; }
     setIsParsing(true);
     try {
-      const parsedData = await extractTradeData(rawTradeText);
+      const parsedData = await extractTradeData(rawTradeText, userDeepSeekApiKey);
       setFormData({ ...defaultForm, ...parsedData });
       setSmartInputMode(false); setRawTradeText('');
     } catch (err) { alert("無法解析文字，請檢查格式。"); } finally { setIsParsing(false); }
@@ -772,7 +809,7 @@ export default function App() {
         Total Market Value: $${portfolioMetrics.totalMarketValue.toFixed(2)}, Total Unrealized PnL: $${portfolioMetrics.totalUnrealizedPnL.toFixed(2)}, Weighted Average YTM: ${weightedYtmText}
         Detailed holdings: ${activeTrades.map(t => `- ${t.side.toUpperCase()} ${t.type.toUpperCase()}, Face Value: $${t.faceValue}, Matures: ${t.maturityDate}`).join('\n')}
         Provide a short analysis on interest rate risk, reinvestment risk, and strategic recommendation. Keep it under 3 paragraphs with bullet points. Respond in Traditional Chinese (HK).`;
-      const response = await generateText(prompt);
+      const response = await generateText(prompt, userDeepSeekApiKey);
       setAiInsights(response);
     } catch (err) { setInsightError('分析時發生錯誤。請確保已設定 API Key。'); } finally { setIsAnalyzing(false); }
   };
@@ -1113,11 +1150,32 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm">DeepSeek-V4-Pro</span>
+            <button type="button" onClick={openApiKeySettings} className={`border px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm ${hasUserDeepSeekApiKey ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-white/80 border-indigo-200 text-indigo-700 hover:bg-white'}`} title="Set personal DeepSeek API key">
+              <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人 Key' : 'API Key'}
+            </button>
             <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0 || !isAiConfigured} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
               {isAnalyzing ? <Loader2 size={15} className="animate-spin mr-1.5" /> : <Sparkles size={15} className="mr-1.5" />} 智能分析
             </button>
           </div>
         </div>
+        {isApiKeyOpen && (
+          <div className="mb-4 bg-white/90 border border-indigo-100 rounded-lg p-3 shadow-inner">
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="password"
+                value={apiKeyDraft}
+                onChange={(e) => setApiKeyDraft(e.target.value)}
+                placeholder="Paste your DeepSeek API key"
+                className="flex-1 min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                autoComplete="off"
+              />
+              <button type="button" onClick={handleSaveApiKey} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-sm font-semibold">儲存</button>
+              {hasUserDeepSeekApiKey && <button type="button" onClick={handleClearApiKey} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-semibold">清除</button>}
+              <button type="button" onClick={() => setIsApiKeyOpen(false)} className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-lg text-sm font-semibold">取消</button>
+            </div>
+            <p className="text-[11px] text-slate-500 mt-2">Key 只會儲存在呢部機嘅瀏覽器 localStorage，不會寫入 Firestore 或備份檔。需要已設定 AI proxy URL 才能使用。</p>
+          </div>
+        )}
         {insightError && <p className="text-sm text-red-600 flex items-center mt-2 mb-2"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
         {aiInsights ? <div className="bg-white/90 p-4 rounded-lg text-sm text-slate-700 leading-relaxed whitespace-pre-wrap border border-white shadow-inner">{aiInsights}</div> : <p className="text-sm text-indigo-400/90 italic">點擊按鈕，讓 AI 為你分析現時債券梯的久期風險及資金流動性建議。</p>}
       </div>

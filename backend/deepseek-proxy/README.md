@@ -6,6 +6,11 @@ The browser calls this worker through `VITE_AI_PROXY_URL`. The worker reads
 `DEEPSEEK_API_KEY` from Cloudflare secrets and calls DeepSeek server-side, so the
 API key is never bundled into GitHub Pages.
 
+The frontend can also send a user-provided key in the `X-DeepSeek-API-Key`
+header. This is for users who want to use their own DeepSeek key from their own
+browser. If the header is empty, the Worker falls back to its server-side
+`DEEPSEEK_API_KEY` secret.
+
 ## Deploy
 
 ### Windows helper

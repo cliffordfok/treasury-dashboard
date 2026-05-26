@@ -21,14 +21,11 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider(); // 初始化 Google 登入
 
-// --- Gemini API Configuration ---
-// Production builds must call a backend/proxy so the Gemini key never ships to browsers.
-const geminiProxyUrl = import.meta.env.VITE_GEMINI_PROXY_URL || "";
-const isGeminiConfigured = Boolean(geminiProxyUrl);
-const AI_ANALYSIS_MODELS = [
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  { id: 'deepseek-v4-pro', label: 'DeepSeek-V4-Pro' },
-];
+// --- AI Proxy Configuration ---
+// Production builds must call a backend/proxy so provider keys never ship to browsers.
+const aiProxyUrl = import.meta.env.VITE_AI_PROXY_URL || import.meta.env.VITE_GEMINI_PROXY_URL || "";
+const isAiConfigured = Boolean(aiProxyUrl);
+const AI_ANALYSIS_MODEL = 'deepseek-v4-pro';
 
 // --- FRED API Configuration ---
 const fredApiKey = import.meta.env.VITE_FRED_API_KEY || "";
@@ -131,28 +128,28 @@ const fetchWithRetry = async (url, options, retries = 5) => {
   }
 };
 
-const generateText = async (prompt, model = AI_ANALYSIS_MODELS[0].id) => {
-  if (geminiProxyUrl) {
-    const result = await fetchWithRetry(geminiProxyUrl, {
+const generateText = async (prompt) => {
+  if (aiProxyUrl) {
+    const result = await fetchWithRetry(aiProxyUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task: 'generateText', prompt, model }),
+      body: JSON.stringify({ task: 'generateText', prompt, model: AI_ANALYSIS_MODEL }),
     });
     return result.text || result.response || "無法獲取 AI 回應。";
   }
-  throw new Error('未設定 Gemini proxy');
+  throw new Error('未設定 AI proxy');
 };
 
 const extractTradeData = async (rawText) => {
-  if (geminiProxyUrl) {
-    const result = await fetchWithRetry(geminiProxyUrl, {
+  if (aiProxyUrl) {
+    const result = await fetchWithRetry(aiProxyUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task: 'extractTradeData', rawText }),
     });
     return result.trade || result.data || result;
   }
-  throw new Error('未設定 Gemini proxy');
+  throw new Error('未設定 AI proxy');
 };
 
 // --- Math & Date Engine ---
@@ -415,7 +412,6 @@ export default function App() {
   const [aiInsights, setAiInsights] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [insightError, setInsightError] = useState('');
-  const [selectedAiModel, setSelectedAiModel] = useState(AI_ANALYSIS_MODELS[0].id);
   const [rawTradeText, setRawTradeText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
 
@@ -757,7 +753,7 @@ export default function App() {
 
   const handleSmartParse = async () => {
     if (!rawTradeText.trim()) return;
-    if (!isGeminiConfigured) { alert("未設定 Gemini proxy，智能讀取暫時不可用。"); return; }
+    if (!isAiConfigured) { alert("未設定 AI proxy，智能讀取暫時不可用。"); return; }
     setIsParsing(true);
     try {
       const parsedData = await extractTradeData(rawTradeText);
@@ -768,7 +764,7 @@ export default function App() {
 
   const handleAnalyzePortfolio = async () => {
     if (activeTrades.length === 0) return;
-    if (!isGeminiConfigured) { setInsightError('未設定 Gemini proxy，智能分析暫時不可用。'); return; }
+    if (!isAiConfigured) { setInsightError('未設定 AI proxy，智能分析暫時不可用。'); return; }
     setIsAnalyzing(true); setInsightError('');
     try {
       const weightedYtmText = portfolioMetrics.totalWeightYTM == null ? 'Unavailable' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`;
@@ -776,7 +772,7 @@ export default function App() {
         Total Market Value: $${portfolioMetrics.totalMarketValue.toFixed(2)}, Total Unrealized PnL: $${portfolioMetrics.totalUnrealizedPnL.toFixed(2)}, Weighted Average YTM: ${weightedYtmText}
         Detailed holdings: ${activeTrades.map(t => `- ${t.side.toUpperCase()} ${t.type.toUpperCase()}, Face Value: $${t.faceValue}, Matures: ${t.maturityDate}`).join('\n')}
         Provide a short analysis on interest rate risk, reinvestment risk, and strategic recommendation. Keep it under 3 paragraphs with bullet points. Respond in Traditional Chinese (HK).`;
-      const response = await generateText(prompt, selectedAiModel);
+      const response = await generateText(prompt);
       setAiInsights(response);
     } catch (err) { setInsightError('分析時發生錯誤。請確保已設定 API Key。'); } finally { setIsAnalyzing(false); }
   };
@@ -1116,10 +1112,8 @@ export default function App() {
             <h3 className="text-base sm:text-lg font-bold">AI 投資組合分析</h3>
           </div>
           <div className="flex items-center gap-2">
-            <select value={selectedAiModel} onChange={(e) => setSelectedAiModel(e.target.value)} disabled={isAnalyzing} className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm disabled:opacity-60">
-              {AI_ANALYSIS_MODELS.map(model => <option key={model.id} value={model.id}>{model.label}</option>)}
-            </select>
-            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0 || !isGeminiConfigured} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
+            <span className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm">DeepSeek-V4-Pro</span>
+            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0 || !isAiConfigured} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
               {isAnalyzing ? <Loader2 size={15} className="animate-spin mr-1.5" /> : <Sparkles size={15} className="mr-1.5" />} 智能分析
             </button>
           </div>
@@ -1389,7 +1383,7 @@ export default function App() {
             <div className="p-5 bg-slate-50 border-b flex justify-between items-center"><h2 className="text-lg font-bold">{editingTradeId ? 'Edit Trade' : 'Record New Trade'}</h2><button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button></div>
             {!editingTradeId && (<div className="px-5 pt-4"><div className="flex bg-slate-100 p-1 rounded-lg"><button type="button" onClick={() => setSmartInputMode(false)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${!smartInputMode ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>手動輸入</button><button type="button" onClick={() => setSmartInputMode(true)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${smartInputMode ? 'bg-indigo-500 text-white shadow' : 'text-slate-500'}`}>✨ 智能貼上</button></div></div>)}
             <div className="p-5 overflow-y-auto max-h-[60vh]">
-              {smartInputMode && !editingTradeId ? (<div className="space-y-4"><textarea value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" /><button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !isGeminiConfigured} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button></div>) : (<>
+              {smartInputMode && !editingTradeId ? (<div className="space-y-4"><textarea value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" /><button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !isAiConfigured} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button></div>) : (<>
                 <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">CUSIP / 名稱</label><input required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label><select required name="type" value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, couponRate: e.target.value==='t-bill'?0:formData.couponRate})} className="w-full p-2 border rounded-lg text-sm"><option value="t-bill">T-Bill</option><option value="t-note">T-Note</option><option value="t-bond">T-Bond</option><option value="tips">TIPS</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Action</label><select required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">BUY (買入)</option><option value="sell">SELL (沽空)</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label><input required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label><input required type="date" name="maturityDate" value={formData.maturityDate} onChange={(e)=>setFormData({...formData, maturityDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Face Value ($)</label><input required type="number" name="faceValue" value={formData.faceValue} onChange={(e)=>setFormData({...formData, faceValue: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label><input required type="number" step="0.001" name="cleanPrice" value={formData.cleanPrice} onChange={(e)=>setFormData({...formData, cleanPrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Commission ($)</label><input type="number" step="0.01" name="commission" value={formData.commission} onChange={(e)=>setFormData({...formData, commission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>{formData.type !== 't-bill' && (<><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate (%)</label><input required type="number" step="0.125" name="couponRate" value={formData.couponRate} onChange={(e)=>setFormData({...formData, couponRate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label><select name="couponFrequency" value={formData.couponFrequency} onChange={(e)=>setFormData({...formData, couponFrequency: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="12">Monthly</option><option value="4">Quarterly</option><option value="2">Semi-Annually</option><option value="1">Annually</option></select></div></>)}</div></form>
                 {isCouponTreasury(formData) && (
                   <div className="mt-4">

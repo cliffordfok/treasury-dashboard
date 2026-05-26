@@ -8,6 +8,20 @@ API key is never bundled into GitHub Pages.
 
 ## Deploy
 
+### Windows helper
+
+In PowerShell:
+
+```powershell
+cd backend/deepseek-proxy
+powershell -ExecutionPolicy Bypass -File .\setup-secret.ps1
+```
+
+When Wrangler asks for `DEEPSEEK_API_KEY`, paste your new DeepSeek API key. The
+key is sent to Cloudflare as a Worker secret and is not saved into this repo.
+
+### Manual commands
+
 ```bash
 cd backend/deepseek-proxy
 npm install

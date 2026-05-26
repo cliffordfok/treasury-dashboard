@@ -26,7 +26,7 @@ const buildCorsHeaders = (request, env) => {
   return {
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, X-DeepSeek-API-Key",
     "Vary": "Origin",
   };
 };
@@ -49,8 +49,9 @@ const parseJsonObject = (text) => {
   }
 };
 
-const callDeepSeek = async ({ env, messages, model, temperature = 0.2, responseFormat }) => {
-  if (!env.DEEPSEEK_API_KEY) {
+const callDeepSeek = async ({ apiKey, env, messages, model, temperature = 0.2, responseFormat }) => {
+  const deepSeekApiKey = String(apiKey || env.DEEPSEEK_API_KEY || "").trim();
+  if (!deepSeekApiKey) {
     throw new Error("DEEPSEEK_API_KEY is not configured");
   }
 
@@ -67,7 +68,7 @@ const callDeepSeek = async ({ env, messages, model, temperature = 0.2, responseF
   const upstream = await fetch(DEEPSEEK_API_URL, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${env.DEEPSEEK_API_KEY}`,
+      "Authorization": `Bearer ${deepSeekApiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -126,9 +127,11 @@ export default {
 
     try {
       const body = await request.json();
+      const userApiKey = request.headers.get("X-DeepSeek-API-Key") || "";
 
       if (body.task === "generateText") {
         const text = await callDeepSeek({
+          apiKey: userApiKey,
           env,
           model: body.model,
           messages: [
@@ -142,6 +145,7 @@ export default {
 
       if (body.task === "extractTradeData") {
         const text = await callDeepSeek({
+          apiKey: userApiKey,
           env,
           messages: [
             { role: "system", content: "Extract structured Treasury trade data. Return JSON only." },

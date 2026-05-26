@@ -1,0 +1,7 @@
+name = "treasury-dashboard-ai-proxy"
+main = "src/worker.js"
+compatibility_date = "2026-05-26"
+
+[vars]
+DEEPSEEK_MODEL = "deepseek-v4-pro"
+ALLOWED_ORIGIN = "https://cliffordfok.github.io,http://localhost:5173"

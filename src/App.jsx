@@ -27,6 +27,7 @@ const aiProxyUrl = import.meta.env.VITE_AI_PROXY_URL || import.meta.env.VITE_GEM
 const isAiConfigured = Boolean(aiProxyUrl);
 const AI_ANALYSIS_MODEL = 'deepseek-v4-pro';
 const AI_USER_KEY_STORAGE_KEY = 'treasuryDashboard.deepseekApiKey';
+const DEEPSEEK_CHAT_API_URL = 'https://api.deepseek.com/chat/completions';
 
 // --- FRED API Configuration ---
 const fredApiKey = import.meta.env.VITE_FRED_API_KEY || "";
@@ -136,7 +137,88 @@ const getAiRequestHeaders = (userApiKey = '') => {
   return headers;
 };
 
+const stripCodeFence = (text) =>
+  String(text || '')
+    .trim()
+    .replace(/^```(?:json)?/i, '')
+    .replace(/```$/i, '')
+    .trim();
+
+const parseJsonObject = (text) => {
+  const cleaned = stripCodeFence(text);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('AI response did not contain JSON');
+    return JSON.parse(match[0]);
+  }
+};
+
+const buildTradeExtractionPrompt = (rawText) => `Extract one US Treasury trade from the text.
+
+Return only valid JSON with these fields:
+{
+  "cusip": string,
+  "type": "t-bill" | "t-note" | "t-bond" | "tips",
+  "side": "buy" | "sell",
+  "tradeDate": "YYYY-MM-DD",
+  "maturityDate": "YYYY-MM-DD",
+  "faceValue": number,
+  "cleanPrice": number,
+  "couponRate": number,
+  "couponFrequency": number,
+  "commission": number,
+  "accruedInterestPer100": number | ""
+}
+
+Rules:
+- Use "buy" unless the text clearly says sell/short.
+- Use clean price, not dirty price, when both are present.
+- T-Bill couponRate must be 0 and couponFrequency must be 0.
+- For T-Note/T-Bond, default couponFrequency to 2 when not stated.
+- Use an empty string for unknown optional accruedInterestPer100.
+- Do not include markdown or explanatory text.
+
+Trade text:
+${rawText}`;
+
+const callDeepSeekDirect = async ({ messages, userApiKey, temperature = 0.2, responseFormat }) => {
+  const key = String(userApiKey || '').trim();
+  if (!key) throw new Error('未設定 DeepSeek API Key');
+
+  const payload = {
+    model: AI_ANALYSIS_MODEL,
+    messages,
+    temperature,
+  };
+  if (responseFormat) payload.response_format = responseFormat;
+
+  const result = await fetchWithRetry(DEEPSEEK_CHAT_API_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const text = result?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('DeepSeek response was empty');
+  return text;
+};
+
 const generateText = async (prompt, userApiKey = '') => {
+  if (!aiProxyUrl && String(userApiKey || '').trim()) {
+    return callDeepSeekDirect({
+      userApiKey,
+      messages: [
+        { role: 'system', content: 'You are a concise fixed-income portfolio analyst.' },
+        { role: 'user', content: String(prompt || '') },
+      ],
+      temperature: 0.3,
+    });
+  }
   if (aiProxyUrl) {
     const result = await fetchWithRetry(aiProxyUrl, {
       method: 'POST',
@@ -149,6 +231,18 @@ const generateText = async (prompt, userApiKey = '') => {
 };
 
 const extractTradeData = async (rawText, userApiKey = '') => {
+  if (!aiProxyUrl && String(userApiKey || '').trim()) {
+    const text = await callDeepSeekDirect({
+      userApiKey,
+      messages: [
+        { role: 'system', content: 'Extract structured Treasury trade data. Return JSON only.' },
+        { role: 'user', content: buildTradeExtractionPrompt(String(rawText || '')) },
+      ],
+      temperature: 0,
+      responseFormat: { type: 'json_object' },
+    });
+    return parseJsonObject(text);
+  }
   if (aiProxyUrl) {
     const result = await fetchWithRetry(aiProxyUrl, {
       method: 'POST',
@@ -442,6 +536,7 @@ export default function App() {
   const [selectedBenchmark, setSelectedBenchmark] = useState('UST10Y');
   const [importAuditLog, setImportAuditLog] = useState([]);
   const hasUserDeepSeekApiKey = Boolean(userDeepSeekApiKey.trim());
+  const hasAiTransport = isAiConfigured || hasUserDeepSeekApiKey;
 
   // --- Firebase Auth 監聽 (改為 Google 登入) ---
   useEffect(() => {
@@ -790,7 +885,7 @@ export default function App() {
 
   const handleSmartParse = async () => {
     if (!rawTradeText.trim()) return;
-    if (!isAiConfigured) { alert("未設定 AI proxy，智能讀取暫時不可用。"); return; }
+    if (!hasAiTransport) { alert("請先設定 AI proxy 或按 API Key 輸入 DeepSeek key。"); return; }
     setIsParsing(true);
     try {
       const parsedData = await extractTradeData(rawTradeText, userDeepSeekApiKey);
@@ -801,7 +896,7 @@ export default function App() {
 
   const handleAnalyzePortfolio = async () => {
     if (activeTrades.length === 0) return;
-    if (!isAiConfigured) { setInsightError('未設定 AI proxy，智能分析暫時不可用。'); return; }
+    if (!hasAiTransport) { setInsightError('請先設定 AI proxy 或按 API Key 輸入 DeepSeek key。'); return; }
     setIsAnalyzing(true); setInsightError('');
     try {
       const weightedYtmText = portfolioMetrics.totalWeightYTM == null ? 'Unavailable' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`;
@@ -1153,7 +1248,7 @@ export default function App() {
             <button type="button" onClick={openApiKeySettings} className={`border px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm ${hasUserDeepSeekApiKey ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-white/80 border-indigo-200 text-indigo-700 hover:bg-white'}`} title="Set personal DeepSeek API key">
               <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人 Key' : 'API Key'}
             </button>
-            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0 || !isAiConfigured} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
+            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0 || !hasAiTransport} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
               {isAnalyzing ? <Loader2 size={15} className="animate-spin mr-1.5" /> : <Sparkles size={15} className="mr-1.5" />} 智能分析
             </button>
           </div>
@@ -1173,7 +1268,7 @@ export default function App() {
               {hasUserDeepSeekApiKey && <button type="button" onClick={handleClearApiKey} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-semibold">清除</button>}
               <button type="button" onClick={() => setIsApiKeyOpen(false)} className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-lg text-sm font-semibold">取消</button>
             </div>
-            <p className="text-[11px] text-slate-500 mt-2">Key 只會儲存在呢部機嘅瀏覽器 localStorage，不會寫入 Firestore 或備份檔。需要已設定 AI proxy URL 才能使用。</p>
+            <p className="text-[11px] text-slate-500 mt-2">Key 只會儲存在呢部機嘅瀏覽器 localStorage，不會寫入 Firestore 或備份檔。無 AI proxy 時會嘗試直接呼叫 DeepSeek；如瀏覽器封鎖請改用 proxy。</p>
           </div>
         )}
         {insightError && <p className="text-sm text-red-600 flex items-center mt-2 mb-2"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
@@ -1441,7 +1536,7 @@ export default function App() {
             <div className="p-5 bg-slate-50 border-b flex justify-between items-center"><h2 className="text-lg font-bold">{editingTradeId ? 'Edit Trade' : 'Record New Trade'}</h2><button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button></div>
             {!editingTradeId && (<div className="px-5 pt-4"><div className="flex bg-slate-100 p-1 rounded-lg"><button type="button" onClick={() => setSmartInputMode(false)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${!smartInputMode ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>手動輸入</button><button type="button" onClick={() => setSmartInputMode(true)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${smartInputMode ? 'bg-indigo-500 text-white shadow' : 'text-slate-500'}`}>✨ 智能貼上</button></div></div>)}
             <div className="p-5 overflow-y-auto max-h-[60vh]">
-              {smartInputMode && !editingTradeId ? (<div className="space-y-4"><textarea value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" /><button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !isAiConfigured} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button></div>) : (<>
+              {smartInputMode && !editingTradeId ? (<div className="space-y-4"><textarea value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" /><button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !hasAiTransport} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button></div>) : (<>
                 <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">CUSIP / 名稱</label><input required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label><select required name="type" value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, couponRate: e.target.value==='t-bill'?0:formData.couponRate})} className="w-full p-2 border rounded-lg text-sm"><option value="t-bill">T-Bill</option><option value="t-note">T-Note</option><option value="t-bond">T-Bond</option><option value="tips">TIPS</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Action</label><select required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">BUY (買入)</option><option value="sell">SELL (沽空)</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label><input required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label><input required type="date" name="maturityDate" value={formData.maturityDate} onChange={(e)=>setFormData({...formData, maturityDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Face Value ($)</label><input required type="number" name="faceValue" value={formData.faceValue} onChange={(e)=>setFormData({...formData, faceValue: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label><input required type="number" step="0.001" name="cleanPrice" value={formData.cleanPrice} onChange={(e)=>setFormData({...formData, cleanPrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Commission ($)</label><input type="number" step="0.01" name="commission" value={formData.commission} onChange={(e)=>setFormData({...formData, commission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>{formData.type !== 't-bill' && (<><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate (%)</label><input required type="number" step="0.125" name="couponRate" value={formData.couponRate} onChange={(e)=>setFormData({...formData, couponRate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label><select name="couponFrequency" value={formData.couponFrequency} onChange={(e)=>setFormData({...formData, couponFrequency: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="12">Monthly</option><option value="4">Quarterly</option><option value="2">Semi-Annually</option><option value="1">Annually</option></select></div></>)}</div></form>
                 {isCouponTreasury(formData) && (
                   <div className="mt-4">

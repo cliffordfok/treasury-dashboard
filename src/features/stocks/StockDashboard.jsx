@@ -35,7 +35,7 @@ export default function StockDashboard({ db, user }) {
         setIsLoading(false);
       },
       (err) => {
-        setError(err.message || 'Unable to load stock trades.');
+        setError(err.message || '未能載入美股交易。');
         setIsLoading(false);
       },
     );
@@ -70,7 +70,7 @@ export default function StockDashboard({ db, user }) {
       setFormData(defaultStockTradeForm());
       setError('');
     } catch (err) {
-      setError(err.message || 'Unable to save stock trade.');
+      setError(err.message || '未能儲存美股交易。');
     } finally {
       setIsSaving(false);
     }
@@ -78,14 +78,14 @@ export default function StockDashboard({ db, user }) {
 
   const handleDelete = async (tradeId) => {
     if (!user?.uid) return;
-    const confirmed = window.confirm('Delete this stock trade?');
+    const confirmed = window.confirm('刪除此筆美股交易？');
     if (!confirmed) return;
 
     try {
       await deleteStockTrade(db, user.uid, tradeId);
       setError('');
     } catch (err) {
-      setError(err.message || 'Unable to delete stock trade.');
+      setError(err.message || '未能刪除美股交易。');
     }
   };
 
@@ -93,27 +93,27 @@ export default function StockDashboard({ db, user }) {
     <div className="space-y-4 sm:space-y-6">
       <div className="bg-slate-900 text-white rounded-2xl shadow-lg p-5 sm:p-6 relative overflow-hidden">
         <div className="absolute -top-6 -right-6 opacity-10 pointer-events-none"><Briefcase size={160} /></div>
-        <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">Stock Ledger / 美股交易總帳</p>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Firstrade 股票及 ETF 交易紀錄</h2>
+        <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">美股 / ETF 交易總帳</p>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Firstrade 美股及 ETF 交易紀錄</h2>
         <p className="text-slate-300 text-sm mt-2 max-w-2xl">由交易流水帳自動計算持倉、平均成本、已實現盈虧及現金影響。第一階段不接即時報價。</p>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center gap-3">
           <div className="p-2.5 bg-blue-50 text-blue-600 rounded-lg"><Briefcase size={20} /></div>
-          <div><p className="text-[11px] text-slate-500 font-medium">Symbols</p><p className="text-lg font-bold text-slate-800">{positions.length}</p></div>
+          <div><p className="text-[11px] text-slate-500 font-medium">持倉 Symbol</p><p className="text-lg font-bold text-slate-800">{positions.length}</p></div>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center gap-3">
           <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg"><DollarSign size={20} /></div>
-          <div><p className="text-[11px] text-slate-500 font-medium">Remaining Cost</p><p className="text-lg font-bold text-slate-800">{money(totals.remainingCost)}</p></div>
+          <div><p className="text-[11px] text-slate-500 font-medium">剩餘成本</p><p className="text-lg font-bold text-slate-800">{money(totals.remainingCost)}</p></div>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center gap-3">
           <div className={`p-2.5 rounded-lg ${totals.realizedPnl >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}><TrendingUp size={20} /></div>
-          <div><p className="text-[11px] text-slate-500 font-medium">Realized PnL</p><p className={`text-lg font-bold ${totals.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(totals.realizedPnl)}</p></div>
+          <div><p className="text-[11px] text-slate-500 font-medium">已實現盈虧</p><p className={`text-lg font-bold ${totals.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(totals.realizedPnl)}</p></div>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center gap-3">
           <div className={`p-2.5 rounded-lg ${totals.cashImpact >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}><Wallet size={20} /></div>
-          <div><p className="text-[11px] text-slate-500 font-medium">Cash Impact</p><p className={`text-lg font-bold ${totals.cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(totals.cashImpact)}</p></div>
+          <div><p className="text-[11px] text-slate-500 font-medium">股票交易現金影響</p><p className={`text-lg font-bold ${totals.cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(totals.cashImpact)}</p></div>
         </div>
       </div>
 
@@ -129,52 +129,52 @@ export default function StockDashboard({ db, user }) {
               <input required value={formData.symbol} onChange={(e) => update('symbol', e.target.value.toUpperCase())} placeholder="VOO" className="w-full p-2 border rounded-lg text-sm uppercase" />
             </div>
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Name optional</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">名稱（可選）</label>
               <input value={formData.name} onChange={(e) => update('name', e.target.value)} placeholder="Vanguard S&P 500 ETF" className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Side</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">類型</label>
               <select value={formData.side} onChange={(e) => update('side', e.target.value)} className="w-full p-2 border rounded-lg text-sm">
                 <option value="buy">買入</option>
                 <option value="sell">賣出</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Date</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">交易日期</label>
               <input required type="date" value={formData.tradeDate} onChange={(e) => update('tradeDate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Time optional</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">時間（可選）</label>
               <input type="time" value={formData.tradeTime} onChange={(e) => update('tradeTime', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Currency</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">貨幣</label>
               <input value={formData.currency} onChange={(e) => update('currency', e.target.value.toUpperCase())} className="w-full p-2 border rounded-lg text-sm uppercase" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Quantity</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">數量</label>
               <input required type="number" min="0" step="0.000001" value={formData.quantity} onChange={(e) => update('quantity', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Price</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">價格</label>
               <input required type="number" min="0" step="0.0001" value={formData.price} onChange={(e) => update('price', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Commission</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">手續費</label>
               <input type="number" min="0" step="0.01" value={formData.commission} onChange={(e) => update('commission', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Fees</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">其他費用</label>
               <input type="number" min="0" step="0.01" value={formData.fees} onChange={(e) => update('fees', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Notes optional</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">備註（可選）</label>
               <textarea value={formData.notes} onChange={(e) => update('notes', e.target.value)} rows={2} className="w-full p-2 border rounded-lg text-sm" />
             </div>
           </div>
           <div className="p-4 border-t bg-slate-50 flex justify-end">
             <button disabled={isSaving} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
-              {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />} Save Trade
+              {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />} 儲存交易
             </button>
           </div>
         </form>
@@ -182,8 +182,8 @@ export default function StockDashboard({ db, user }) {
         <div className="space-y-4">
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center">
-              <h3 className="text-base font-bold text-slate-800">持倉 Summary</h3>
-              <span className="text-xs text-slate-500">Average Cost basis</span>
+              <h3 className="text-base font-bold text-slate-800">持倉摘要</h3>
+              <span className="text-xs text-slate-500">平均成本法</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -194,12 +194,12 @@ export default function StockDashboard({ db, user }) {
                     <th className="p-3 text-right">平均成本</th>
                     <th className="p-3 text-right">剩餘成本</th>
                     <th className="p-3 text-right">已實現盈虧</th>
-                    <th className="p-3 text-right">未實現</th>
+                    <th className="p-3 text-right">未實現盈虧</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {isLoading ? (
-                    <tr><td colSpan="6" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />Loading...</td></tr>
+                    <tr><td colSpan="6" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</td></tr>
                   ) : positions.length === 0 ? (
                     <tr><td colSpan="6" className="p-6 text-center text-slate-400">未有股票交易。</td></tr>
                   ) : positions.map((position) => (
@@ -209,7 +209,7 @@ export default function StockDashboard({ db, user }) {
                       <td className="p-3 text-right">{money(position.averageCost, position.currency)}</td>
                       <td className="p-3 text-right">{money(position.remainingCost, position.currency)}</td>
                       <td className={`p-3 text-right font-bold ${position.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(position.realizedPnl, position.currency)}</td>
-                      <td className="p-3 text-right text-slate-400">N/A</td>
+                      <td className="p-3 text-right text-slate-400">暫未接報價</td>
                     </tr>
                   ))}
                 </tbody>
@@ -220,7 +220,7 @@ export default function StockDashboard({ db, user }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex justify-between items-center">
               <h3 className="text-base font-bold text-slate-800">交易紀錄</h3>
-              <span className="text-xs text-slate-500">{stockTrades.length} trades</span>
+              <span className="text-xs text-slate-500">{stockTrades.length} 筆交易</span>
             </div>
             {error && <p className="m-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">{error}</p>}
             <div className="overflow-x-auto">
@@ -232,15 +232,15 @@ export default function StockDashboard({ db, user }) {
                     <th className="p-3 text-left">Symbol</th>
                     <th className="p-3 text-right">數量</th>
                     <th className="p-3 text-right">價格</th>
-                    <th className="p-3 text-right">Commission</th>
-                    <th className="p-3 text-right">Fees</th>
+                    <th className="p-3 text-right">手續費</th>
+                    <th className="p-3 text-right">其他費用</th>
                     <th className="p-3 text-right">總額</th>
                     <th className="p-3 text-center">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {isLoading ? (
-                    <tr><td colSpan="9" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />Loading...</td></tr>
+                    <tr><td colSpan="9" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</td></tr>
                   ) : stockTrades.length === 0 ? (
                     <tr><td colSpan="9" className="p-6 text-center text-slate-400">未有交易紀錄。</td></tr>
                   ) : stockTrades.map((trade) => {
@@ -256,7 +256,7 @@ export default function StockDashboard({ db, user }) {
                         <td className="p-3 text-right">{money(trade.fees, trade.currency)}</td>
                         <td className={`p-3 text-right font-bold ${cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(cashImpact, trade.currency)}</td>
                         <td className="p-3 text-center">
-                          <button onClick={() => handleDelete(trade.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="Delete trade">
+                          <button onClick={() => handleDelete(trade.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="刪除交易">
                             <Trash2 size={16} />
                           </button>
                         </td>

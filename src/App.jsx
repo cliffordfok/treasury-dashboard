@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound, Briefcase } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import StockDashboard from './features/stocks/StockDashboard';
 
 // --- 真實環境 Firebase 設定 (使用環境變數) ---
 const firebaseConfig = {
@@ -1516,7 +1517,7 @@ export default function App() {
         </div>
       </nav>
       <main className="max-w-6xl mx-auto px-3 sm:px-4 mt-4">
-        <div className="grid grid-cols-3 sm:flex sm:w-max gap-1 mb-5 bg-slate-200/70 p-1 rounded-xl shadow-inner">
+        <div className="grid grid-cols-2 sm:flex sm:w-max gap-1 mb-5 bg-slate-200/70 p-1 rounded-xl shadow-inner">
           <button onClick={() => setActiveTab('dashboard')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <PieChart size={15}/> Analytics
           </button>
@@ -1526,8 +1527,11 @@ export default function App() {
           <button onClick={() => setActiveTab('trades')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <History size={15}/> Trade Ledger
           </button>
+          <button onClick={() => setActiveTab('stocks')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'stocks' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+            <Briefcase size={15}/> Stocks
+          </button>
         </div>
-        {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : renderTrades()}
+        {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : activeTab === 'stocks' ? <StockDashboard db={db} user={user} /> : renderTrades()}
       </main>
 
       {isFormOpen && (

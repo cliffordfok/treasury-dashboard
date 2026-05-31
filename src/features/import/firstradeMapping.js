@@ -1,5 +1,5 @@
 const HEADER_ALIASES = {
-  date: ['date', 'trade date', 'transaction date', 'activity date', 'settlement date'],
+  date: ['date', 'trade date', 'tradedate', 'transaction date', 'activity date', 'settlement date', 'settleddate'],
   action: ['action', 'activity', 'type', 'transaction type'],
   symbol: ['symbol', 'ticker', 'security symbol'],
   quantity: ['quantity', 'qty', 'shares', 'share quantity'],
@@ -13,6 +13,7 @@ const HEADER_ALIASES = {
   description: ['description', 'security description', 'details', 'memo'],
   costBasis: ['cost basis', 'total cost basis', 'cost'],
   marketValue: ['market value', 'current value'],
+  recordType: ['record type', 'recordtype'],
 };
 
 const STOCK_BUY_TERMS = ['buy', 'bought', 'purchase'];
@@ -21,9 +22,10 @@ const DIVIDEND_TERMS = ['dividend', 'qualified dividend', 'cash dividend'];
 const WITHHOLDING_TERMS = ['withholding', 'tax withheld', 'foreign tax'];
 const INTEREST_TERMS = ['interest'];
 const FEE_TERMS = ['fee', 'adr fee', 'reorganization fee'];
-const DEPOSIT_TERMS = ['deposit', 'ach credit', 'wire in', 'transfer in'];
+const DEPOSIT_TERMS = ['deposit', 'ach credit', 'wire in', 'wire funds received', 'transfer in'];
 const WITHDRAWAL_TERMS = ['withdrawal', 'ach debit', 'wire out', 'transfer out'];
 const ADJUSTMENT_TERMS = ['adjustment', 'journal', 'correction'];
+const INTERNAL_TRANSFER_TERMS = ['tfr from type', 'tfr to type', 'xfer cash to margin', 'xfer margin to cash'];
 
 export const CSV_TYPES = {
   STOCK_ACTIVITY: 'stock_activity',
@@ -35,6 +37,7 @@ export const CSV_TYPES = {
 export const ACTIVITY_TYPES = {
   STOCK_TRADE_BUY: 'stock_trade_buy',
   STOCK_TRADE_SELL: 'stock_trade_sell',
+  DIVIDEND_REINVESTMENT: 'dividend_reinvestment',
   DIVIDEND: 'dividend',
   WITHHOLDING_TAX: 'withholding_tax',
   INTEREST: 'interest',
@@ -42,6 +45,7 @@ export const ACTIVITY_TYPES = {
   DEPOSIT: 'deposit',
   WITHDRAWAL: 'withdrawal',
   ADJUSTMENT: 'adjustment',
+  IGNORED: 'ignored',
   UNKNOWN: 'unknown',
 };
 
@@ -125,7 +129,10 @@ export const detectFirstradeCsvType = (headers = []) => {
   const hasSymbol = hasAny(normalizedHeaders, HEADER_ALIASES.symbol);
   const hasQuantity = hasAny(normalizedHeaders, HEADER_ALIASES.quantity);
   const hasPrice = hasAny(normalizedHeaders, HEADER_ALIASES.price);
-  const hasAmount = hasAny(normalizedHeaders, HEADER_ALIASES.amount);
+  const hasAmount =
+    hasAny(normalizedHeaders, HEADER_ALIASES.amount) ||
+    hasAny(normalizedHeaders, HEADER_ALIASES.netAmount) ||
+    hasAny(normalizedHeaders, HEADER_ALIASES.grossAmount);
   const hasCostBasis = hasAny(normalizedHeaders, HEADER_ALIASES.costBasis);
   const hasMarketValue = hasAny(normalizedHeaders, HEADER_ALIASES.marketValue);
 
@@ -140,14 +147,21 @@ export const classifyFirstradeActivity = (row = {}) => {
   const normalizedRow = normalizeRawRowKeys(row);
   const actionText = normalizeActionText(row.activity || row.action || row.type || getByAliases(normalizedRow, HEADER_ALIASES.action));
   const descriptionText = normalizeActionText(row.description || getByAliases(normalizedRow, HEADER_ALIASES.description));
+  const recordTypeText = normalizeActionText(row.recordType || row.recordtype || getByAliases(normalizedRow, HEADER_ALIASES.recordType));
   const text = `${actionText} ${descriptionText}`.trim();
 
   if (!text) return ACTIVITY_TYPES.UNKNOWN;
-  if (WITHHOLDING_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.WITHHOLDING_TAX;
-  if (DIVIDEND_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.DIVIDEND;
+  if (INTERNAL_TRANSFER_TERMS.some((term) => descriptionText.includes(term))) return ACTIVITY_TYPES.IGNORED;
+  if (descriptionText.includes('rein @')) return ACTIVITY_TYPES.DIVIDEND_REINVESTMENT;
+  if (recordTypeText === 'trade' && actionText === 'buy') return ACTIVITY_TYPES.STOCK_TRADE_BUY;
+  if (recordTypeText === 'trade' && actionText === 'sell') return ACTIVITY_TYPES.STOCK_TRADE_SELL;
+  if (recordTypeText === 'financial' && actionText === 'dividend') return ACTIVITY_TYPES.DIVIDEND;
+  if (recordTypeText === 'financial' && actionText === 'interest') return ACTIVITY_TYPES.INTEREST;
   if (STOCK_BUY_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.STOCK_TRADE_BUY;
   if (STOCK_SELL_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.STOCK_TRADE_SELL;
+  if (DIVIDEND_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.DIVIDEND;
   if (INTEREST_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.INTEREST;
+  if (WITHHOLDING_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.WITHHOLDING_TAX;
   if (FEE_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.FEE;
   if (DEPOSIT_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.DEPOSIT;
   if (WITHDRAWAL_TERMS.some((term) => text.includes(term))) return ACTIVITY_TYPES.WITHDRAWAL;
@@ -174,8 +188,19 @@ export const mapFirstradeRow = (rawRow = {}, csvType = CSV_TYPES.UNKNOWN) => {
     description: String(getByAliases(row, HEADER_ALIASES.description) || '').trim(),
     costBasis: parseFirstradeCurrencyAmount(getByAliases(row, HEADER_ALIASES.costBasis)),
     marketValue: parseFirstradeCurrencyAmount(getByAliases(row, HEADER_ALIASES.marketValue)),
+    recordType: String(getByAliases(row, HEADER_ALIASES.recordType) || '').trim(),
     currency: 'USD',
   };
+
+  if (mapped.price === null && mapped.description) {
+    const reinvestmentPrice = mapped.description.match(/\bREIN\s*@\s*([$0-9.,]+)/i);
+    if (reinvestmentPrice) mapped.price = parseFirstradeCurrencyAmount(reinvestmentPrice[1]);
+  }
+
+  if (mapped.withholdingTax === null && mapped.description) {
+    const withheldAmount = mapped.description.match(/NON-RES TAX WITHHELD\s*\$?\s*([0-9.,]+)/i);
+    if (withheldAmount) mapped.withholdingTax = parseFirstradeCurrencyAmount(withheldAmount[1]);
+  }
 
   mapped.activityType = classifyFirstradeActivity(mapped);
   return mapped;
@@ -187,9 +212,12 @@ const absoluteOrZero = (value) => {
 };
 
 const optionalAbsNumber = (value) => {
+  if (value === null || value === undefined || value === '') return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? Math.abs(number) : undefined;
 };
+
+const roundCurrency = (value) => Math.round(Number(value) * 100) / 100;
 
 const makeNotes = (mappedRow) => mappedRow.description || mappedRow.action || '';
 
@@ -202,7 +230,7 @@ const draftBase = (mappedRow) => ({
 
 export const toStockTradeDraft = (mappedRow = {}) => {
   const activityType = mappedRow.activityType || classifyFirstradeActivity(mappedRow);
-  if (![ACTIVITY_TYPES.STOCK_TRADE_BUY, ACTIVITY_TYPES.STOCK_TRADE_SELL].includes(activityType)) return null;
+  if (![ACTIVITY_TYPES.STOCK_TRADE_BUY, ACTIVITY_TYPES.STOCK_TRADE_SELL, ACTIVITY_TYPES.DIVIDEND_REINVESTMENT].includes(activityType)) return null;
 
   const draft = {
     ...draftBase(mappedRow),
@@ -251,6 +279,7 @@ export const toCashMovementDraft = (mappedRow = {}) => {
     if (grossAmount !== undefined) draft.grossAmount = grossAmount;
     if (withholdingTax !== undefined) draft.withholdingTax = withholdingTax;
     if (netAmount !== undefined) draft.netAmount = netAmount;
+    if (grossAmount === undefined && netAmount !== undefined && withholdingTax !== undefined) draft.grossAmount = roundCurrency(netAmount + withholdingTax);
     draft.amount = netAmount ?? grossAmount ?? Math.abs(rawAmount);
   }
 

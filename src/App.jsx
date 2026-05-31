@@ -9,6 +9,7 @@ import StockDashboard from './features/stocks/StockDashboard';
 import CashDashboard from './features/cash/CashDashboard';
 import ReconciliationDashboard from './features/reconciliation/ReconciliationDashboard';
 import PortfolioOverview from './features/portfolio/PortfolioOverview';
+import ImportPreviewDashboard from './features/import/ImportPreviewDashboard';
 
 // --- 真實環境 Firebase 設定 (使用環境變數) ---
 const firebaseConfig = {
@@ -1540,8 +1541,11 @@ export default function App() {
           <button onClick={() => setActiveTab('reconcile')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'reconcile' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <ClipboardCheck size={15}/> 對帳
           </button>
+          <button onClick={() => setActiveTab('import')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'import' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+            <Upload size={15}/> 匯入預覽
+          </button>
         </div>
-        {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : activeTab === 'stocks' ? <StockDashboard db={db} user={user} /> : activeTab === 'cash' ? <CashDashboard db={db} user={user} /> : activeTab === 'reconcile' ? <ReconciliationDashboard db={db} user={user} /> : renderTrades()}
+        {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : activeTab === 'stocks' ? <StockDashboard db={db} user={user} /> : activeTab === 'cash' ? <CashDashboard db={db} user={user} /> : activeTab === 'reconcile' ? <ReconciliationDashboard db={db} user={user} /> : activeTab === 'import' ? <ImportPreviewDashboard db={db} user={user} /> : renderTrades()}
       </main>
 
       {isFormOpen && (

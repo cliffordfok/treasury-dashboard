@@ -12,14 +12,14 @@ export const CASH_MOVEMENT_TYPES = [
 ];
 
 export const CASH_MOVEMENT_TYPE_LABELS = {
-  opening_balance: 'Opening Balance',
-  deposit: 'Deposit',
-  withdrawal: 'Withdrawal',
-  dividend: 'Dividend',
-  interest: 'Interest',
-  fee: 'Fee',
-  withholding_tax: 'Withholding Tax',
-  adjustment: 'Adjustment',
+  opening_balance: '期初現金',
+  deposit: '入金',
+  withdrawal: '出金',
+  dividend: '股息',
+  interest: '利息',
+  fee: '費用',
+  withholding_tax: '預扣稅',
+  adjustment: '手動調整',
 };
 
 export const hasNumericValue = (value) => value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));

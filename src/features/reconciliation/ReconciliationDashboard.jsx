@@ -37,7 +37,21 @@ const statusClass = (status) => {
   return 'bg-red-50 text-red-700 border-red-100';
 };
 
-const cashStatusLabel = (status) => (status === CASH_STATUS.AWAITING_INPUT ? 'Awaiting Input / 未輸入' : status);
+const cashStatusLabel = (status) => {
+  if (status === CASH_STATUS.AWAITING_INPUT) return '未輸入';
+  if (status === CASH_STATUS.OK) return '正常';
+  if (status === CASH_STATUS.SMALL_DIFF) return '小額差異';
+  if (status === CASH_STATUS.DIFF) return '有差異';
+  return status;
+};
+
+const holdingStatusLabel = (status) => ({
+  OK: '正常',
+  QTY_DIFF: '股數差異',
+  COST_DIFF: '成本差異',
+  MISSING_IN_BROKER: 'Firstrade 缺少',
+  MISSING_IN_SYSTEM: '系統缺少',
+}[status] || status);
 
 const isOptionalNumber = (value) => value === '' || value === null || value === undefined || Number.isFinite(Number(value));
 const isRequiredNumber = (value) => value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
@@ -54,12 +68,12 @@ export default function ReconciliationDashboard({ db, user }) {
 
   useEffect(() => {
     if (!db || !user?.uid) return undefined;
-    return subscribeStockTrades(db, user.uid, setStockTrades, (err) => setError(err.message || 'Unable to load stock trades.'));
+    return subscribeStockTrades(db, user.uid, setStockTrades, (err) => setError(err.message || '未能載入美股交易。'));
   }, [db, user?.uid]);
 
   useEffect(() => {
     if (!db || !user?.uid) return undefined;
-    return subscribeCashMovements(db, user.uid, setCashMovements, (err) => setError(err.message || 'Unable to load cash movements.'));
+    return subscribeCashMovements(db, user.uid, setCashMovements, (err) => setError(err.message || '未能載入現金流水。'));
   }, [db, user?.uid]);
 
   useEffect(() => {
@@ -73,7 +87,7 @@ export default function ReconciliationDashboard({ db, user }) {
         setIsLoading(false);
       },
       (err) => {
-        setError(err.message || 'Unable to load reconciliation snapshots.');
+        setError(err.message || '未能載入對帳快照。');
         setIsLoading(false);
       },
     );
@@ -159,20 +173,20 @@ export default function ReconciliationDashboard({ db, user }) {
   };
 
   const validateSnapshot = () => {
-    if (!formData.date) return '請輸入 snapshot date。';
-    if (!isRequiredNumber(formData.brokerCashBalance)) return 'Broker Cash Balance 必須是有效數字。';
-    if (!isOptionalNumber(formData.brokerTotalMarketValue)) return 'Broker Total Market Value 必須是有效數字。';
-    if (!isOptionalNumber(formData.brokerTotalAccountValue)) return 'Broker Total Account Value 必須是有效數字。';
+    if (!formData.date) return '請輸入對帳日期。';
+    if (!isRequiredNumber(formData.brokerCashBalance)) return 'Firstrade 現金餘額必須是有效數字。';
+    if (!isOptionalNumber(formData.brokerTotalMarketValue)) return 'Firstrade 市值必須是有效數字。';
+    if (!isOptionalNumber(formData.brokerTotalAccountValue)) return 'Firstrade 帳戶總值必須是有效數字。';
 
     const seenSymbols = new Set();
     for (const holding of formData.holdings) {
       const symbol = String(holding.symbol || '').trim().toUpperCase();
       if (!symbol) continue;
-      if (seenSymbols.has(symbol)) return `Holdings symbol 重複：${symbol}`;
+      if (seenSymbols.has(symbol)) return `持倉 symbol 重複：${symbol}`;
       seenSymbols.add(symbol);
-      if (!isRequiredNumber(holding.brokerQuantity) || Number(holding.brokerQuantity) < 0) return `${symbol} brokerQuantity 必須是非負數字。`;
-      if (!isOptionalNumber(holding.brokerCostBasis) || Number(holding.brokerCostBasis || 0) < 0) return `${symbol} brokerCostBasis 不可為負數。`;
-      if (!isOptionalNumber(holding.brokerMarketValue) || Number(holding.brokerMarketValue || 0) < 0) return `${symbol} brokerMarketValue 不可為負數。`;
+      if (!isRequiredNumber(holding.brokerQuantity) || Number(holding.brokerQuantity) < 0) return `${symbol} Firstrade 股數必須是非負數字。`;
+      if (!isOptionalNumber(holding.brokerCostBasis) || Number(holding.brokerCostBasis || 0) < 0) return `${symbol} Firstrade 成本不可為負數。`;
+      if (!isOptionalNumber(holding.brokerMarketValue) || Number(holding.brokerMarketValue || 0) < 0) return `${symbol} Firstrade 市值不可為負數。`;
     }
     return '';
   };
@@ -202,7 +216,7 @@ export default function ReconciliationDashboard({ db, user }) {
       resetForm();
       setError('');
     } catch (err) {
-      setError(err.message || 'Unable to save reconciliation snapshot.');
+      setError(err.message || '未能儲存對帳快照。');
     } finally {
       setIsSaving(false);
     }
@@ -210,13 +224,13 @@ export default function ReconciliationDashboard({ db, user }) {
 
   const handleDeleteSnapshot = async (snapshotId) => {
     if (!user?.uid) return;
-    const confirmed = window.confirm('Delete this reconciliation snapshot?');
+    const confirmed = window.confirm('刪除此個對帳快照？');
     if (!confirmed) return;
     try {
       await deleteReconciliationSnapshot(db, user.uid, snapshotId);
       if (selectedSnapshotId === snapshotId) resetForm();
     } catch (err) {
-      setError(err.message || 'Unable to delete reconciliation snapshot.');
+      setError(err.message || '未能刪除對帳快照。');
     }
   };
 
@@ -224,31 +238,31 @@ export default function ReconciliationDashboard({ db, user }) {
     <div className="space-y-4 sm:space-y-6">
       <div className="bg-slate-900 text-white rounded-2xl shadow-lg p-5 sm:p-6 relative overflow-hidden">
         <div className="absolute -top-6 -right-6 opacity-10 pointer-events-none"><ClipboardCheck size={160} /></div>
-        <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">Reconcile / 手動對帳</p>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Firstrade Snapshot vs System Ledger</h2>
-        <p className="text-slate-300 text-sm mt-2 max-w-2xl">手動輸入 Firstrade 現金及持倉 snapshot，對比系統由 Stock Ledger + Cash Ledger 計算出的結果。</p>
+        <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">Firstrade 手動對帳</p>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Firstrade 對帳快照 vs 系統帳本</h2>
+        <p className="text-slate-300 text-sm mt-2 max-w-2xl">手動輸入 Firstrade 現金及持倉快照，對比系統由美股 / ETF 交易總帳及現金流水帳計算出的結果。</p>
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
         <div className={`bg-white p-4 rounded-xl shadow-sm border ${statusClass(report.cashComparison.status)}`}>
-          <p className="text-[11px] font-medium">Cash Status</p>
+          <p className="text-[11px] font-medium">現金狀態</p>
           <p className="text-xl font-bold">{cashStatusLabel(report.cashComparison.status)}</p>
           <p className="text-[11px] mt-1">
             {report.cashComparison.status === CASH_STATUS.AWAITING_INPUT
-              ? 'Broker cash not entered yet'
-              : `Diff ${signedMoney(report.cashComparison.difference, formData.currency || 'USD')}`}
+              ? '尚未輸入 Firstrade 現金'
+              : `差額 ${signedMoney(report.cashComparison.difference, formData.currency || 'USD')}`}
           </p>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-          <p className="text-[11px] text-slate-500 font-medium">Issue Count</p>
+          <p className="text-[11px] text-slate-500 font-medium">差異項目</p>
           <p className="text-xl font-bold text-red-600">{report.summary.issueCount}</p>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-          <p className="text-[11px] text-slate-500 font-medium">OK Count</p>
+          <p className="text-[11px] text-slate-500 font-medium">正常項目</p>
           <p className="text-xl font-bold text-emerald-600">{report.summary.okCount}</p>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-          <p className="text-[11px] text-slate-500 font-medium">Total Cost Difference</p>
+          <p className="text-[11px] text-slate-500 font-medium">總成本差異</p>
           <p className={`text-xl font-bold ${report.summary.totalCostDifference >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{signedMoney(report.summary.totalCostDifference, formData.currency || 'USD')}</p>
         </div>
       </div>
@@ -257,62 +271,62 @@ export default function ReconciliationDashboard({ db, user }) {
         <form onSubmit={handleSave} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-base font-bold text-slate-800">{selectedSnapshotId ? 'Loaded Snapshot' : 'New Snapshot'}</h3>
+              <h3 className="text-base font-bold text-slate-800">{selectedSnapshotId ? '已載入快照' : '新對帳快照'}</h3>
               <p className="text-xs text-slate-500 mt-1">
                 {selectedSnapshotId
-                  ? 'Loaded snapshots are for report review. Saving creates a new snapshot; delete the old one if needed.'
+                  ? '已載入快照作檢視用途；儲存會建立新快照，如需修改舊快照請先刪除再新增。'
                   : '手動輸入 Firstrade 當日資料。'}
               </p>
             </div>
-            <button type="button" onClick={resetForm} className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg font-semibold">New</button>
+            <button type="button" onClick={resetForm} className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg font-semibold">新增</button>
           </div>
           <div className="p-4 grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Date</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">日期</label>
               <input required type="date" value={formData.date} onChange={(event) => update('date', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Currency</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">貨幣</label>
               <input value={formData.currency} onChange={(event) => update('currency', event.target.value.toUpperCase())} className="w-full p-2 border rounded-lg text-sm uppercase" />
             </div>
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Broker Cash Balance</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Firstrade 現金餘額</label>
               <input required type="number" step="0.01" value={formData.brokerCashBalance} onChange={(event) => update('brokerCashBalance', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
-              <p className="text-[11px] text-slate-500 mt-1">System cash: {money(systemCashSummary.calculatedCashBalance, formData.currency || 'USD')}</p>
+              <p className="text-[11px] text-slate-500 mt-1">系統現金：{money(systemCashSummary.calculatedCashBalance, formData.currency || 'USD')}</p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Broker Market Value</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Firstrade 市值</label>
               <input type="number" min="0" step="0.01" value={formData.brokerTotalMarketValue} onChange={(event) => update('brokerTotalMarketValue', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Broker Account Value</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Firstrade 帳戶總值</label>
               <input type="number" min="0" step="0.01" value={formData.brokerTotalAccountValue} onChange={(event) => update('brokerTotalAccountValue', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Notes</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">備註</label>
               <textarea value={formData.notes} onChange={(event) => update('notes', event.target.value)} rows={2} className="w-full p-2 border rounded-lg text-sm" />
             </div>
           </div>
 
           <div className="px-4 pb-4">
             <div className="flex items-center justify-between mb-2">
-              <h4 className="text-sm font-bold text-slate-800">Holdings</h4>
+              <h4 className="text-sm font-bold text-slate-800">Firstrade 持倉</h4>
               <div className="flex gap-2">
-                <button type="button" onClick={loadSystemHoldings} className="text-xs bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1"><RefreshCw size={13} />Load system</button>
-                <button type="button" onClick={addHoldingRow} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1"><Plus size={13} />Row</button>
+                <button type="button" onClick={loadSystemHoldings} className="text-xs bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1"><RefreshCw size={13} />載入系統持倉</button>
+                <button type="button" onClick={addHoldingRow} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1"><Plus size={13} />新增一行</button>
               </div>
             </div>
             <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
               {formData.holdings.length === 0 ? (
-                <p className="text-sm text-slate-400 bg-slate-50 rounded-lg p-3">No broker holdings entered.</p>
+                <p className="text-sm text-slate-400 bg-slate-50 rounded-lg p-3">尚未輸入 Firstrade 持倉。</p>
               ) : formData.holdings.map((holding, index) => (
                 <div key={`${holding.symbol || 'row'}-${index}`} className="grid grid-cols-2 gap-2 border rounded-lg p-2 bg-slate-50/70">
                   <input value={holding.symbol} onChange={(event) => updateHolding(index, 'symbol', event.target.value)} placeholder="Symbol" className="p-2 border rounded-md text-sm uppercase" />
-                  <input type="number" min="0" step="0.000001" value={holding.brokerQuantity} onChange={(event) => updateHolding(index, 'brokerQuantity', event.target.value)} placeholder="Broker Qty" className="p-2 border rounded-md text-sm" />
-                  <input type="number" min="0" step="0.01" value={holding.brokerCostBasis} onChange={(event) => updateHolding(index, 'brokerCostBasis', event.target.value)} placeholder="Cost Basis optional" className="p-2 border rounded-md text-sm" />
-                  <input type="number" min="0" step="0.01" value={holding.brokerMarketValue} onChange={(event) => updateHolding(index, 'brokerMarketValue', event.target.value)} placeholder="Market Value optional" className="p-2 border rounded-md text-sm" />
-                  <input value={holding.notes} onChange={(event) => updateHolding(index, 'notes', event.target.value)} placeholder="Notes optional" className="col-span-2 p-2 border rounded-md text-sm" />
-                  <button type="button" onClick={() => removeHoldingRow(index)} className="col-span-2 text-xs text-red-600 hover:bg-red-50 rounded-md py-1.5 font-semibold">Delete row</button>
+                  <input type="number" min="0" step="0.000001" value={holding.brokerQuantity} onChange={(event) => updateHolding(index, 'brokerQuantity', event.target.value)} placeholder="Firstrade 股數" className="p-2 border rounded-md text-sm" />
+                  <input type="number" min="0" step="0.01" value={holding.brokerCostBasis} onChange={(event) => updateHolding(index, 'brokerCostBasis', event.target.value)} placeholder="成本（可選）" className="p-2 border rounded-md text-sm" />
+                  <input type="number" min="0" step="0.01" value={holding.brokerMarketValue} onChange={(event) => updateHolding(index, 'brokerMarketValue', event.target.value)} placeholder="市值（可選）" className="p-2 border rounded-md text-sm" />
+                  <input value={holding.notes} onChange={(event) => updateHolding(index, 'notes', event.target.value)} placeholder="備註（可選）" className="col-span-2 p-2 border rounded-md text-sm" />
+                  <button type="button" onClick={() => removeHoldingRow(index)} className="col-span-2 text-xs text-red-600 hover:bg-red-50 rounded-md py-1.5 font-semibold">刪除此行</button>
                 </div>
               ))}
             </div>
@@ -321,7 +335,7 @@ export default function ReconciliationDashboard({ db, user }) {
           {error && <p className="mx-4 mb-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">{error}</p>}
           <div className="p-4 border-t bg-slate-50 flex justify-end">
             <button disabled={isSaving} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
-              {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Save New Snapshot
+              {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} 儲存新對帳快照
             </button>
           </div>
         </form>
@@ -329,13 +343,13 @@ export default function ReconciliationDashboard({ db, user }) {
         <div className="space-y-4">
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="p-4 border-b border-slate-100">
-              <h3 className="text-base font-bold text-slate-800">Cash Comparison</h3>
+              <h3 className="text-base font-bold text-slate-800">現金對帳</h3>
             </div>
             <div className="grid grid-cols-3 gap-2 p-4">
-              <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">System Cash</p><p className="font-bold">{money(report.cashComparison.systemCashBalance, formData.currency || 'USD')}</p></div>
-              <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Broker Cash</p><p className="font-bold">{money(report.cashComparison.brokerCashBalance, formData.currency || 'USD')}</p></div>
+              <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">系統現金</p><p className="font-bold">{money(report.cashComparison.systemCashBalance, formData.currency || 'USD')}</p></div>
+              <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Firstrade 現金</p><p className="font-bold">{money(report.cashComparison.brokerCashBalance, formData.currency || 'USD')}</p></div>
               <div className={`p-3 rounded-lg border ${statusClass(report.cashComparison.status)}`}>
-                <p className="text-[11px]">{report.cashComparison.status === CASH_STATUS.AWAITING_INPUT ? 'Awaiting Input / 未輸入' : 'Difference'}</p>
+                <p className="text-[11px]">{report.cashComparison.status === CASH_STATUS.AWAITING_INPUT ? '未輸入' : '差額'}</p>
                 <p className="font-bold">{signedMoney(report.cashComparison.difference, formData.currency || 'USD')}</p>
               </div>
             </div>
@@ -343,27 +357,27 @@ export default function ReconciliationDashboard({ db, user }) {
 
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-base font-bold text-slate-800">Holdings Comparison</h3>
-              <span className="text-xs text-slate-500">{report.holdingComparisons.length} symbols</span>
+              <h3 className="text-base font-bold text-slate-800">持倉對帳</h3>
+              <span className="text-xs text-slate-500">{report.holdingComparisons.length} 個 symbol</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                   <tr>
                     <th className="p-3 text-left">Symbol</th>
-                    <th className="p-3 text-right">System Qty</th>
-                    <th className="p-3 text-right">Broker Qty</th>
-                    <th className="p-3 text-right">Qty Diff</th>
-                    <th className="p-3 text-right">System Cost</th>
-                    <th className="p-3 text-right">Broker Cost</th>
-                    <th className="p-3 text-right">Cost Diff</th>
-                    <th className="p-3 text-right">Broker MV</th>
-                    <th className="p-3 text-left">Status</th>
+                    <th className="p-3 text-right">系統股數</th>
+                    <th className="p-3 text-right">Firstrade 股數</th>
+                    <th className="p-3 text-right">股數差異</th>
+                    <th className="p-3 text-right">系統成本</th>
+                    <th className="p-3 text-right">Firstrade 成本</th>
+                    <th className="p-3 text-right">成本差異</th>
+                    <th className="p-3 text-right">Firstrade 市值</th>
+                    <th className="p-3 text-left">狀態</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {report.holdingComparisons.length === 0 ? (
-                    <tr><td colSpan="9" className="p-6 text-center text-slate-400">No holdings to compare.</td></tr>
+                    <tr><td colSpan="9" className="p-6 text-center text-slate-400">沒有持倉可對帳。</td></tr>
                   ) : report.holdingComparisons.map((item) => (
                     <tr key={item.symbol} className="hover:bg-slate-50">
                       <td className="p-3 font-bold">{item.symbol}</td>
@@ -374,7 +388,7 @@ export default function ReconciliationDashboard({ db, user }) {
                       <td className="p-3 text-right">{money(item.brokerCostBasis, formData.currency || 'USD')}</td>
                       <td className={`p-3 text-right font-semibold ${item.costDifference === null || Math.abs(item.costDifference) <= 0.01 ? 'text-slate-600' : 'text-red-600'}`}>{item.costDifference === null ? '--' : signedMoney(item.costDifference, formData.currency || 'USD')}</td>
                       <td className="p-3 text-right">{money(item.brokerMarketValue, formData.currency || 'USD')}</td>
-                      <td className="p-3"><span className={`px-2 py-0.5 rounded border text-[10px] font-bold ${statusClass(item.status)}`}>{item.status}</span></td>
+                      <td className="p-3"><span className={`px-2 py-0.5 rounded border text-[10px] font-bold ${statusClass(item.status)}`}>{holdingStatusLabel(item.status)}</span></td>
                     </tr>
                   ))}
                 </tbody>
@@ -385,25 +399,25 @@ export default function ReconciliationDashboard({ db, user }) {
           <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex items-center gap-2">
               <History size={16} className="text-slate-600" />
-              <h3 className="text-base font-bold text-slate-800">Snapshot History</h3>
+              <h3 className="text-base font-bold text-slate-800">對帳快照紀錄</h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                   <tr>
-                    <th className="p-3 text-left">Date</th>
-                    <th className="p-3 text-right">Broker Cash</th>
-                    <th className="p-3 text-right">Holdings</th>
-                    <th className="p-3 text-right">Issues</th>
-                    <th className="p-3 text-left">Created</th>
+                    <th className="p-3 text-left">日期</th>
+                    <th className="p-3 text-right">Firstrade 現金</th>
+                    <th className="p-3 text-right">持倉</th>
+                    <th className="p-3 text-right">差異</th>
+                    <th className="p-3 text-left">建立時間</th>
                     <th className="p-3 text-center">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {isLoading ? (
-                    <tr><td colSpan="6" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />Loading...</td></tr>
+                    <tr><td colSpan="6" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</td></tr>
                   ) : snapshots.length === 0 ? (
-                    <tr><td colSpan="6" className="p-6 text-center text-slate-400">No snapshots saved.</td></tr>
+                    <tr><td colSpan="6" className="p-6 text-center text-slate-400">尚未建立對帳快照。</td></tr>
                   ) : snapshots.map((snapshot) => {
                     const snapshotReport = buildReconciliationReport({ snapshot, stockTrades, cashMovements });
                     return (
@@ -415,8 +429,8 @@ export default function ReconciliationDashboard({ db, user }) {
                         <td className="p-3 text-slate-500">{snapshot.createdAt ? new Date(snapshot.createdAt).toLocaleString() : '--'}</td>
                         <td className="p-3 text-center">
                           <div className="flex justify-center gap-2">
-                            <button onClick={() => loadSnapshot(snapshot)} className="text-blue-600 hover:bg-blue-50 px-2 py-1 rounded text-xs font-semibold">Load</button>
-                            <button onClick={() => handleDeleteSnapshot(snapshot.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="Delete snapshot"><Trash2 size={16} /></button>
+                            <button onClick={() => loadSnapshot(snapshot)} className="text-blue-600 hover:bg-blue-50 px-2 py-1 rounded text-xs font-semibold">載入</button>
+                            <button onClick={() => handleDeleteSnapshot(snapshot.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="刪除快照"><Trash2 size={16} /></button>
                           </div>
                         </td>
                       </tr>

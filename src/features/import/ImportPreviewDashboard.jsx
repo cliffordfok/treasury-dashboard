@@ -3,6 +3,8 @@ import { AlertCircle, CheckCircle2, FileText, Loader2, RefreshCw, Search, Trash2
 import { subscribeCashMovements } from '../cash/cashFirestore.js';
 import { subscribeReconciliationSnapshots } from '../reconciliation/reconciliationFirestore.js';
 import { subscribeStockTrades } from '../stocks/stockFirestore.js';
+import { buildConfirmImportPlan } from './importConfirmCalculations.js';
+import { commitFirstradeImport } from './importFirestore.js';
 import { PREVIEW_STATUS, buildImportPreviewFromCsvText } from './importPreviewCalculations.js';
 
 const statusLabel = {
@@ -68,6 +70,11 @@ export default function ImportPreviewDashboard({ db, user }) {
   const [selectedRow, setSelectedRow] = useState(null);
   const [isReading, setIsReading] = useState(false);
   const [dataError, setDataError] = useState('');
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [confirmChecked, setConfirmChecked] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const [importError, setImportError] = useState('');
 
   useEffect(() => {
     if (!db || !user?.uid) return undefined;
@@ -96,6 +103,16 @@ export default function ImportPreviewDashboard({ db, user }) {
       return { error: error.message || 'CSV 解析失敗。' };
     }
   }, [cashMovements, csvText, reconciliationSnapshots, stockTrades]);
+
+  const confirmPlan = useMemo(() => {
+    if (!preview?.rows) return null;
+    return buildConfirmImportPlan({
+      previewRows: preview.rows,
+      userId: user?.uid || '',
+      existingStockTrades: stockTrades,
+      existingCashMovements: cashMovements,
+    });
+  }, [cashMovements, preview?.rows, stockTrades, user?.uid]);
 
   const rows = preview?.rows || [];
   const filteredRows = useMemo(() => {
@@ -136,11 +153,39 @@ export default function ImportPreviewDashboard({ db, user }) {
     setParseError('');
     setFilter('all');
     setSelectedRow(null);
+    setIsConfirmOpen(false);
+    setConfirmChecked(false);
+    setImportResult(null);
+    setImportError('');
   };
 
   const reparse = () => {
     setCsvText((text) => `${text}`);
     setSelectedRow(null);
+    setImportResult(null);
+    setImportError('');
+  };
+
+  const handleConfirmImport = async () => {
+    if (!confirmPlan?.summary?.importableRows || !confirmChecked) return;
+    setIsImporting(true);
+    setImportError('');
+    try {
+      const result = await commitFirstradeImport({
+        db,
+        userId: user.uid,
+        previewRows: rows,
+        existingStockTrades: stockTrades,
+        existingCashMovements: cashMovements,
+      });
+      setImportResult(result);
+      setIsConfirmOpen(false);
+      setConfirmChecked(false);
+    } catch (error) {
+      setImportError(error.message || String(error));
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   return (
@@ -204,6 +249,38 @@ export default function ImportPreviewDashboard({ db, user }) {
         <SummaryCard label="Ignored" value={preview?.summary?.ignoredRows ?? 0} />
         <SummaryCard label="Duplicate" value={preview?.summary?.duplicateRows ?? 0} tone="orange" />
         <SummaryCard label="可匯入候選" value={preview?.summary?.importableRows ?? 0} />
+      </div>
+
+      {importError && (
+        <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3 flex items-center gap-2">
+          <AlertCircle size={16} />{importError}
+        </p>
+      )}
+      {importResult && (
+        <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg p-3">
+          <p className="font-bold">Import completed</p>
+          <p>Stock trades: {importResult.result.importedStockTrades} · Cash movements: {importResult.result.importedCashMovements} · Skipped: {importResult.result.skippedRows} · Failed: {importResult.result.failedRows}</p>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 sm:p-5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-bold text-slate-800">Confirm Import Dry-run</h3>
+            <p className="text-xs text-slate-500 mt-1">Only OK + NEW stock trade / cash movement rows are eligible. Positions, ignored, duplicate, warning, and error rows are skipped.</p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div className="bg-slate-50 border rounded-lg p-2"><span className="block text-slate-500">Stock Trades</span><b>{confirmPlan?.summary?.stockTradeRows ?? 0}</b></div>
+            <div className="bg-slate-50 border rounded-lg p-2"><span className="block text-slate-500">Cash Movements</span><b>{confirmPlan?.summary?.cashMovementRows ?? 0}</b></div>
+            <div className="bg-slate-50 border rounded-lg p-2"><span className="block text-slate-500">Skipped</span><b>{confirmPlan?.skippedRows?.length ?? 0}</b></div>
+            <div className="bg-slate-50 border rounded-lg p-2"><span className="block text-slate-500">Cash Impact</span><b>{(confirmPlan?.summary?.totalCashImpact ?? 0).toFixed(2)}</b></div>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button type="button" onClick={() => setIsConfirmOpen(true)} disabled={!confirmPlan?.summary?.importableRows || isImporting} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
+            {isImporting ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Confirm Import
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
@@ -277,8 +354,43 @@ export default function ImportPreviewDashboard({ db, user }) {
 
       <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3 text-sm text-slate-600">
         <CheckCircle2 size={18} className="text-emerald-600 flex-shrink-0 mt-0.5" />
-        <p>Phase 3B 只提供 preview。實際寫入 Firestore、匯入確認、批量新增交易或對帳快照，會留待 Phase 3C。</p>
+        <p>Phase 3C 只會在你確認後寫入 stockTrades / cashMovements。Positions、duplicate、ignored、warning、error rows 仍然只作 preview，不會匯入。</p>
       </div>
+
+      <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-4 text-sm text-emerald-700">
+        Phase 3C confirmed import writes stock trade and cash movement rows only. Positions, duplicate, ignored, warning, and error rows stay preview-only and are skipped.
+      </div>
+
+      {isConfirmOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-slate-800">Confirm Firstrade Import</h3>
+              <button type="button" onClick={() => setIsConfirmOpen(false)} className="text-slate-400 hover:text-slate-600"><XCircle size={20} /></button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Stock Trades</p><p className="font-bold">{confirmPlan?.summary?.stockTradeRows ?? 0}</p></div>
+                <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Cash Movements</p><p className="font-bold">{confirmPlan?.summary?.cashMovementRows ?? 0}</p></div>
+                <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Total Cash Impact</p><p className="font-bold">{(confirmPlan?.summary?.totalCashImpact ?? 0).toFixed(2)}</p></div>
+                <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Duplicates Skipped</p><p className="font-bold">{confirmPlan?.summary?.skippedDuplicateRows ?? 0}</p></div>
+                <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Ignored Skipped</p><p className="font-bold">{confirmPlan?.summary?.skippedIgnoredRows ?? 0}</p></div>
+                <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Positions Skipped</p><p className="font-bold">{confirmPlan?.summary?.skippedPositionRows ?? 0}</p></div>
+              </div>
+              <label className="flex items-start gap-3 text-sm text-slate-700 bg-amber-50 border border-amber-100 rounded-lg p-3">
+                <input type="checkbox" checked={confirmChecked} onChange={(event) => setConfirmChecked(event.target.checked)} className="mt-1" />
+                <span>I reviewed the preview. Only OK + NEW stock trade / cash movement rows will be written. Error, warning, duplicate, ignored, and position rows will not be imported.</span>
+              </label>
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setIsConfirmOpen(false)} className="px-4 py-2 rounded-lg text-sm font-semibold bg-slate-100 hover:bg-slate-200">Cancel</button>
+                <button type="button" onClick={handleConfirmImport} disabled={!confirmChecked || !confirmPlan?.summary?.importableRows || isImporting} className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 flex items-center gap-2">
+                  {isImporting ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Confirm Import
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedRow && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">

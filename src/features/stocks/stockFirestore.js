@@ -38,6 +38,8 @@ export const normalizeStockTradeForStorage = (trade, userId, existingTrade = nul
     fees: toNumber(trade.fees),
     currency: String(trade.currency || 'USD').trim().toUpperCase() || 'USD',
     notes: String(trade.notes || '').trim(),
+    source: String(trade.source || existingTrade?.source || '').trim(),
+    importFingerprint: String(trade.importFingerprint || existingTrade?.importFingerprint || '').trim(),
     createdAt: existingTrade?.createdAt || trade.createdAt || now,
     updatedAt: now,
   };

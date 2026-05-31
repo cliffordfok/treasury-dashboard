@@ -17,6 +17,7 @@ export const PREVIEW_STATUS = {
   WARNING: 'WARNING',
   ERROR: 'ERROR',
   DUPLICATE: 'DUPLICATE',
+  IGNORED: 'IGNORED',
 };
 
 export const DUPLICATE_STATUS = {
@@ -54,7 +55,7 @@ export const createDraftFromMappedRow = (mappedRow, csvType) => {
   if (csvType === CSV_TYPES.POSITIONS) return toReconciliationHoldingDraft(mappedRow);
 
   const activityType = mappedRow.activityType || classifyFirstradeActivity(mappedRow);
-  if ([ACTIVITY_TYPES.STOCK_TRADE_BUY, ACTIVITY_TYPES.STOCK_TRADE_SELL].includes(activityType)) {
+  if ([ACTIVITY_TYPES.STOCK_TRADE_BUY, ACTIVITY_TYPES.STOCK_TRADE_SELL, ACTIVITY_TYPES.DIVIDEND_REINVESTMENT].includes(activityType)) {
     return toStockTradeDraft(mappedRow);
   }
   if (CASH_ACTIVITY_TYPES.has(activityType)) return toCashMovementDraft(mappedRow);
@@ -97,7 +98,8 @@ const getDuplicateStatus = (fingerprint, seenFingerprints, existingFingerprints)
   return DUPLICATE_STATUS.NEW;
 };
 
-const getStatus = ({ errors, warnings, duplicateStatus }) => {
+const getStatus = ({ activityType, errors, warnings, duplicateStatus }) => {
+  if (activityType === ACTIVITY_TYPES.IGNORED) return PREVIEW_STATUS.IGNORED;
   if (errors.length > 0) return PREVIEW_STATUS.ERROR;
   if (duplicateStatus !== DUPLICATE_STATUS.NEW) return PREVIEW_STATUS.DUPLICATE;
   if (warnings.length > 0) return PREVIEW_STATUS.WARNING;
@@ -122,27 +124,29 @@ export const buildImportPreview = ({
   const previewRows = rows.map((rawRow, index) => {
     const mappedRow = mapFirstradeRow(rawRow, csvType);
     const draft = createDraftFromMappedRow(mappedRow, csvType);
+    const activityType = mappedRow.activityType || ACTIVITY_TYPES.UNKNOWN;
+    const isIgnored = activityType === ACTIVITY_TYPES.IGNORED;
     const validation = draft ? validateImportedDraft(draft) : { ok: false, errors: [], warnings: [] };
     const errors = [...validation.errors];
     const warnings = [...validation.warnings];
 
     if (csvType === CSV_TYPES.UNKNOWN) errors.push('Unknown CSV type.');
-    if (!draft && csvType !== CSV_TYPES.UNKNOWN) {
+    if (!draft && !isIgnored && csvType !== CSV_TYPES.UNKNOWN) {
       errors.push('Unable to map row to a supported import draft.');
-      if ((mappedRow.activityType || ACTIVITY_TYPES.UNKNOWN) === ACTIVITY_TYPES.UNKNOWN) warnings.push('Unknown activity type.');
+      if (activityType === ACTIVITY_TYPES.UNKNOWN) warnings.push('Unknown activity type.');
     }
 
     const fingerprint = draft?.importFingerprint || '';
-    const duplicateStatus = errors.length > 0
+    const duplicateStatus = errors.length > 0 || isIgnored
       ? DUPLICATE_STATUS.NEW
       : getDuplicateStatus(fingerprint, seenFingerprints, existingFingerprints);
     if (fingerprint) seenFingerprints.add(fingerprint);
-    const status = getStatus({ errors, warnings, duplicateStatus });
+    const status = getStatus({ activityType, errors, warnings, duplicateStatus });
 
     return {
       rowNumber: index + 2,
       csvType,
-      activityType: mappedRow.activityType || ACTIVITY_TYPES.UNKNOWN,
+      activityType,
       targetDraft: getDraftTarget(draft),
       symbol: draft?.symbol || mappedRow.symbol || '',
       date: draft?.tradeDate || draft?.date || mappedRow.date || '',
@@ -167,6 +171,7 @@ export const buildImportPreview = ({
       if (row.status === PREVIEW_STATUS.WARNING) result.warningRows += 1;
       if (row.status === PREVIEW_STATUS.ERROR) result.errorRows += 1;
       if (row.status === PREVIEW_STATUS.DUPLICATE) result.duplicateRows += 1;
+      if (row.status === PREVIEW_STATUS.IGNORED) result.ignoredRows += 1;
       if (row.importable) result.importableRows += 1;
       return result;
     },
@@ -177,6 +182,7 @@ export const buildImportPreview = ({
       okRows: 0,
       warningRows: 0,
       errorRows: 0,
+      ignoredRows: 0,
       duplicateRows: 0,
       importableRows: 0,
     },

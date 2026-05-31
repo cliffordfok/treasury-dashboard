@@ -10,6 +10,7 @@ const statusLabel = {
   WARNING: 'Warning',
   ERROR: 'Error',
   DUPLICATE: 'Duplicate',
+  IGNORED: 'Ignored',
 };
 
 const duplicateLabel = {
@@ -29,6 +30,7 @@ const statusClass = (status) => {
   if (status === PREVIEW_STATUS.OK) return 'bg-emerald-50 text-emerald-700 border-emerald-100';
   if (status === PREVIEW_STATUS.WARNING) return 'bg-amber-50 text-amber-700 border-amber-100';
   if (status === PREVIEW_STATUS.DUPLICATE) return 'bg-orange-50 text-orange-700 border-orange-100';
+  if (status === PREVIEW_STATUS.IGNORED) return 'bg-slate-100 text-slate-500 border-slate-200';
   return 'bg-red-50 text-red-700 border-red-100';
 };
 
@@ -99,6 +101,7 @@ export default function ImportPreviewDashboard({ db, user }) {
   const filteredRows = useMemo(() => {
     if (filter === 'errors') return rows.filter((row) => row.status === PREVIEW_STATUS.ERROR);
     if (filter === 'duplicates') return rows.filter((row) => row.status === PREVIEW_STATUS.DUPLICATE);
+    if (filter === 'ignored') return rows.filter((row) => row.status === PREVIEW_STATUS.IGNORED);
     if (filter === 'importable') return rows.filter((row) => row.importable);
     return rows;
   }, [filter, rows]);
@@ -192,12 +195,13 @@ export default function ImportPreviewDashboard({ db, user }) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-7 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-8 gap-3 sm:gap-4">
         <SummaryCard label="總 rows" value={preview?.summary?.totalRows ?? 0} />
         <SummaryCard label="已 mapping" value={preview?.summary?.mappedRows ?? 0} />
         <SummaryCard label="OK" value={preview?.summary?.okRows ?? 0} tone="emerald" />
         <SummaryCard label="Warning" value={preview?.summary?.warningRows ?? 0} tone="amber" />
         <SummaryCard label="Error" value={preview?.summary?.errorRows ?? 0} tone="red" />
+        <SummaryCard label="Ignored" value={preview?.summary?.ignoredRows ?? 0} />
         <SummaryCard label="Duplicate" value={preview?.summary?.duplicateRows ?? 0} tone="orange" />
         <SummaryCard label="可匯入候選" value={preview?.summary?.importableRows ?? 0} />
       </div>

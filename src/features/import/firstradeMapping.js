@@ -125,7 +125,10 @@ export const detectFirstradeCsvType = (headers = []) => {
   const hasSymbol = hasAny(normalizedHeaders, HEADER_ALIASES.symbol);
   const hasQuantity = hasAny(normalizedHeaders, HEADER_ALIASES.quantity);
   const hasPrice = hasAny(normalizedHeaders, HEADER_ALIASES.price);
-  const hasAmount = hasAny(normalizedHeaders, HEADER_ALIASES.amount);
+  const hasAmount =
+    hasAny(normalizedHeaders, HEADER_ALIASES.amount) ||
+    hasAny(normalizedHeaders, HEADER_ALIASES.netAmount) ||
+    hasAny(normalizedHeaders, HEADER_ALIASES.grossAmount);
   const hasCostBasis = hasAny(normalizedHeaders, HEADER_ALIASES.costBasis);
   const hasMarketValue = hasAny(normalizedHeaders, HEADER_ALIASES.marketValue);
 

@@ -8,6 +8,7 @@
     "build": "vite build",
     "test:stocks": "node scripts/stockCalculations.test.mjs",
     "test:cash": "node scripts/cashCalculations.test.mjs",
+    "test:reconciliation": "node scripts/reconciliationCalculations.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

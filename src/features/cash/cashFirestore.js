@@ -40,6 +40,8 @@ export const normalizeCashMovementForStorage = (movement, userId, existingMoveme
     withholdingTax: optionalNumber(movement.withholdingTax),
     netAmount: optionalNumber(movement.netAmount),
     notes: String(movement.notes || '').trim(),
+    source: String(movement.source || existingMovement?.source || '').trim(),
+    importFingerprint: String(movement.importFingerprint || existingMovement?.importFingerprint || '').trim(),
     createdAt: existingMovement?.createdAt || movement.createdAt || now,
     updatedAt: now,
   };

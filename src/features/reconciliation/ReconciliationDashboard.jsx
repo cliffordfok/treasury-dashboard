@@ -4,7 +4,7 @@ import { calculatePortfolioCashSummary } from '../cash/cashCalculations.js';
 import { subscribeCashMovements } from '../cash/cashFirestore.js';
 import { calculateStockPositions, toNumber } from '../stocks/stockCalculations.js';
 import { subscribeStockTrades } from '../stocks/stockFirestore.js';
-import { buildReconciliationReport } from './reconciliationCalculations.js';
+import { CASH_STATUS, buildReconciliationReport } from './reconciliationCalculations.js';
 import {
   defaultHoldingRow,
   defaultReconciliationSnapshotForm,
@@ -14,12 +14,15 @@ import {
   subscribeReconciliationSnapshots,
 } from './reconciliationFirestore.js';
 
+const isBlankDisplayValue = (value) => value === '' || value === null || value === undefined || !Number.isFinite(Number(value));
+
 const money = (value, currency = 'USD') =>
-  value === null || value === undefined
+  isBlankDisplayValue(value)
     ? '--'
     : `${currency} ${toNumber(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const signedMoney = (value, currency = 'USD') => {
+  if (isBlankDisplayValue(value)) return '--';
   const amount = toNumber(value);
   return `${amount >= 0 ? '+' : ''}${money(amount, currency)}`;
 };
@@ -28,10 +31,13 @@ const shares = (value) => toNumber(value).toLocaleString(undefined, { maximumFra
 
 const statusClass = (status) => {
   if (status === 'OK') return 'bg-emerald-50 text-emerald-700 border-emerald-100';
+  if (status === CASH_STATUS.AWAITING_INPUT) return 'bg-slate-50 text-slate-600 border-slate-200';
   if (status === 'SMALL_DIFF') return 'bg-amber-50 text-amber-700 border-amber-100';
   if (status === 'MISSING_IN_BROKER' || status === 'MISSING_IN_SYSTEM') return 'bg-orange-50 text-orange-700 border-orange-100';
   return 'bg-red-50 text-red-700 border-red-100';
 };
+
+const cashStatusLabel = (status) => (status === CASH_STATUS.AWAITING_INPUT ? 'Awaiting Input / 未輸入' : status);
 
 const isOptionalNumber = (value) => value === '' || value === null || value === undefined || Number.isFinite(Number(value));
 const isRequiredNumber = (value) => value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
@@ -76,8 +82,25 @@ export default function ReconciliationDashboard({ db, user }) {
   const systemPositions = useMemo(() => calculateStockPositions(stockTrades), [stockTrades]);
   const systemCashSummary = useMemo(() => calculatePortfolioCashSummary(cashMovements, stockTrades), [cashMovements, stockTrades]);
   const reportSnapshot = useMemo(
-    () => normalizeReconciliationSnapshotForStorage({ ...formData, brokerCashBalance: formData.brokerCashBalance || 0 }, user?.uid || 'preview'),
-    [formData, user?.uid],
+    () => ({
+      accountId: formData.accountId || 'firstrade',
+      date: formData.date,
+      currency: formData.currency || 'USD',
+      brokerCashBalance: formData.brokerCashBalance,
+      brokerTotalMarketValue: formData.brokerTotalMarketValue,
+      brokerTotalAccountValue: formData.brokerTotalAccountValue,
+      notes: formData.notes || '',
+      holdings: (formData.holdings || [])
+        .filter((holding) => String(holding.symbol || '').trim())
+        .map((holding) => ({
+          symbol: holding.symbol,
+          brokerQuantity: holding.brokerQuantity,
+          brokerCostBasis: holding.brokerCostBasis,
+          brokerMarketValue: holding.brokerMarketValue,
+          notes: holding.notes || '',
+        })),
+    }),
+    [formData],
   );
   const report = useMemo(
     () => buildReconciliationReport({ snapshot: reportSnapshot, stockTrades, cashMovements }),
@@ -111,7 +134,6 @@ export default function ReconciliationDashboard({ db, user }) {
   const loadSnapshot = (snapshot) => {
     setSelectedSnapshotId(snapshot.id);
     setFormData({
-      id: snapshot.id,
       accountId: snapshot.accountId || 'firstrade',
       date: snapshot.date,
       currency: snapshot.currency || 'USD',
@@ -126,8 +148,8 @@ export default function ReconciliationDashboard({ db, user }) {
         brokerMarketValue: holding.brokerMarketValue ?? '',
         notes: holding.notes || '',
       })),
-      createdAt: snapshot.createdAt,
     });
+    setError('');
   };
 
   const resetForm = () => {
@@ -145,7 +167,7 @@ export default function ReconciliationDashboard({ db, user }) {
     const seenSymbols = new Set();
     for (const holding of formData.holdings) {
       const symbol = String(holding.symbol || '').trim().toUpperCase();
-      if (!symbol) return 'Holdings symbol 不可留空。';
+      if (!symbol) continue;
       if (seenSymbols.has(symbol)) return `Holdings symbol 重複：${symbol}`;
       seenSymbols.add(symbol);
       if (!isRequiredNumber(holding.brokerQuantity) || Number(holding.brokerQuantity) < 0) return `${symbol} brokerQuantity 必須是非負數字。`;
@@ -164,23 +186,20 @@ export default function ReconciliationDashboard({ db, user }) {
       return;
     }
 
-    const existing = selectedSnapshotId ? snapshots.find((snapshot) => snapshot.id === selectedSnapshotId) : null;
-    const normalized = normalizeReconciliationSnapshotForStorage(formData, user.uid, existing);
+    const normalized = normalizeReconciliationSnapshotForStorage(
+      {
+        ...formData,
+        id: undefined,
+        createdAt: undefined,
+        holdings: (formData.holdings || []).filter((holding) => String(holding.symbol || '').trim()),
+      },
+      user.uid,
+      null,
+    );
     setIsSaving(true);
     try {
       await saveReconciliationSnapshot(db, user.uid, normalized);
-      setSelectedSnapshotId(normalized.id);
-      setFormData({
-        ...normalized,
-        brokerCashBalance: normalized.brokerCashBalance,
-        brokerTotalMarketValue: normalized.brokerTotalMarketValue ?? '',
-        brokerTotalAccountValue: normalized.brokerTotalAccountValue ?? '',
-        holdings: normalized.holdings.map((holding) => ({
-          ...holding,
-          brokerCostBasis: holding.brokerCostBasis ?? '',
-          brokerMarketValue: holding.brokerMarketValue ?? '',
-        })),
-      });
+      resetForm();
       setError('');
     } catch (err) {
       setError(err.message || 'Unable to save reconciliation snapshot.');
@@ -213,8 +232,12 @@ export default function ReconciliationDashboard({ db, user }) {
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
         <div className={`bg-white p-4 rounded-xl shadow-sm border ${statusClass(report.cashComparison.status)}`}>
           <p className="text-[11px] font-medium">Cash Status</p>
-          <p className="text-xl font-bold">{report.cashComparison.status}</p>
-          <p className="text-[11px] mt-1">Diff {signedMoney(report.cashComparison.difference, formData.currency || 'USD')}</p>
+          <p className="text-xl font-bold">{cashStatusLabel(report.cashComparison.status)}</p>
+          <p className="text-[11px] mt-1">
+            {report.cashComparison.status === CASH_STATUS.AWAITING_INPUT
+              ? 'Broker cash not entered yet'
+              : `Diff ${signedMoney(report.cashComparison.difference, formData.currency || 'USD')}`}
+          </p>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
           <p className="text-[11px] text-slate-500 font-medium">Issue Count</p>
@@ -234,8 +257,12 @@ export default function ReconciliationDashboard({ db, user }) {
         <form onSubmit={handleSave} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-base font-bold text-slate-800">{selectedSnapshotId ? 'Edit Snapshot' : 'New Snapshot'}</h3>
-              <p className="text-xs text-slate-500 mt-1">手動輸入 Firstrade 當日資料。</p>
+              <h3 className="text-base font-bold text-slate-800">{selectedSnapshotId ? 'Loaded Snapshot' : 'New Snapshot'}</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                {selectedSnapshotId
+                  ? 'Loaded snapshots are for report review. Saving creates a new snapshot; delete the old one if needed.'
+                  : '手動輸入 Firstrade 當日資料。'}
+              </p>
             </div>
             <button type="button" onClick={resetForm} className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg font-semibold">New</button>
           </div>
@@ -294,7 +321,7 @@ export default function ReconciliationDashboard({ db, user }) {
           {error && <p className="mx-4 mb-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">{error}</p>}
           <div className="p-4 border-t bg-slate-50 flex justify-end">
             <button disabled={isSaving} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
-              {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Save Snapshot
+              {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Save New Snapshot
             </button>
           </div>
         </form>
@@ -307,7 +334,10 @@ export default function ReconciliationDashboard({ db, user }) {
             <div className="grid grid-cols-3 gap-2 p-4">
               <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">System Cash</p><p className="font-bold">{money(report.cashComparison.systemCashBalance, formData.currency || 'USD')}</p></div>
               <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Broker Cash</p><p className="font-bold">{money(report.cashComparison.brokerCashBalance, formData.currency || 'USD')}</p></div>
-              <div className={`p-3 rounded-lg border ${statusClass(report.cashComparison.status)}`}><p className="text-[11px]">Difference</p><p className="font-bold">{signedMoney(report.cashComparison.difference, formData.currency || 'USD')}</p></div>
+              <div className={`p-3 rounded-lg border ${statusClass(report.cashComparison.status)}`}>
+                <p className="text-[11px]">{report.cashComparison.status === CASH_STATUS.AWAITING_INPUT ? 'Awaiting Input / 未輸入' : 'Difference'}</p>
+                <p className="font-bold">{signedMoney(report.cashComparison.difference, formData.currency || 'USD')}</p>
+              </div>
             </div>
           </div>
 

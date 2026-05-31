@@ -41,6 +41,16 @@ report = buildReconciliationReport({
 near(report.cashComparison.difference, -0.5, 'case B cash difference');
 equal(report.cashComparison.status, 'SMALL_DIFF', 'case B cash status');
 
+report = buildReconciliationReport({
+  snapshot: { brokerCashBalance: '', holdings: [] },
+  cashMovements: [cashMovement({ amount: 13513.02 })],
+  stockTrades: [],
+});
+equal(report.cashComparison.brokerCashBalance, null, 'case B2 broker cash awaits input');
+equal(report.cashComparison.difference, null, 'case B2 cash difference awaits input');
+equal(report.cashComparison.status, 'AWAITING_INPUT', 'case B2 cash status');
+equal(report.summary.issueCount, 0, 'case B2 cash awaiting input is not an issue');
+
 const vooQuantity = 297.83252;
 const vooCost = 45821.3;
 const vooSystemTrades = [stockTrade({ symbol: 'VOO', quantity: vooQuantity, price: vooCost / vooQuantity })];

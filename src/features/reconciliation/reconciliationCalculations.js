@@ -5,6 +5,7 @@ export const CASH_STATUS = {
   OK: 'OK',
   SMALL_DIFF: 'SMALL_DIFF',
   DIFF: 'DIFF',
+  AWAITING_INPUT: 'AWAITING_INPUT',
 };
 
 export const HOLDING_STATUS = {
@@ -23,6 +24,7 @@ export const COST_TOLERANCE = 0.01;
 const hasNumber = (value) => value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
 
 const getCashStatus = (difference) => {
+  if (difference === null || difference === undefined || !Number.isFinite(Number(difference))) return CASH_STATUS.AWAITING_INPUT;
   const absDiff = Math.abs(difference);
   if (absDiff <= CASH_TOLERANCE) return CASH_STATUS.OK;
   if (absDiff <= SMALL_CASH_TOLERANCE) return CASH_STATUS.SMALL_DIFF;
@@ -56,8 +58,9 @@ const getHoldingStatus = ({ hasSystem, hasBroker, quantityDifference, costDiffer
 export const buildReconciliationReport = ({ snapshot, stockTrades = [], cashMovements = [] }) => {
   const cashSummary = calculatePortfolioCashSummary(cashMovements, stockTrades);
   const systemCashBalance = cashSummary.calculatedCashBalance;
-  const brokerCashBalance = toNumber(snapshot?.brokerCashBalance);
-  const cashDifference = brokerCashBalance - systemCashBalance;
+  const hasBrokerCashBalance = hasNumber(snapshot?.brokerCashBalance);
+  const brokerCashBalance = hasBrokerCashBalance ? toNumber(snapshot.brokerCashBalance) : null;
+  const cashDifference = hasBrokerCashBalance ? brokerCashBalance - systemCashBalance : null;
   const cashComparison = {
     systemCashBalance,
     brokerCashBalance,
@@ -103,7 +106,8 @@ export const buildReconciliationReport = ({ snapshot, stockTrades = [], cashMove
   const totalBrokerCost = holdingComparisons.reduce((total, item) => total + (item.brokerCostBasis ?? 0), 0);
   const totalCostDifference = totalBrokerCost - totalSystemCost;
   const holdingIssueCount = holdingComparisons.filter((item) => item.status !== HOLDING_STATUS.OK).length;
-  const cashIssueCount = cashComparison.status === CASH_STATUS.OK ? 0 : 1;
+  const cashIssueCount = cashComparison.status === CASH_STATUS.OK || cashComparison.status === CASH_STATUS.AWAITING_INPUT ? 0 : 1;
+  const cashOkCount = cashComparison.status === CASH_STATUS.OK ? 1 : 0;
 
   return {
     cashComparison,
@@ -116,7 +120,7 @@ export const buildReconciliationReport = ({ snapshot, stockTrades = [], cashMove
       brokerCashBalance,
       cashDifference,
       issueCount: holdingIssueCount + cashIssueCount,
-      okCount: holdingComparisons.length - holdingIssueCount + (cashIssueCount ? 0 : 1),
+      okCount: holdingComparisons.length - holdingIssueCount + cashOkCount,
     },
   };
 };

@@ -10,6 +10,7 @@
     "test:cash": "node scripts/cashCalculations.test.mjs",
     "test:reconciliation": "node scripts/reconciliationCalculations.test.mjs",
     "test:portfolio": "node scripts/portfolioCalculations.test.mjs",
+    "test:import": "node src/features/import/firstradeMapping.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

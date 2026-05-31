@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Briefcase, DollarSign, Loader2, Plus, Trash2, TrendingUp, Wallet } from 'lucide-react';
-import { calculateStockPortfolioTotals, calculateStockPositions, getStockTradeCashImpact, toNumber } from './stockCalculations';
+import { EPSILON, calculateStockPortfolioTotals, calculateStockPositions, getStockTradeCashImpact, toNumber } from './stockCalculations';
 import { defaultStockTradeForm, deleteStockTrade, normalizeStockTradeForStorage, saveStockTrade, subscribeStockTrades } from './stockFirestore';
 
 const money = (value, currency = 'USD') =>
@@ -54,6 +54,14 @@ export default function StockDashboard({ db, user }) {
     if (!normalized.symbol || !normalized.tradeDate || normalized.quantity <= 0 || normalized.price < 0) {
       setError('請輸入有效 Symbol、日期、數量及價格。');
       return;
+    }
+    if (normalized.side === 'sell') {
+      const currentPosition = positions.find((position) => position.symbol === normalized.symbol);
+      const availableQuantity = currentPosition?.quantity || 0;
+      if (normalized.quantity > availableQuantity + EPSILON) {
+        setError(`持倉不足：${normalized.symbol} 現有 ${number(availableQuantity, 6)} 股，不可賣出 ${number(normalized.quantity, 6)} 股。`);
+        return;
+      }
     }
 
     setIsSaving(true);
@@ -224,19 +232,19 @@ export default function StockDashboard({ db, user }) {
                     <th className="p-3 text-left">Symbol</th>
                     <th className="p-3 text-right">數量</th>
                     <th className="p-3 text-right">價格</th>
-                    <th className="p-3 text-right">手續費</th>
+                    <th className="p-3 text-right">Commission</th>
+                    <th className="p-3 text-right">Fees</th>
                     <th className="p-3 text-right">總額</th>
                     <th className="p-3 text-center">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {isLoading ? (
-                    <tr><td colSpan="8" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />Loading...</td></tr>
+                    <tr><td colSpan="9" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />Loading...</td></tr>
                   ) : stockTrades.length === 0 ? (
-                    <tr><td colSpan="8" className="p-6 text-center text-slate-400">未有交易紀錄。</td></tr>
+                    <tr><td colSpan="9" className="p-6 text-center text-slate-400">未有交易紀錄。</td></tr>
                   ) : stockTrades.map((trade) => {
                     const cashImpact = getStockTradeCashImpact(trade);
-                    const tradeFees = toNumber(trade.commission) + toNumber(trade.fees);
                     return (
                       <tr key={trade.id} className="hover:bg-slate-50">
                         <td className="p-3 whitespace-nowrap">{trade.tradeDate}<div className="text-[10px] text-slate-400">{trade.tradeTime || trade.accountId || 'firstrade'}</div></td>
@@ -244,7 +252,8 @@ export default function StockDashboard({ db, user }) {
                         <td className="p-3 font-bold">{trade.symbol}<div className="text-[10px] text-slate-400 font-normal">{trade.name || '--'}</div></td>
                         <td className="p-3 text-right">{number(trade.quantity)}</td>
                         <td className="p-3 text-right">{money(trade.price, trade.currency)}</td>
-                        <td className="p-3 text-right">{money(tradeFees, trade.currency)}</td>
+                        <td className="p-3 text-right">{money(trade.commission, trade.currency)}</td>
+                        <td className="p-3 text-right">{money(trade.fees, trade.currency)}</td>
                         <td className={`p-3 text-right font-bold ${cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(cashImpact, trade.currency)}</td>
                         <td className="p-3 text-center">
                           <button onClick={() => handleDelete(trade.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="Delete trade">

@@ -26,6 +26,7 @@ const signedMoney = (value, currency = 'USD') => {
 };
 
 const isValidOptionalNumber = (value) => value === '' || value === null || value === undefined || Number.isFinite(Number(value));
+const CASH_SYMBOL_TYPES = new Set(['dividend', 'withholding_tax', 'fee', 'adjustment']);
 
 export default function CashDashboard({ db, user }) {
   const [cashMovements, setCashMovements] = useState([]);
@@ -73,8 +74,14 @@ export default function CashDashboard({ db, user }) {
 
   const summary = useMemo(() => calculatePortfolioCashSummary(cashMovements, stockTrades), [cashMovements, stockTrades]);
   const isLoading = isLoadingCash || isLoadingStocks;
+  const showSymbolField = CASH_SYMBOL_TYPES.has(formData.type);
 
   const update = (field, value) => setFormData((prev) => ({ ...prev, [field]: value }));
+  const updateType = (value) => setFormData((prev) => ({
+    ...prev,
+    type: value,
+    symbol: CASH_SYMBOL_TYPES.has(value) ? prev.symbol : '',
+  }));
 
   const validateForm = (movement) => {
     if (!movement.date) return '請輸入日期。';
@@ -107,13 +114,14 @@ export default function CashDashboard({ db, user }) {
     event.preventDefault();
     if (!user?.uid) return;
 
-    const validationError = validateForm(formData);
+    const movementForStorage = showSymbolField ? formData : { ...formData, symbol: '' };
+    const validationError = validateForm(movementForStorage);
     if (validationError) {
       setError(validationError);
       return;
     }
 
-    const normalized = normalizeCashMovementForStorage(formData, user.uid);
+    const normalized = normalizeCashMovementForStorage(movementForStorage, user.uid);
     setIsSaving(true);
     try {
       await saveCashMovement(db, user.uid, normalized);
@@ -184,7 +192,7 @@ export default function CashDashboard({ db, user }) {
           <div className="p-4 grid grid-cols-2 gap-3">
             <div className="col-span-2">
               <label className="block text-xs font-medium text-slate-500 mb-1">類型</label>
-              <select value={formData.type} onChange={(e) => update('type', e.target.value)} className="w-full p-2 border rounded-lg text-sm">
+              <select value={formData.type} onChange={(e) => updateType(e.target.value)} className="w-full p-2 border rounded-lg text-sm">
                 {CASH_MOVEMENT_TYPES.map((type) => <option key={type} value={type}>{CASH_MOVEMENT_TYPE_LABELS[type]}</option>)}
               </select>
             </div>
@@ -196,10 +204,12 @@ export default function CashDashboard({ db, user }) {
               <label className="block text-xs font-medium text-slate-500 mb-1">貨幣</label>
               <input value={formData.currency} onChange={(e) => update('currency', e.target.value.toUpperCase())} className="w-full p-2 border rounded-lg text-sm uppercase" />
             </div>
-            <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Symbol（可選）</label>
-              <input value={formData.symbol} onChange={(e) => update('symbol', e.target.value.toUpperCase())} placeholder="VOO" className="w-full p-2 border rounded-lg text-sm uppercase" />
-            </div>
+            {showSymbolField && (
+              <div className="col-span-2">
+                <label className="block text-xs font-medium text-slate-500 mb-1">Symbol（可選）</label>
+                <input value={formData.symbol} onChange={(e) => update('symbol', e.target.value.toUpperCase())} placeholder="VOO" className="w-full p-2 border rounded-lg text-sm uppercase" />
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">金額</label>
               <input type="number" step="0.01" value={formData.amount} onChange={(e) => update('amount', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />

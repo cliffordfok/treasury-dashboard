@@ -13,6 +13,7 @@ const statusLabel = {
   ERROR: 'Error',
   DUPLICATE: 'Duplicate',
   IGNORED: 'Ignored',
+  OUT_OF_SCOPE: 'Before Start',
 };
 
 const duplicateLabel = {
@@ -33,6 +34,7 @@ const statusClass = (status) => {
   if (status === PREVIEW_STATUS.WARNING) return 'bg-amber-50 text-amber-700 border-amber-100';
   if (status === PREVIEW_STATUS.DUPLICATE) return 'bg-orange-50 text-orange-700 border-orange-100';
   if (status === PREVIEW_STATUS.IGNORED) return 'bg-slate-100 text-slate-500 border-slate-200';
+  if (status === PREVIEW_STATUS.OUT_OF_SCOPE) return 'bg-sky-50 text-sky-700 border-sky-100';
   return 'bg-red-50 text-red-700 border-red-100';
 };
 
@@ -65,6 +67,7 @@ export default function ImportPreviewDashboard({ db, user }) {
   const [reconciliationSnapshots, setReconciliationSnapshots] = useState([]);
   const [fileName, setFileName] = useState('');
   const [csvText, setCsvText] = useState('');
+  const [trackingStartDate, setTrackingStartDate] = useState('');
   const [parseError, setParseError] = useState('');
   const [filter, setFilter] = useState('all');
   const [selectedRow, setSelectedRow] = useState(null);
@@ -98,11 +101,12 @@ export default function ImportPreviewDashboard({ db, user }) {
         existingStockTrades: stockTrades,
         existingCashMovements: cashMovements,
         existingReconciliationSnapshots: reconciliationSnapshots,
+        trackingStartDate,
       });
     } catch (error) {
       return { error: error.message || 'CSV 解析失敗。' };
     }
-  }, [cashMovements, csvText, reconciliationSnapshots, stockTrades]);
+  }, [cashMovements, csvText, reconciliationSnapshots, stockTrades, trackingStartDate]);
 
   const confirmPlan = useMemo(() => {
     if (!preview?.rows) return null;
@@ -111,14 +115,16 @@ export default function ImportPreviewDashboard({ db, user }) {
       userId: user?.uid || '',
       existingStockTrades: stockTrades,
       existingCashMovements: cashMovements,
+      trackingStartDate,
     });
-  }, [cashMovements, preview?.rows, stockTrades, user?.uid]);
+  }, [cashMovements, preview?.rows, stockTrades, trackingStartDate, user?.uid]);
 
   const rows = preview?.rows || [];
   const filteredRows = useMemo(() => {
     if (filter === 'errors') return rows.filter((row) => row.status === PREVIEW_STATUS.ERROR);
     if (filter === 'duplicates') return rows.filter((row) => row.status === PREVIEW_STATUS.DUPLICATE);
     if (filter === 'ignored') return rows.filter((row) => row.status === PREVIEW_STATUS.IGNORED);
+    if (filter === 'out_of_scope') return rows.filter((row) => row.status === PREVIEW_STATUS.OUT_OF_SCOPE);
     if (filter === 'importable') return rows.filter((row) => row.importable);
     return rows;
   }, [filter, rows]);
@@ -150,6 +156,7 @@ export default function ImportPreviewDashboard({ db, user }) {
   const clearFile = () => {
     setFileName('');
     setCsvText('');
+    setTrackingStartDate('');
     setParseError('');
     setFilter('all');
     setSelectedRow(null);
@@ -177,6 +184,7 @@ export default function ImportPreviewDashboard({ db, user }) {
         previewRows: rows,
         existingStockTrades: stockTrades,
         existingCashMovements: cashMovements,
+        trackingStartDate,
       });
       setImportResult(result);
       setIsConfirmOpen(false);
@@ -217,7 +225,7 @@ export default function ImportPreviewDashboard({ db, user }) {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-4 gap-3 text-sm">
           <div className="bg-slate-50 border rounded-lg p-3">
             <p className="text-xs text-slate-500">檔案名稱</p>
             <p className="font-bold text-slate-800 truncate">{fileName || '--'}</p>
@@ -230,6 +238,14 @@ export default function ImportPreviewDashboard({ db, user }) {
             <p className="text-xs text-slate-500">Row Count</p>
             <p className="font-bold text-slate-800">{preview?.summary?.totalRows ?? 0}</p>
           </div>
+          <div className="bg-slate-50 border rounded-lg p-3">
+            <label className="block text-xs text-slate-500 mb-1" htmlFor="trackingStartDate">Tracking Start Date / 追蹤起始日</label>
+            <input id="trackingStartDate" type="date" value={trackingStartDate} onChange={(event) => setTrackingStartDate(event.target.value)} className="w-full bg-white border rounded-md px-2 py-1.5 text-sm" />
+          </div>
+        </div>
+
+        <div className="mt-3 text-sm text-slate-600 bg-blue-50 border border-blue-100 rounded-lg p-3">
+          如你以今日作為追蹤起始日，請先手動輸入 opening cash 及 opening positions，並只匯入起始日當日或之後的 CSV rows。
         </div>
 
         {isReading && <p className="mt-3 text-sm text-blue-600 flex items-center gap-2"><Loader2 size={16} className="animate-spin" />讀取檔案中...</p>}
@@ -240,13 +256,14 @@ export default function ImportPreviewDashboard({ db, user }) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-8 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-9 gap-3 sm:gap-4">
         <SummaryCard label="總 rows" value={preview?.summary?.totalRows ?? 0} />
         <SummaryCard label="已 mapping" value={preview?.summary?.mappedRows ?? 0} />
         <SummaryCard label="OK" value={preview?.summary?.okRows ?? 0} tone="emerald" />
         <SummaryCard label="Warning" value={preview?.summary?.warningRows ?? 0} tone="amber" />
         <SummaryCard label="Error" value={preview?.summary?.errorRows ?? 0} tone="red" />
         <SummaryCard label="Ignored" value={preview?.summary?.ignoredRows ?? 0} />
+        <SummaryCard label="Before Start" value={preview?.summary?.skippedBeforeStartDateRows ?? 0} />
         <SummaryCard label="Duplicate" value={preview?.summary?.duplicateRows ?? 0} tone="orange" />
         <SummaryCard label="可匯入候選" value={preview?.summary?.importableRows ?? 0} />
       </div>
@@ -269,10 +286,11 @@ export default function ImportPreviewDashboard({ db, user }) {
             <h3 className="text-base font-bold text-slate-800">Confirm Import Dry-run</h3>
             <p className="text-xs text-slate-500 mt-1">Only OK + NEW stock trade / cash movement rows are eligible. Positions, ignored, duplicate, warning, and error rows are skipped.</p>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
             <div className="bg-slate-50 border rounded-lg p-2"><span className="block text-slate-500">Stock Trades</span><b>{confirmPlan?.summary?.stockTradeRows ?? 0}</b></div>
             <div className="bg-slate-50 border rounded-lg p-2"><span className="block text-slate-500">Cash Movements</span><b>{confirmPlan?.summary?.cashMovementRows ?? 0}</b></div>
             <div className="bg-slate-50 border rounded-lg p-2"><span className="block text-slate-500">Skipped</span><b>{confirmPlan?.skippedRows?.length ?? 0}</b></div>
+            <div className="bg-slate-50 border rounded-lg p-2"><span className="block text-slate-500">Before Start</span><b>{confirmPlan?.summary?.skippedBeforeStartDateRows ?? 0}</b></div>
             <div className="bg-slate-50 border rounded-lg p-2"><span className="block text-slate-500">Cash Impact</span><b>{(confirmPlan?.summary?.totalCashImpact ?? 0).toFixed(2)}</b></div>
           </div>
         </div>
@@ -302,6 +320,13 @@ export default function ImportPreviewDashboard({ db, user }) {
                 {label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => setFilter('out_of_scope')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${filter === 'out_of_scope' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}
+            >
+              Before Start
+            </button>
           </div>
         </div>
 
@@ -376,6 +401,7 @@ export default function ImportPreviewDashboard({ db, user }) {
                 <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Duplicates Skipped</p><p className="font-bold">{confirmPlan?.summary?.skippedDuplicateRows ?? 0}</p></div>
                 <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Ignored Skipped</p><p className="font-bold">{confirmPlan?.summary?.skippedIgnoredRows ?? 0}</p></div>
                 <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Positions Skipped</p><p className="font-bold">{confirmPlan?.summary?.skippedPositionRows ?? 0}</p></div>
+                <div className="bg-slate-50 border rounded-lg p-3"><p className="text-xs text-slate-500">Before Start Skipped</p><p className="font-bold">{confirmPlan?.summary?.skippedBeforeStartDateRows ?? 0}</p></div>
               </div>
               <label className="flex items-start gap-3 text-sm text-slate-700 bg-amber-50 border border-amber-100 rounded-lg p-3">
                 <input type="checkbox" checked={confirmChecked} onChange={(event) => setConfirmChecked(event.target.checked)} className="mt-1" />

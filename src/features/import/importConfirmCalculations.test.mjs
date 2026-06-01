@@ -62,3 +62,25 @@ plan = buildConfirmImportPlan({
 });
 equal(plan.summary.importableRows, 0, 'does not import existing duplicate rows');
 equal(plan.summary.skippedDuplicateRows, 1, 'counts existing duplicate skip');
+
+preview = buildImportPreviewFromCsvText(
+  [
+    'Trade Date,Action,Symbol,Quantity,Price,Commission,Fees',
+    '2026-05-30,Buy,VOO,1,650,0,0',
+    '2026-05-31,Buy,VOO,1,660,0,0',
+    '2026-06-01,Buy,VOO,1,670,0,0',
+  ].join('\n'),
+  { trackingStartDate: '2026-05-31' },
+);
+plan = buildConfirmImportPlan({ previewRows: preview.rows, userId: 'user-1', trackingStartDate: '2026-05-31' });
+equal(plan.summary.stockTradeRows, 2, 'confirm imports start-date and later rows');
+equal(plan.summary.skippedBeforeStartDateRows, 1, 'confirm skips rows before tracking start date');
+equal(plan.summary.importableRows, 2, 'confirm excludes before-start rows from importable count');
+assert.ok(plan.skippedRows.some((row) => row.reason === 'before_start_date'), 'confirm records before-start skip reason');
+
+preview = buildImportPreviewFromCsvText(
+  ['Trade Date,Action,Symbol,Quantity,Price,Commission,Fees', '2026-05-30,Buy,VOO,1,650,0,0'].join('\n'),
+);
+plan = buildConfirmImportPlan({ previewRows: preview.rows, userId: 'user-1', trackingStartDate: '2026-05-31' });
+equal(plan.summary.importableRows, 0, 'confirm re-applies tracking start date even without preview filter');
+equal(plan.summary.skippedBeforeStartDateRows, 1, 'confirm recheck counts before-start skip');

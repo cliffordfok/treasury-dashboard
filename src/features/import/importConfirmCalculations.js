@@ -1,6 +1,6 @@
 import { getCashMovementImpact } from '../cash/cashCalculations.js';
 import { getStockTradeCashImpact, normalizeSymbol, toNumber } from '../stocks/stockCalculations.js';
-import { DUPLICATE_STATUS, PREVIEW_STATUS } from './importPreviewCalculations.js';
+import { DUPLICATE_STATUS, PREVIEW_STATUS, isBeforeTrackingStartDate } from './importPreviewCalculations.js';
 import { buildImportFingerprint, validateImportedDraft } from './firstradeMapping.js';
 
 const IMPORTABLE_TARGETS = new Set(['Stock Trade', 'Cash Movement']);
@@ -79,16 +79,20 @@ const hasExistingFingerprint = (draft, existingStockTrades = [], existingCashMov
   return new Set([...stockFingerprints, ...cashFingerprints]).has(fingerprint);
 };
 
-export const classifyConfirmImportRow = (row, seenFingerprints, existingStockTrades = [], existingCashMovements = []) => {
+export const classifyConfirmImportRow = (row, seenFingerprints, existingStockTrades = [], existingCashMovements = [], trackingStartDate = '') => {
   if (row.status === PREVIEW_STATUS.IGNORED) return { importable: false, reason: 'ignored' };
   if (!row?.draft) return { importable: false, reason: 'missing_draft' };
   if (row.status === PREVIEW_STATUS.ERROR) return { importable: false, reason: 'error' };
+  if (row.status === PREVIEW_STATUS.OUT_OF_SCOPE) return { importable: false, reason: 'before_start_date' };
   if (row.status === PREVIEW_STATUS.WARNING) return { importable: false, reason: 'warning' };
   if (row.status === PREVIEW_STATUS.DUPLICATE || row.duplicateStatus !== DUPLICATE_STATUS.NEW) return { importable: false, reason: 'duplicate' };
   if (!IMPORTABLE_TARGETS.has(row.targetDraft)) return { importable: false, reason: 'position' };
 
   const validation = validateImportedDraft(row.draft);
   if (!validation.ok || validation.warnings.length > 0) return { importable: false, reason: validation.ok ? 'warning' : 'error' };
+
+  const rowDate = row.draft.tradeDate || row.draft.date || row.date || '';
+  if (isBeforeTrackingStartDate(rowDate, trackingStartDate)) return { importable: false, reason: 'before_start_date' };
 
   const fingerprint = row.draft.importFingerprint || '';
   if (!fingerprint) return { importable: false, reason: 'missing_fingerprint' };
@@ -106,6 +110,7 @@ const emptySummary = () => ({
   skippedErrorRows: 0,
   skippedWarningRows: 0,
   skippedIgnoredRows: 0,
+  skippedBeforeStartDateRows: 0,
   skippedPositionRows: 0,
   skippedOtherRows: 0,
   importableRows: 0,
@@ -124,6 +129,7 @@ const incrementSkip = (summary, reason) => {
   else if (reason === 'error' || reason === 'missing_draft' || reason === 'missing_fingerprint') summary.skippedErrorRows += 1;
   else if (reason === 'warning') summary.skippedWarningRows += 1;
   else if (reason === 'ignored') summary.skippedIgnoredRows += 1;
+  else if (reason === 'before_start_date') summary.skippedBeforeStartDateRows += 1;
   else if (reason === 'position') summary.skippedPositionRows += 1;
   else summary.skippedOtherRows += 1;
 };
@@ -133,6 +139,7 @@ export const buildConfirmImportPlan = ({
   userId = '',
   existingStockTrades = [],
   existingCashMovements = [],
+  trackingStartDate = '',
 } = {}) => {
   const summary = emptySummary();
   const seenFingerprints = new Set();
@@ -141,7 +148,7 @@ export const buildConfirmImportPlan = ({
   const skippedRows = [];
 
   previewRows.forEach((row) => {
-    const classification = classifyConfirmImportRow(row, seenFingerprints, existingStockTrades, existingCashMovements);
+    const classification = classifyConfirmImportRow(row, seenFingerprints, existingStockTrades, existingCashMovements, trackingStartDate);
     if (!classification.importable) {
       incrementSkip(summary, classification.reason);
       skippedRows.push({ rowNumber: row.rowNumber, reason: classification.reason, targetDraft: row.targetDraft, status: row.status });

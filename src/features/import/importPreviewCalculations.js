@@ -18,6 +18,7 @@ export const PREVIEW_STATUS = {
   ERROR: 'ERROR',
   DUPLICATE: 'DUPLICATE',
   IGNORED: 'IGNORED',
+  OUT_OF_SCOPE: 'OUT_OF_SCOPE',
 };
 
 export const DUPLICATE_STATUS = {
@@ -98,9 +99,18 @@ const getDuplicateStatus = (fingerprint, seenFingerprints, existingFingerprints)
   return DUPLICATE_STATUS.NEW;
 };
 
-const getStatus = ({ activityType, errors, warnings, duplicateStatus }) => {
+const isIsoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
+
+export const isBeforeTrackingStartDate = (rowDate, trackingStartDate = '') => {
+  if (!trackingStartDate || !isIsoDate(trackingStartDate)) return false;
+  if (!isIsoDate(rowDate)) return false;
+  return rowDate < trackingStartDate;
+};
+
+const getStatus = ({ activityType, errors, warnings, duplicateStatus, outOfScope }) => {
   if (activityType === ACTIVITY_TYPES.IGNORED) return PREVIEW_STATUS.IGNORED;
   if (errors.length > 0) return PREVIEW_STATUS.ERROR;
+  if (outOfScope) return PREVIEW_STATUS.OUT_OF_SCOPE;
   if (duplicateStatus !== DUPLICATE_STATUS.NEW) return PREVIEW_STATUS.DUPLICATE;
   if (warnings.length > 0) return PREVIEW_STATUS.WARNING;
   return PREVIEW_STATUS.OK;
@@ -112,6 +122,7 @@ export const buildImportPreview = ({
   existingStockTrades = [],
   existingCashMovements = [],
   existingReconciliationSnapshots = [],
+  trackingStartDate = '',
 } = {}) => {
   const csvType = detectFirstradeCsvType(headers);
   const existingFingerprints = buildExistingImportFingerprintSet({
@@ -136,12 +147,14 @@ export const buildImportPreview = ({
       if (activityType === ACTIVITY_TYPES.UNKNOWN) warnings.push('Unknown activity type.');
     }
 
+    const rowDate = draft?.tradeDate || draft?.date || mappedRow.date || '';
+    const outOfScope = errors.length === 0 && !isIgnored && isBeforeTrackingStartDate(rowDate, trackingStartDate);
     const fingerprint = draft?.importFingerprint || '';
-    const duplicateStatus = errors.length > 0 || isIgnored
+    const duplicateStatus = errors.length > 0 || isIgnored || outOfScope
       ? DUPLICATE_STATUS.NEW
       : getDuplicateStatus(fingerprint, seenFingerprints, existingFingerprints);
-    if (fingerprint) seenFingerprints.add(fingerprint);
-    const status = getStatus({ activityType, errors, warnings, duplicateStatus });
+    if (fingerprint && errors.length === 0 && !isIgnored && !outOfScope) seenFingerprints.add(fingerprint);
+    const status = getStatus({ activityType, errors, warnings, duplicateStatus, outOfScope });
 
     return {
       rowNumber: index + 2,
@@ -149,12 +162,13 @@ export const buildImportPreview = ({
       activityType,
       targetDraft: getDraftTarget(draft),
       symbol: draft?.symbol || mappedRow.symbol || '',
-      date: draft?.tradeDate || draft?.date || mappedRow.date || '',
+      date: rowDate,
       amountOrQuantity: getDraftAmountOrQuantity(draft),
       status,
       duplicateStatus,
       errors,
       warnings,
+      outOfScope,
       rawRow,
       mappedRow,
       draft,
@@ -172,6 +186,7 @@ export const buildImportPreview = ({
       if (row.status === PREVIEW_STATUS.ERROR) result.errorRows += 1;
       if (row.status === PREVIEW_STATUS.DUPLICATE) result.duplicateRows += 1;
       if (row.status === PREVIEW_STATUS.IGNORED) result.ignoredRows += 1;
+      if (row.status === PREVIEW_STATUS.OUT_OF_SCOPE) result.skippedBeforeStartDateRows += 1;
       if (row.importable) result.importableRows += 1;
       return result;
     },
@@ -183,6 +198,7 @@ export const buildImportPreview = ({
       warningRows: 0,
       errorRows: 0,
       ignoredRows: 0,
+      skippedBeforeStartDateRows: 0,
       duplicateRows: 0,
       importableRows: 0,
     },

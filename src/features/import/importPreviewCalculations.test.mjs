@@ -103,3 +103,24 @@ equal(preview.rows[5].status, PREVIEW_STATUS.IGNORED, 'actual Firstrade internal
 equal(preview.rows[6].activityType, 'dividend_reinvestment', 'actual Firstrade reinvestment activity type');
 equal(preview.rows[6].draft.side, 'buy', 'actual Firstrade reinvestment buy side');
 equal(preview.rows[6].draft.price, 590.5769, 'actual Firstrade reinvestment price parsed from description');
+
+const startDateCsv = [
+  'Trade Date,Action,Symbol,Quantity,Price,Commission,Fees',
+  '2026-05-30,Buy,VOO,1,650,0,0',
+  '2026-05-31,Buy,VOO,1,660,0,0',
+  '2026-06-01,Buy,VOO,1,670,0,0',
+].join('\n');
+preview = buildImportPreviewFromCsvText(startDateCsv, { trackingStartDate: '2026-05-31' });
+equal(preview.rows[0].status, PREVIEW_STATUS.OUT_OF_SCOPE, 'row before tracking start date skipped');
+equal(preview.rows[0].importable, false, 'row before tracking start date not importable');
+equal(preview.rows[1].status, PREVIEW_STATUS.OK, 'row equal tracking start date allowed');
+equal(preview.rows[2].status, PREVIEW_STATUS.OK, 'row after tracking start date allowed');
+equal(preview.summary.skippedBeforeStartDateRows, 1, 'before start date summary count');
+equal(preview.summary.errorRows, 0, 'before start date rows not errors');
+equal(preview.summary.importableRows, 2, 'before start date rows excluded from importable count');
+
+preview = buildImportPreviewFromCsvText(
+  ['Trade Date,Action,Symbol,Quantity,Price', 'bad-date,Buy,VOO,1,650'].join('\n'),
+  { trackingStartDate: '2026-05-31' },
+);
+equal(preview.rows[0].status, PREVIEW_STATUS.ERROR, 'invalid date remains validation error with tracking start date');

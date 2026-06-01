@@ -52,7 +52,7 @@ export default function StockDashboard({ db, user }) {
 
     const normalized = normalizeStockTradeForStorage(formData, user.uid);
     if (!normalized.symbol || !normalized.tradeDate || normalized.quantity <= 0 || normalized.price < 0) {
-      setError('請輸入有效名稱、日期、數量及價格。');
+      setError('請輸入有效股票代號、日期、數量及價格。');
       return;
     }
     if (normalized.side === 'sell') {
@@ -101,7 +101,7 @@ export default function StockDashboard({ db, user }) {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center gap-3">
           <div className="p-2.5 bg-blue-50 text-blue-600 rounded-lg"><Briefcase size={20} /></div>
-          <div><p className="text-[11px] text-slate-500 font-medium">持倉名稱</p><p className="text-lg font-bold text-slate-800">{positions.length}</p></div>
+          <div><p className="text-[11px] text-slate-500 font-medium">持倉股票代號</p><p className="text-lg font-bold text-slate-800">{positions.length}</p></div>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center gap-3">
           <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg"><DollarSign size={20} /></div>
@@ -125,7 +125,7 @@ export default function StockDashboard({ db, user }) {
           </div>
           <div className="p-4 grid grid-cols-2 gap-3">
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-500 mb-1">名稱</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">股票代號</label>
               <input required value={formData.symbol} onChange={(e) => update('symbol', e.target.value.toUpperCase())} placeholder="例如 VOO、NVDA、GOOGL" className="w-full p-2 border rounded-lg text-sm uppercase" />
             </div>
             <div>
@@ -185,7 +185,7 @@ export default function StockDashboard({ db, user }) {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                   <tr>
-                    <th className="p-3 text-left">名稱</th>
+                    <th className="p-3 text-left">股票代號</th>
                     <th className="p-3 text-right">股數</th>
                     <th className="p-3 text-right">平均成本</th>
                     <th className="p-3 text-right">剩餘成本</th>
@@ -225,7 +225,7 @@ export default function StockDashboard({ db, user }) {
                   <tr>
                     <th className="p-3 text-left">日期</th>
                     <th className="p-3 text-left">類型</th>
-                    <th className="p-3 text-left">名稱</th>
+                    <th className="p-3 text-left">股票代號</th>
                     <th className="p-3 text-right">數量</th>
                     <th className="p-3 text-right">價格</th>
                     <th className="p-3 text-right">手續費</th>

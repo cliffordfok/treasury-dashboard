@@ -94,7 +94,7 @@ export default function StockDashboard({ db, user }) {
       <div className="bg-slate-900 text-white rounded-2xl shadow-lg p-5 sm:p-6 relative overflow-hidden">
         <div className="absolute -top-6 -right-6 opacity-10 pointer-events-none"><Briefcase size={160} /></div>
         <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">美股 / ETF 交易總帳</p>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Firstrade 美股及 ETF 交易紀錄</h2>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">券商美股及 ETF 交易紀錄</h2>
         <p className="text-slate-300 text-sm mt-2 max-w-2xl">由交易流水帳自動計算持倉、平均成本、已實現盈虧及現金影響。第一階段不接即時報價。</p>
       </div>
 
@@ -121,7 +121,7 @@ export default function StockDashboard({ db, user }) {
         <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 border-b border-slate-100">
             <h3 className="text-base font-bold text-slate-800 flex items-center gap-2"><Plus size={18} className="text-blue-600" />新增股票交易</h3>
-            <p className="text-xs text-slate-500 mt-1">Account 預設 Firstrade，可記錄美股及 ETF 買賣。</p>
+            <p className="text-xs text-slate-500 mt-1">Account 預設券商帳戶，可記錄美股及 ETF 買賣。</p>
           </div>
           <div className="p-4 grid grid-cols-2 gap-3">
             <div className="col-span-2">

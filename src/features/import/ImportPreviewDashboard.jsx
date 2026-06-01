@@ -201,14 +201,14 @@ export default function ImportPreviewDashboard({ db, user }) {
       <div className="bg-slate-900 text-white rounded-2xl shadow-lg p-5 sm:p-6 relative overflow-hidden">
         <div className="absolute -top-6 -right-6 opacity-10 pointer-events-none"><Upload size={160} /></div>
         <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">Import / 匯入預覽</p>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Firstrade CSV Preview</h2>
-        <p className="text-slate-300 text-sm mt-2 max-w-2xl">上載 CSV 後只做解析、mapping、validation 及重複檢查預覽；Phase 3B 不會寫入 Firestore。</p>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">券商 CSV 匯入預覽</h2>
+        <p className="text-slate-300 text-sm mt-2 max-w-2xl">目前支援 Firstrade CSV 格式。上載 CSV 後會做解析、mapping、validation 及重複檢查預覽。</p>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 sm:p-5">
         <div className="flex flex-col md:flex-row md:items-center gap-3 justify-between">
           <div>
-            <h3 className="text-base font-bold text-slate-800 flex items-center gap-2"><FileText size={18} className="text-blue-600" />選擇 Firstrade CSV</h3>
+            <h3 className="text-base font-bold text-slate-800 flex items-center gap-2"><FileText size={18} className="text-blue-600" />選擇券商 CSV</h3>
             <p className="text-xs text-slate-500 mt-1">支援 header row、quoted fields、comma inside quotes、empty cells、CRLF / LF。</p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -349,7 +349,7 @@ export default function ImportPreviewDashboard({ db, user }) {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {!csvText ? (
-                <tr><td colSpan="11" className="p-6 text-center text-slate-400">請先選擇 Firstrade CSV 檔案。</td></tr>
+                <tr><td colSpan="11" className="p-6 text-center text-slate-400">請先選擇券商 CSV 檔案。</td></tr>
               ) : filteredRows.length === 0 ? (
                 <tr><td colSpan="11" className="p-6 text-center text-slate-400">沒有符合篩選條件的 rows。</td></tr>
               ) : filteredRows.map((row) => (
@@ -390,7 +390,7 @@ export default function ImportPreviewDashboard({ db, user }) {
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-slate-800">Confirm Firstrade Import</h3>
+              <h3 className="font-bold text-slate-800">Confirm CSV Import</h3>
               <button type="button" onClick={() => setIsConfirmOpen(false)} className="text-slate-400 hover:text-slate-600"><XCircle size={20} /></button>
             </div>
             <div className="p-4 space-y-4">

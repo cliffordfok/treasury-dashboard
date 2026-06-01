@@ -49,7 +49,7 @@ const holdingStatusLabel = (status) => ({
   OK: '正常',
   QTY_DIFF: '股數差異',
   COST_DIFF: '成本差異',
-  MISSING_IN_BROKER: 'Firstrade 缺少',
+  MISSING_IN_BROKER: '券商缺少',
   MISSING_IN_SYSTEM: '系統缺少',
 }[status] || status);
 
@@ -174,9 +174,9 @@ export default function ReconciliationDashboard({ db, user }) {
 
   const validateSnapshot = () => {
     if (!formData.date) return '請輸入對帳日期。';
-    if (!isRequiredNumber(formData.brokerCashBalance)) return 'Firstrade 現金餘額必須是有效數字。';
-    if (!isOptionalNumber(formData.brokerTotalMarketValue)) return 'Firstrade 市值必須是有效數字。';
-    if (!isOptionalNumber(formData.brokerTotalAccountValue)) return 'Firstrade 帳戶總值必須是有效數字。';
+    if (!isRequiredNumber(formData.brokerCashBalance)) return '券商現金餘額必須是有效數字。';
+    if (!isOptionalNumber(formData.brokerTotalMarketValue)) return '券商市值必須是有效數字。';
+    if (!isOptionalNumber(formData.brokerTotalAccountValue)) return '券商帳戶總值必須是有效數字。';
 
     const seenSymbols = new Set();
     for (const holding of formData.holdings) {
@@ -184,9 +184,9 @@ export default function ReconciliationDashboard({ db, user }) {
       if (!symbol) continue;
       if (seenSymbols.has(symbol)) return `持倉 symbol 重複：${symbol}`;
       seenSymbols.add(symbol);
-      if (!isRequiredNumber(holding.brokerQuantity) || Number(holding.brokerQuantity) < 0) return `${symbol} Firstrade 股數必須是非負數字。`;
-      if (!isOptionalNumber(holding.brokerCostBasis) || Number(holding.brokerCostBasis || 0) < 0) return `${symbol} Firstrade 成本不可為負數。`;
-      if (!isOptionalNumber(holding.brokerMarketValue) || Number(holding.brokerMarketValue || 0) < 0) return `${symbol} Firstrade 市值不可為負數。`;
+      if (!isRequiredNumber(holding.brokerQuantity) || Number(holding.brokerQuantity) < 0) return `${symbol} 券商股數必須是非負數字。`;
+      if (!isOptionalNumber(holding.brokerCostBasis) || Number(holding.brokerCostBasis || 0) < 0) return `${symbol} 券商成本不可為負數。`;
+      if (!isOptionalNumber(holding.brokerMarketValue) || Number(holding.brokerMarketValue || 0) < 0) return `${symbol} 券商市值不可為負數。`;
     }
     return '';
   };
@@ -238,9 +238,9 @@ export default function ReconciliationDashboard({ db, user }) {
     <div className="space-y-4 sm:space-y-6">
       <div className="bg-slate-900 text-white rounded-2xl shadow-lg p-5 sm:p-6 relative overflow-hidden">
         <div className="absolute -top-6 -right-6 opacity-10 pointer-events-none"><ClipboardCheck size={160} /></div>
-        <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">Firstrade 手動對帳</p>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Firstrade 對帳快照 vs 系統帳本</h2>
-        <p className="text-slate-300 text-sm mt-2 max-w-2xl">手動輸入 Firstrade 現金及持倉快照，對比系統由美股 / ETF 交易總帳及現金流水帳計算出的結果。</p>
+        <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">券商手動對帳</p>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">券商快照 vs 系統帳本</h2>
+        <p className="text-slate-300 text-sm mt-2 max-w-2xl">手動輸入券商現金及持倉快照，對比系統由美股 / ETF 交易總帳及現金流水帳計算出的結果。如使用 Firstrade，可直接參考 Firstrade 顯示的現金、股數及成本。</p>
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
@@ -249,7 +249,7 @@ export default function ReconciliationDashboard({ db, user }) {
           <p className="text-xl font-bold">{cashStatusLabel(report.cashComparison.status)}</p>
           <p className="text-[11px] mt-1">
             {report.cashComparison.status === CASH_STATUS.AWAITING_INPUT
-              ? '尚未輸入 Firstrade 現金'
+              ? '尚未輸入券商現金'
               : `差額 ${signedMoney(report.cashComparison.difference, formData.currency || 'USD')}`}
           </p>
         </div>
@@ -275,7 +275,7 @@ export default function ReconciliationDashboard({ db, user }) {
               <p className="text-xs text-slate-500 mt-1">
                 {selectedSnapshotId
                   ? '已載入快照作檢視用途；儲存會建立新快照，如需修改舊快照請先刪除再新增。'
-                  : '手動輸入 Firstrade 當日資料。'}
+                  : '手動輸入券商當日資料。'}
               </p>
             </div>
             <button type="button" onClick={resetForm} className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg font-semibold">新增</button>
@@ -290,16 +290,16 @@ export default function ReconciliationDashboard({ db, user }) {
               <input value={formData.currency} onChange={(event) => update('currency', event.target.value.toUpperCase())} className="w-full p-2 border rounded-lg text-sm uppercase" />
             </div>
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Firstrade 現金餘額</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">券商現金餘額</label>
               <input required type="number" step="0.01" value={formData.brokerCashBalance} onChange={(event) => update('brokerCashBalance', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               <p className="text-[11px] text-slate-500 mt-1">系統現金：{money(systemCashSummary.calculatedCashBalance, formData.currency || 'USD')}</p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Firstrade 市值</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">券商市值</label>
               <input type="number" min="0" step="0.01" value={formData.brokerTotalMarketValue} onChange={(event) => update('brokerTotalMarketValue', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Firstrade 帳戶總值</label>
+              <label className="block text-xs font-medium text-slate-500 mb-1">券商帳戶總值</label>
               <input type="number" min="0" step="0.01" value={formData.brokerTotalAccountValue} onChange={(event) => update('brokerTotalAccountValue', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
             </div>
             <div className="col-span-2">
@@ -310,7 +310,7 @@ export default function ReconciliationDashboard({ db, user }) {
 
           <div className="px-4 pb-4">
             <div className="flex items-center justify-between mb-2">
-              <h4 className="text-sm font-bold text-slate-800">Firstrade 持倉</h4>
+              <h4 className="text-sm font-bold text-slate-800">券商持倉</h4>
               <div className="flex gap-2">
                 <button type="button" onClick={loadSystemHoldings} className="text-xs bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1"><RefreshCw size={13} />載入系統持倉</button>
                 <button type="button" onClick={addHoldingRow} className="text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1"><Plus size={13} />新增一行</button>
@@ -318,11 +318,11 @@ export default function ReconciliationDashboard({ db, user }) {
             </div>
             <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
               {formData.holdings.length === 0 ? (
-                <p className="text-sm text-slate-400 bg-slate-50 rounded-lg p-3">尚未輸入 Firstrade 持倉。</p>
+                <p className="text-sm text-slate-400 bg-slate-50 rounded-lg p-3">尚未輸入券商持倉。</p>
               ) : formData.holdings.map((holding, index) => (
                 <div key={`${holding.symbol || 'row'}-${index}`} className="grid grid-cols-2 gap-2 border rounded-lg p-2 bg-slate-50/70">
                   <input value={holding.symbol} onChange={(event) => updateHolding(index, 'symbol', event.target.value)} placeholder="Symbol" className="p-2 border rounded-md text-sm uppercase" />
-                  <input type="number" min="0" step="0.000001" value={holding.brokerQuantity} onChange={(event) => updateHolding(index, 'brokerQuantity', event.target.value)} placeholder="Firstrade 股數" className="p-2 border rounded-md text-sm" />
+                  <input type="number" min="0" step="0.000001" value={holding.brokerQuantity} onChange={(event) => updateHolding(index, 'brokerQuantity', event.target.value)} placeholder="券商股數" className="p-2 border rounded-md text-sm" />
                   <input type="number" min="0" step="0.01" value={holding.brokerCostBasis} onChange={(event) => updateHolding(index, 'brokerCostBasis', event.target.value)} placeholder="成本（可選）" className="p-2 border rounded-md text-sm" />
                   <input type="number" min="0" step="0.01" value={holding.brokerMarketValue} onChange={(event) => updateHolding(index, 'brokerMarketValue', event.target.value)} placeholder="市值（可選）" className="p-2 border rounded-md text-sm" />
                   <input value={holding.notes} onChange={(event) => updateHolding(index, 'notes', event.target.value)} placeholder="備註（可選）" className="col-span-2 p-2 border rounded-md text-sm" />
@@ -347,7 +347,7 @@ export default function ReconciliationDashboard({ db, user }) {
             </div>
             <div className="grid grid-cols-3 gap-2 p-4">
               <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">系統現金</p><p className="font-bold">{money(report.cashComparison.systemCashBalance, formData.currency || 'USD')}</p></div>
-              <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Firstrade 現金</p><p className="font-bold">{money(report.cashComparison.brokerCashBalance, formData.currency || 'USD')}</p></div>
+              <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">券商現金</p><p className="font-bold">{money(report.cashComparison.brokerCashBalance, formData.currency || 'USD')}</p></div>
               <div className={`p-3 rounded-lg border ${statusClass(report.cashComparison.status)}`}>
                 <p className="text-[11px]">{report.cashComparison.status === CASH_STATUS.AWAITING_INPUT ? '未輸入' : '差額'}</p>
                 <p className="font-bold">{signedMoney(report.cashComparison.difference, formData.currency || 'USD')}</p>
@@ -366,12 +366,12 @@ export default function ReconciliationDashboard({ db, user }) {
                   <tr>
                     <th className="p-3 text-left">Symbol</th>
                     <th className="p-3 text-right">系統股數</th>
-                    <th className="p-3 text-right">Firstrade 股數</th>
+                    <th className="p-3 text-right">券商股數</th>
                     <th className="p-3 text-right">股數差異</th>
                     <th className="p-3 text-right">系統成本</th>
-                    <th className="p-3 text-right">Firstrade 成本</th>
+                    <th className="p-3 text-right">券商成本</th>
                     <th className="p-3 text-right">成本差異</th>
-                    <th className="p-3 text-right">Firstrade 市值</th>
+                    <th className="p-3 text-right">券商市值</th>
                     <th className="p-3 text-left">狀態</th>
                   </tr>
                 </thead>
@@ -406,7 +406,7 @@ export default function ReconciliationDashboard({ db, user }) {
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                   <tr>
                     <th className="p-3 text-left">日期</th>
-                    <th className="p-3 text-right">Firstrade 現金</th>
+                    <th className="p-3 text-right">券商現金</th>
                     <th className="p-3 text-right">持倉</th>
                     <th className="p-3 text-right">差異</th>
                     <th className="p-3 text-left">建立時間</th>

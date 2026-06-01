@@ -144,7 +144,7 @@ export default function CashDashboard({ db, user }) {
       <div className="bg-slate-900 text-white rounded-2xl shadow-lg p-5 sm:p-6 relative overflow-hidden">
         <div className="absolute -top-6 -right-6 opacity-10 pointer-events-none"><Banknote size={160} /></div>
         <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">現金流水帳</p>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">Firstrade USD 現金紀錄</h2>
+        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">券商 USD 現金紀錄</h2>
         <p className="text-slate-300 text-sm mt-2 max-w-2xl">記錄入金、出金、股息、預扣稅、利息、非交易費用及手動調整，並合併股票交易現金影響。</p>
       </div>
 

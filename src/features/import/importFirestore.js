@@ -15,6 +15,7 @@ export const commitFirstradeImport = async ({
   previewRows = [],
   existingStockTrades = [],
   existingCashMovements = [],
+  trackingStartDate = '',
 } = {}) => {
   if (!db) throw new Error('Firestore db is required.');
   if (!userId) throw new Error('User is required.');
@@ -24,6 +25,7 @@ export const commitFirstradeImport = async ({
     userId,
     existingStockTrades,
     existingCashMovements,
+    trackingStartDate,
   });
 
   const writes = [

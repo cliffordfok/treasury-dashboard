@@ -57,3 +57,39 @@ near(getStockTradeCashImpact(caseD[2]), 700 - 1 - 0.05, 'case D cashImpact');
 const fractional = findPosition([trade({ symbol: 'NVDA', quantity: 0.123456, price: 100 })], 'NVDA');
 near(fractional.quantity, 0.123456, 'fractional shares');
 near(fractional.remainingCost, 12.3456, 'fractional remainingCost');
+
+const openingOnly = [
+  trade({ side: 'opening_position', quantity: 100, price: 450, createdAt: '1' }),
+];
+voo = findPosition(openingOnly, 'VOO');
+near(voo.quantity, 100, 'opening_position shares');
+near(voo.remainingCost, 45000, 'opening_position remainingCost');
+near(voo.averageCost, 450, 'opening_position averageCost');
+near(voo.realizedPnl, 0, 'opening_position realizedPnL');
+near(voo.cashImpact, 0, 'opening_position position cashImpact');
+near(getStockTradeCashImpact(openingOnly[0]), 0, 'opening_position trade cashImpact');
+
+const openingThenBuy = [
+  ...openingOnly,
+  trade({ quantity: 10, price: 500, tradeDate: '2026-05-02', createdAt: '2' }),
+];
+voo = findPosition(openingThenBuy, 'VOO');
+near(voo.quantity, 110, 'opening_position then buy shares');
+near(voo.remainingCost, 50000, 'opening_position then buy remainingCost');
+near(voo.averageCost, 50000 / 110, 'opening_position then buy averageCost');
+near(voo.cashImpact, -5000, 'opening_position then buy cashImpact');
+
+const openingThenSell = [
+  ...openingOnly,
+  trade({ side: 'sell', quantity: 10, price: 500, tradeDate: '2026-05-02', createdAt: '2' }),
+];
+voo = findPosition(openingThenSell, 'VOO');
+near(voo.quantity, 90, 'opening_position then sell shares');
+near(voo.remainingCost, 40500, 'opening_position then sell remainingCost');
+near(voo.realizedPnl, 500, 'opening_position then sell realizedPnL');
+near(voo.cashImpact, 5000, 'opening_position then sell cashImpact');
+
+const negativeOpening = findPosition([
+  trade({ side: 'opening_position', quantity: -1, price: 450 }),
+], 'VOO');
+assert.equal(negativeOpening, undefined, 'negative opening_position should not create a position');

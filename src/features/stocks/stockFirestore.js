@@ -21,7 +21,7 @@ export const defaultStockTradeForm = () => ({
 export const normalizeStockTradeForStorage = (trade, userId, existingTrade = null) => {
   const now = new Date().toISOString();
   const id = String(trade.id || existingTrade?.id || makeStockTradeId());
-  const side = trade.side === 'sell' ? 'sell' : 'buy';
+  const side = ['buy', 'sell', 'opening_position'].includes(trade.side) ? trade.side : 'buy';
 
   return {
     id,

@@ -15,6 +15,7 @@ export const getStockTradeCashImpact = (trade) => {
   const gross = quantity * price;
   const costs = commission + fees;
 
+  if (trade.side === 'opening_position') return 0;
   if (trade.side === 'sell') return gross - costs;
   return -(gross + costs);
 };
@@ -71,6 +72,11 @@ export const calculateStockPositions = (trades = []) => {
       position.realizedPnl += netProceeds - costRemoved;
       position.remainingCost = position.quantity > EPSILON ? Math.max(0, position.remainingCost - costRemoved) : 0;
       position.cashImpact += netProceeds;
+    } else if (trade.side === 'opening_position') {
+      const openingCost = gross + costs;
+      position.quantity += quantity;
+      position.totalBuyCost += openingCost;
+      position.remainingCost += openingCost;
     } else {
       const buyCost = gross + costs;
       position.quantity += quantity;

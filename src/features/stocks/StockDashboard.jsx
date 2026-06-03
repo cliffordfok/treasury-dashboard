@@ -14,7 +14,11 @@ const signedMoney = (value, currency = 'USD') => {
   return `${amount >= 0 ? '+' : ''}${money(amount, currency)}`;
 };
 
-const sideLabel = (side) => (side === 'sell' ? '賣出' : '買入');
+const sideLabel = (side) => {
+  if (side === 'sell') return '賣出';
+  if (side === 'opening_position') return '期初持倉';
+  return '買入';
+};
 
 export default function StockDashboard({ db, user }) {
   const [stockTrades, setStockTrades] = useState([]);
@@ -45,6 +49,12 @@ export default function StockDashboard({ db, user }) {
   const totals = useMemo(() => calculateStockPortfolioTotals(positions), [positions]);
 
   const update = (field, value) => setFormData((prev) => ({ ...prev, [field]: value }));
+  const updateSide = (value) => setFormData((prev) => ({
+    ...prev,
+    side: value,
+    commission: value === 'opening_position' ? 0 : prev.commission,
+    fees: value === 'opening_position' ? 0 : prev.fees,
+  }));
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -134,11 +144,17 @@ export default function StockDashboard({ db, user }) {
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">類型</label>
-              <select value={formData.side} onChange={(e) => update('side', e.target.value)} className="w-full p-2 border rounded-lg text-sm">
+              <select value={formData.side} onChange={(e) => updateSide(e.target.value)} className="w-full p-2 border rounded-lg text-sm">
                 <option value="buy">買入</option>
                 <option value="sell">賣出</option>
+                <option value="opening_position">期初持倉</option>
               </select>
             </div>
+            {formData.side === 'opening_position' && (
+              <div className="col-span-2 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg p-3">
+                期初持倉只用來建立起始股數及成本，不會影響現金餘額。
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">交易日期</label>
               <input required type="date" value={formData.tradeDate} onChange={(e) => update('tradeDate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
@@ -248,13 +264,15 @@ export default function StockDashboard({ db, user }) {
                     return (
                       <tr key={trade.id} className="hover:bg-slate-50">
                         <td className="p-3 whitespace-nowrap">{trade.tradeDate}<div className="text-[10px] text-slate-400">{trade.tradeTime || trade.accountId || 'firstrade'}</div></td>
-                        <td className="p-3"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white ${trade.side === 'sell' ? 'bg-red-500' : 'bg-emerald-500'}`}>{sideLabel(trade.side)}</span></td>
+                        <td className="p-3"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white ${trade.side === 'sell' ? 'bg-red-500' : trade.side === 'opening_position' ? 'bg-blue-500' : 'bg-emerald-500'}`}>{sideLabel(trade.side)}</span></td>
                         <td className="p-3 font-bold">{trade.symbol}<div className="text-[10px] text-slate-400 font-normal">{trade.name || '--'}</div></td>
                         <td className="p-3 text-right">{number(trade.quantity)}</td>
                         <td className="p-3 text-right">{money(trade.price, trade.currency)}</td>
                         <td className="p-3 text-right">{money(trade.commission, trade.currency)}</td>
                         <td className="p-3 text-right">{money(trade.fees, trade.currency)}</td>
-                        <td className={`p-3 text-right font-bold ${cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(cashImpact, trade.currency)}</td>
+                        <td className={`p-3 text-right font-bold ${trade.side === 'opening_position' ? 'text-slate-400' : cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {trade.side === 'opening_position' ? '不影響現金' : signedMoney(cashImpact, trade.currency)}
+                        </td>
                         <td className="p-3 text-center">
                           <button onClick={() => handleDelete(trade.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="刪除交易">
                             <Trash2 size={16} />

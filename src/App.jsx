@@ -1499,8 +1499,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-20">
-      <nav className="bg-slate-900 text-white px-4 py-3 sticky top-0 z-20 shadow-md">
-        <div className="max-w-6xl mx-auto flex justify-between items-center gap-3">
+      <nav className="bg-slate-900 text-white px-4 py-2.5 sm:py-3 sticky top-0 z-20 shadow-md">
+        <div className="max-w-7xl mx-auto flex justify-between items-center gap-3">
           <div className="flex items-center space-x-2.5 min-w-0">
             <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center font-bold text-sm shadow-sm flex-shrink-0">US</div>
             <h1 className="text-base sm:text-xl font-bold tracking-tight truncate">Portfolio Dashboard</h1>
@@ -1521,8 +1521,9 @@ export default function App() {
           )}
         </div>
       </nav>
-      <main className="max-w-6xl mx-auto px-3 sm:px-4 mt-4">
-        <div className="grid grid-cols-2 sm:flex sm:w-max gap-1 mb-5 bg-slate-200/70 p-1 rounded-xl shadow-inner">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+        <div className="-mx-4 sm:mx-0 mb-5 overflow-x-auto px-4 sm:px-0">
+        <div className="flex w-max min-w-full sm:min-w-0 gap-1 bg-slate-200/70 p-1 rounded-xl shadow-inner">
           <button onClick={() => setActiveTab('dashboard')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <PieChart size={15}/> 總覽
           </button>
@@ -1544,6 +1545,7 @@ export default function App() {
           <button onClick={() => setActiveTab('import')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'import' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <Upload size={15}/> 匯入預覽
           </button>
+        </div>
         </div>
         {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : activeTab === 'stocks' ? <StockDashboard db={db} user={user} /> : activeTab === 'cash' ? <CashDashboard db={db} user={user} /> : activeTab === 'reconcile' ? <ReconciliationDashboard db={db} user={user} /> : activeTab === 'import' ? <ImportPreviewDashboard db={db} user={user} /> : renderTrades()}
       </main>

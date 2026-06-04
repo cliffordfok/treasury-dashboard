@@ -26,6 +26,7 @@ const signedMoney = (value, currency = 'USD') => {
 };
 
 const isValidOptionalNumber = (value) => value === '' || value === null || value === undefined || Number.isFinite(Number(value));
+const CASH_SYMBOL_TYPES = new Set(['dividend', 'withholding_tax', 'fee', 'adjustment']);
 
 export default function CashDashboard({ db, user }) {
   const [cashMovements, setCashMovements] = useState([]);
@@ -73,8 +74,14 @@ export default function CashDashboard({ db, user }) {
 
   const summary = useMemo(() => calculatePortfolioCashSummary(cashMovements, stockTrades), [cashMovements, stockTrades]);
   const isLoading = isLoadingCash || isLoadingStocks;
+  const showSymbolField = CASH_SYMBOL_TYPES.has(formData.type);
 
   const update = (field, value) => setFormData((prev) => ({ ...prev, [field]: value }));
+  const updateType = (value) => setFormData((prev) => ({
+    ...prev,
+    type: value,
+    symbol: CASH_SYMBOL_TYPES.has(value) ? prev.symbol : '',
+  }));
 
   const validateForm = (movement) => {
     if (!movement.date) return '請輸入日期。';
@@ -107,13 +114,14 @@ export default function CashDashboard({ db, user }) {
     event.preventDefault();
     if (!user?.uid) return;
 
-    const validationError = validateForm(formData);
+    const movementForStorage = showSymbolField ? formData : { ...formData, symbol: '' };
+    const validationError = validateForm(movementForStorage);
     if (validationError) {
       setError(validationError);
       return;
     }
 
-    const normalized = normalizeCashMovementForStorage(formData, user.uid);
+    const normalized = normalizeCashMovementForStorage(movementForStorage, user.uid);
     setIsSaving(true);
     try {
       await saveCashMovement(db, user.uid, normalized);
@@ -141,17 +149,17 @@ export default function CashDashboard({ db, user }) {
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <div className="bg-slate-900 text-white rounded-2xl shadow-lg p-5 sm:p-6 relative overflow-hidden">
-        <div className="absolute -top-6 -right-6 opacity-10 pointer-events-none"><Banknote size={160} /></div>
+      <div className="bg-slate-900 text-white rounded-xl shadow-sm p-4 sm:p-5 relative overflow-hidden">
+        <div className="absolute -top-4 -right-4 opacity-5 pointer-events-none"><Banknote size={112} /></div>
         <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">現金流水帳</p>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">券商 USD 現金紀錄</h2>
-        <p className="text-slate-300 text-sm mt-2 max-w-2xl">記錄入金、出金、股息、預扣稅、利息、非交易費用及手動調整，並合併股票交易現金影響。</p>
+        <h2 className="text-xl sm:text-2xl font-semibold tracking-tight">券商 USD 現金紀錄</h2>
+        <p className="text-slate-300 text-xs sm:text-sm mt-1.5 max-w-2xl">記錄入金、出金、股息、預扣稅、利息、非交易費用及手動調整，並合併股票交易現金影響。</p>
       </div>
 
-      <div className="grid grid-cols-2 xl:grid-cols-6 gap-3 sm:gap-4">
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
+        <div className="col-span-2 xl:col-span-2 bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 flex items-center gap-3 min-w-0">
           <div className={`p-2.5 rounded-lg ${summary.calculatedCashBalance >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}><Wallet size={20} /></div>
-          <div><p className="text-[11px] text-slate-500 font-medium">系統現金餘額</p><p className={`text-lg font-bold ${summary.calculatedCashBalance >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{signedMoney(summary.calculatedCashBalance)}</p></div>
+          <div className="min-w-0"><p className="text-[11px] text-slate-500 font-medium">系統現金餘額</p><p className={`text-xl sm:text-2xl font-bold truncate ${summary.calculatedCashBalance >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{signedMoney(summary.calculatedCashBalance)}</p></div>
         </div>
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center gap-3">
           <div className="p-2.5 bg-blue-50 text-blue-600 rounded-lg"><Banknote size={20} /></div>
@@ -175,50 +183,52 @@ export default function CashDashboard({ db, user }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[360px_1fr] gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(340px,440px)_1fr] gap-4">
         <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 border-b border-slate-100">
-            <h3 className="text-base font-bold text-slate-800 flex items-center gap-2"><Plus size={18} className="text-blue-600" />新增現金流水</h3>
+            <h3 className="text-sm font-medium text-slate-800 flex items-center gap-2"><Plus size={18} className="text-blue-600" />新增現金流水</h3>
             <p className="text-xs text-slate-500 mt-1">股票買賣 cash impact 會自動從美股 / ETF 交易總帳合併，不需要在這裡重複輸入。</p>
           </div>
-          <div className="p-4 grid grid-cols-2 gap-3">
-            <div className="col-span-2">
+          <div className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-500 mb-1">類型</label>
-              <select value={formData.type} onChange={(e) => update('type', e.target.value)} className="w-full p-2 border rounded-lg text-sm">
+              <select value={formData.type} onChange={(e) => updateType(e.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm">
                 {CASH_MOVEMENT_TYPES.map((type) => <option key={type} value={type}>{CASH_MOVEMENT_TYPE_LABELS[type]}</option>)}
               </select>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">日期</label>
-              <input required type="date" value={formData.date} onChange={(e) => update('date', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              <input required type="date" value={formData.date} onChange={(e) => update('date', e.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">貨幣</label>
-              <input value={formData.currency} onChange={(e) => update('currency', e.target.value.toUpperCase())} className="w-full p-2 border rounded-lg text-sm uppercase" />
+              <input value={formData.currency} onChange={(e) => update('currency', e.target.value.toUpperCase())} className="w-full min-h-10 p-2 border rounded-lg text-sm uppercase" />
             </div>
-            <div className="col-span-2">
+            {showSymbolField && (
+            <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-500 mb-1">Symbol（可選）</label>
-              <input value={formData.symbol} onChange={(e) => update('symbol', e.target.value.toUpperCase())} placeholder="VOO" className="w-full p-2 border rounded-lg text-sm uppercase" />
+              <input value={formData.symbol} onChange={(e) => update('symbol', e.target.value.toUpperCase())} placeholder="VOO" className="w-full min-h-10 p-2 border rounded-lg text-sm uppercase" />
             </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">金額</label>
-              <input type="number" step="0.01" value={formData.amount} onChange={(e) => update('amount', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              <input type="number" step="0.01" value={formData.amount} onChange={(e) => update('amount', e.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">股息總額（可選）</label>
-              <input type="number" min="0" step="0.01" value={formData.grossAmount} onChange={(e) => update('grossAmount', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              <input type="number" min="0" step="0.01" value={formData.grossAmount} onChange={(e) => update('grossAmount', e.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">預扣稅（可選）</label>
-              <input type="number" min="0" step="0.01" value={formData.withholdingTax} onChange={(e) => update('withholdingTax', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              <input type="number" min="0" step="0.01" value={formData.withholdingTax} onChange={(e) => update('withholdingTax', e.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">稅後收入（可選）</label>
-              <input type="number" min="0" step="0.01" value={formData.netAmount} onChange={(e) => update('netAmount', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              <input type="number" min="0" step="0.01" value={formData.netAmount} onChange={(e) => update('netAmount', e.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-500 mb-1">備註（可選）</label>
-              <textarea value={formData.notes} onChange={(e) => update('notes', e.target.value)} rows={2} className="w-full p-2 border rounded-lg text-sm" />
+              <textarea value={formData.notes} onChange={(e) => update('notes', e.target.value)} rows={2} className="w-full min-h-20 p-2 border rounded-lg text-sm" />
             </div>
           </div>
           <div className="p-4 border-t bg-slate-50 flex justify-end">
@@ -234,7 +244,37 @@ export default function CashDashboard({ db, user }) {
             <span className="text-xs text-slate-500">{cashMovements.length} 筆流水</span>
           </div>
           {error && <p className="m-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">{error}</p>}
-          <div className="overflow-x-auto">
+          <div className="md:hidden divide-y divide-slate-100">
+            {isLoading ? (
+              <div className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</div>
+            ) : cashMovements.length === 0 ? (
+              <div className="p-6 text-center text-slate-400">未有現金流水。</div>
+            ) : cashMovements.map((movement) => {
+              const cashImpact = getCashMovementImpact(movement);
+              return (
+                <div key={movement.id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-bold text-slate-900">{CASH_MOVEMENT_TYPE_LABELS[movement.type] || movement.type}</p>
+                      <p className="text-xs text-slate-400">{movement.date}{movement.symbol ? ` · ${movement.symbol}` : ''}</p>
+                    </div>
+                    <p className={`font-bold ${cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(cashImpact, movement.currency)}</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div><p className="text-xs text-slate-500">金額</p><p className="font-semibold">{money(movement.amount, movement.currency)}</p></div>
+                    <div><p className="text-xs text-slate-500">現金影響</p><p className={`font-semibold ${cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(cashImpact, movement.currency)}</p></div>
+                    <div className="col-span-2"><p className="text-xs text-slate-500">備註</p><p className="text-slate-600 break-words">{movement.notes || '--'}</p></div>
+                  </div>
+                  <div className="flex justify-end">
+                    <button onClick={() => handleDelete(movement.id)} className="text-red-500 hover:bg-red-50 p-2 rounded" title="刪除現金流水">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                 <tr>

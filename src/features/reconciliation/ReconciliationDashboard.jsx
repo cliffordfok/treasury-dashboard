@@ -236,11 +236,11 @@ export default function ReconciliationDashboard({ db, user }) {
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <div className="bg-slate-900 text-white rounded-2xl shadow-lg p-5 sm:p-6 relative overflow-hidden">
-        <div className="absolute -top-6 -right-6 opacity-10 pointer-events-none"><ClipboardCheck size={160} /></div>
+      <div className="bg-slate-900 text-white rounded-xl shadow-sm p-4 sm:p-5 relative overflow-hidden">
+        <div className="absolute -top-4 -right-4 opacity-5 pointer-events-none"><ClipboardCheck size={112} /></div>
         <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">券商手動對帳</p>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">券商快照 vs 系統帳本</h2>
-        <p className="text-slate-300 text-sm mt-2 max-w-2xl">手動輸入券商現金及持倉快照，對比系統由美股 / ETF 交易總帳及現金流水帳計算出的結果。如使用 Firstrade，可直接參考 Firstrade 顯示的現金、股數及成本。</p>
+        <h2 className="text-xl sm:text-2xl font-semibold tracking-tight">券商快照 vs 系統帳本</h2>
+        <p className="text-slate-300 text-xs sm:text-sm mt-1.5 max-w-2xl">手動輸入券商現金及持倉快照，對比系統由美股 / ETF 交易總帳及現金流水帳計算出的結果。如使用 Firstrade，可直接參考 Firstrade 顯示的現金、股數及成本。</p>
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
@@ -267,7 +267,7 @@ export default function ReconciliationDashboard({ db, user }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[420px_1fr] gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(360px,460px)_1fr] gap-4">
         <form onSubmit={handleSave} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
             <div>
@@ -280,31 +280,31 @@ export default function ReconciliationDashboard({ db, user }) {
             </div>
             <button type="button" onClick={resetForm} className="text-xs bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg font-semibold">新增</button>
           </div>
-          <div className="p-4 grid grid-cols-2 gap-3">
+          <div className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">日期</label>
-              <input required type="date" value={formData.date} onChange={(event) => update('date', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              <input required type="date" value={formData.date} onChange={(event) => update('date', event.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">貨幣</label>
-              <input value={formData.currency} onChange={(event) => update('currency', event.target.value.toUpperCase())} className="w-full p-2 border rounded-lg text-sm uppercase" />
+              <input value={formData.currency} onChange={(event) => update('currency', event.target.value.toUpperCase())} className="w-full min-h-10 p-2 border rounded-lg text-sm uppercase" />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-500 mb-1">券商現金餘額</label>
-              <input required type="number" step="0.01" value={formData.brokerCashBalance} onChange={(event) => update('brokerCashBalance', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              <input required type="number" step="0.01" value={formData.brokerCashBalance} onChange={(event) => update('brokerCashBalance', event.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
               <p className="text-[11px] text-slate-500 mt-1">系統現金：{money(systemCashSummary.calculatedCashBalance, formData.currency || 'USD')}</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">券商市值</label>
-              <input type="number" min="0" step="0.01" value={formData.brokerTotalMarketValue} onChange={(event) => update('brokerTotalMarketValue', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              <input type="number" min="0" step="0.01" value={formData.brokerTotalMarketValue} onChange={(event) => update('brokerTotalMarketValue', event.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">券商帳戶總值</label>
-              <input type="number" min="0" step="0.01" value={formData.brokerTotalAccountValue} onChange={(event) => update('brokerTotalAccountValue', event.target.value)} className="w-full p-2 border rounded-lg text-sm" />
+              <input type="number" min="0" step="0.01" value={formData.brokerTotalAccountValue} onChange={(event) => update('brokerTotalAccountValue', event.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-500 mb-1">備註</label>
-              <textarea value={formData.notes} onChange={(event) => update('notes', event.target.value)} rows={2} className="w-full p-2 border rounded-lg text-sm" />
+              <textarea value={formData.notes} onChange={(event) => update('notes', event.target.value)} rows={2} className="w-full min-h-20 p-2 border rounded-lg text-sm" />
             </div>
           </div>
 
@@ -320,13 +320,13 @@ export default function ReconciliationDashboard({ db, user }) {
               {formData.holdings.length === 0 ? (
                 <p className="text-sm text-slate-400 bg-slate-50 rounded-lg p-3">尚未輸入券商持倉。</p>
               ) : formData.holdings.map((holding, index) => (
-                <div key={`${holding.symbol || 'row'}-${index}`} className="grid grid-cols-2 gap-2 border rounded-lg p-2 bg-slate-50/70">
-                  <input value={holding.symbol} onChange={(event) => updateHolding(index, 'symbol', event.target.value)} placeholder="Symbol" className="p-2 border rounded-md text-sm uppercase" />
-                  <input type="number" min="0" step="0.000001" value={holding.brokerQuantity} onChange={(event) => updateHolding(index, 'brokerQuantity', event.target.value)} placeholder="券商股數" className="p-2 border rounded-md text-sm" />
-                  <input type="number" min="0" step="0.01" value={holding.brokerCostBasis} onChange={(event) => updateHolding(index, 'brokerCostBasis', event.target.value)} placeholder="成本（可選）" className="p-2 border rounded-md text-sm" />
-                  <input type="number" min="0" step="0.01" value={holding.brokerMarketValue} onChange={(event) => updateHolding(index, 'brokerMarketValue', event.target.value)} placeholder="市值（可選）" className="p-2 border rounded-md text-sm" />
-                  <input value={holding.notes} onChange={(event) => updateHolding(index, 'notes', event.target.value)} placeholder="備註（可選）" className="col-span-2 p-2 border rounded-md text-sm" />
-                  <button type="button" onClick={() => removeHoldingRow(index)} className="col-span-2 text-xs text-red-600 hover:bg-red-50 rounded-md py-1.5 font-semibold">刪除此行</button>
+                <div key={`${holding.symbol || 'row'}-${index}`} className="grid grid-cols-1 sm:grid-cols-2 gap-2 border rounded-lg p-3 bg-slate-50/70">
+                  <input value={holding.symbol} onChange={(event) => updateHolding(index, 'symbol', event.target.value)} placeholder="Symbol" className="min-h-10 p-2 border rounded-md text-sm uppercase" />
+                  <input type="number" min="0" step="0.000001" value={holding.brokerQuantity} onChange={(event) => updateHolding(index, 'brokerQuantity', event.target.value)} placeholder="券商股數" className="min-h-10 p-2 border rounded-md text-sm" />
+                  <input type="number" min="0" step="0.01" value={holding.brokerCostBasis} onChange={(event) => updateHolding(index, 'brokerCostBasis', event.target.value)} placeholder="成本（可選）" className="min-h-10 p-2 border rounded-md text-sm" />
+                  <input type="number" min="0" step="0.01" value={holding.brokerMarketValue} onChange={(event) => updateHolding(index, 'brokerMarketValue', event.target.value)} placeholder="市值（可選）" className="min-h-10 p-2 border rounded-md text-sm" />
+                  <input value={holding.notes} onChange={(event) => updateHolding(index, 'notes', event.target.value)} placeholder="備註（可選）" className="sm:col-span-2 min-h-10 p-2 border rounded-md text-sm" />
+                  <button type="button" onClick={() => removeHoldingRow(index)} className="sm:col-span-2 text-xs text-red-600 hover:bg-red-50 rounded-md py-2 font-semibold">刪除此行</button>
                 </div>
               ))}
             </div>
@@ -345,7 +345,7 @@ export default function ReconciliationDashboard({ db, user }) {
             <div className="p-4 border-b border-slate-100">
               <h3 className="text-base font-bold text-slate-800">現金對帳</h3>
             </div>
-            <div className="grid grid-cols-3 gap-2 p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-4">
               <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">系統現金</p><p className="font-bold">{money(report.cashComparison.systemCashBalance, formData.currency || 'USD')}</p></div>
               <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">券商現金</p><p className="font-bold">{money(report.cashComparison.brokerCashBalance, formData.currency || 'USD')}</p></div>
               <div className={`p-3 rounded-lg border ${statusClass(report.cashComparison.status)}`}>
@@ -360,7 +360,27 @@ export default function ReconciliationDashboard({ db, user }) {
               <h3 className="text-base font-bold text-slate-800">持倉對帳</h3>
               <span className="text-xs text-slate-500">{report.holdingComparisons.length} 個 symbol</span>
             </div>
-            <div className="overflow-x-auto">
+            <div className="md:hidden divide-y divide-slate-100">
+              {report.holdingComparisons.length === 0 ? (
+                <div className="p-6 text-center text-slate-400">沒有持倉可對帳。</div>
+              ) : report.holdingComparisons.map((item) => (
+                <div key={item.symbol} className="p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="font-bold text-slate-900">{item.symbol}</p>
+                    <span className={`px-2 py-0.5 rounded border text-[10px] font-bold ${statusClass(item.status)}`}>{holdingStatusLabel(item.status)}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div><p className="text-xs text-slate-500">系統股數</p><p className="font-semibold">{shares(item.systemQuantity)}</p></div>
+                    <div><p className="text-xs text-slate-500">券商股數</p><p className="font-semibold">{shares(item.brokerQuantity)}</p></div>
+                    <div><p className="text-xs text-slate-500">股數差異</p><p className={Math.abs(item.quantityDifference) <= 0.000001 ? 'font-semibold text-slate-700' : 'font-semibold text-red-600'}>{shares(item.quantityDifference)}</p></div>
+                    <div><p className="text-xs text-slate-500">成本差異</p><p className={item.costDifference === null || Math.abs(item.costDifference) <= 0.01 ? 'font-semibold text-slate-700' : 'font-semibold text-red-600'}>{item.costDifference === null ? '--' : signedMoney(item.costDifference, formData.currency || 'USD')}</p></div>
+                    <div><p className="text-xs text-slate-500">系統成本</p><p className="font-semibold">{money(item.systemCostBasis, formData.currency || 'USD')}</p></div>
+                    <div><p className="text-xs text-slate-500">券商成本</p><p className="font-semibold">{money(item.brokerCostBasis, formData.currency || 'USD')}</p></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
                   <tr>

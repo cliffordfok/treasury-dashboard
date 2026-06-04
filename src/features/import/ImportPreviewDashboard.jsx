@@ -47,9 +47,9 @@ const SummaryCard = ({ label, value, tone = 'slate' }) => {
     orange: 'text-orange-600',
   };
   return (
-    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+    <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 min-w-0">
       <p className="text-[11px] text-slate-500 font-medium">{label}</p>
-      <p className={`text-xl font-bold ${toneClasses[tone] || toneClasses.slate}`}>{value}</p>
+      <p className={`text-xl font-bold truncate ${toneClasses[tone] || toneClasses.slate}`}>{value}</p>
     </div>
   );
 };
@@ -198,11 +198,11 @@ export default function ImportPreviewDashboard({ db, user }) {
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      <div className="bg-slate-900 text-white rounded-2xl shadow-lg p-5 sm:p-6 relative overflow-hidden">
-        <div className="absolute -top-6 -right-6 opacity-10 pointer-events-none"><Upload size={160} /></div>
+      <div className="bg-slate-900 text-white rounded-xl shadow-sm p-4 sm:p-5 relative overflow-hidden">
+        <div className="absolute -top-4 -right-4 opacity-5 pointer-events-none"><Upload size={112} /></div>
         <p className="text-slate-300 text-xs sm:text-sm font-medium mb-1.5">Import / 匯入預覽</p>
-        <h2 className="text-2xl sm:text-3xl font-bold tracking-tight">券商 CSV 匯入預覽</h2>
-        <p className="text-slate-300 text-sm mt-2 max-w-2xl">目前支援 Firstrade CSV 格式。上載 CSV 後會做解析、mapping、validation 及重複檢查預覽。</p>
+        <h2 className="text-xl sm:text-2xl font-semibold tracking-tight">券商 CSV 匯入預覽</h2>
+        <p className="text-slate-300 text-xs sm:text-sm mt-1.5 max-w-2xl">目前支援 Firstrade CSV 格式。上載 CSV 後會做解析、mapping、validation 及重複檢查預覽。</p>
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 p-4 sm:p-5">
@@ -211,15 +211,15 @@ export default function ImportPreviewDashboard({ db, user }) {
             <h3 className="text-base font-bold text-slate-800 flex items-center gap-2"><FileText size={18} className="text-blue-600" />選擇券商 CSV</h3>
             <p className="text-xs text-slate-500 mt-1">支援 header row、quoted fields、comma inside quotes、empty cells、CRLF / LF。</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <label className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 cursor-pointer">
+          <div className="flex flex-col sm:flex-row gap-2">
+            <label className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 cursor-pointer">
               <Upload size={16} /> 選擇 CSV
               <input type="file" accept=".csv,text/csv" onChange={handleFile} className="hidden" />
             </label>
-            <button type="button" onClick={reparse} disabled={!csvText} className="bg-slate-100 hover:bg-slate-200 disabled:opacity-40 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
+            <button type="button" onClick={reparse} disabled={!csvText} className="bg-slate-100 hover:bg-slate-200 disabled:opacity-40 px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
               <RefreshCw size={16} /> 重新解析
             </button>
-            <button type="button" onClick={clearFile} disabled={!csvText && !parseError} className="bg-slate-100 hover:bg-slate-200 disabled:opacity-40 px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
+            <button type="button" onClick={clearFile} disabled={!csvText && !parseError} className="bg-slate-100 hover:bg-slate-200 disabled:opacity-40 px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
               <Trash2 size={16} /> 清除檔案
             </button>
           </div>
@@ -256,7 +256,7 @@ export default function ImportPreviewDashboard({ db, user }) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-9 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-9 gap-3 sm:gap-4">
         <SummaryCard label="總 rows" value={preview?.summary?.totalRows ?? 0} />
         <SummaryCard label="已 mapping" value={preview?.summary?.mappedRows ?? 0} />
         <SummaryCard label="OK" value={preview?.summary?.okRows ?? 0} tone="emerald" />
@@ -330,7 +330,37 @@ export default function ImportPreviewDashboard({ db, user }) {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="md:hidden divide-y divide-slate-100">
+          {!csvText ? (
+            <div className="p-6 text-center text-slate-400">請先選擇券商 CSV 檔案。</div>
+          ) : filteredRows.length === 0 ? (
+            <div className="p-6 text-center text-slate-400">沒有符合篩選條件的 rows。</div>
+          ) : filteredRows.map((row) => (
+            <div key={`${row.rowNumber}-${row.fingerprint || row.activityType}`} className="p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-900">Row #{row.rowNumber}</p>
+                  <p className="text-xs text-slate-500 truncate">{targetLabel[row.targetDraft] || row.targetDraft}</p>
+                </div>
+                <span className={`px-2 py-0.5 rounded border text-[10px] font-bold ${statusClass(row.status)}`}>{statusLabel[row.status] || row.status}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div><p className="text-xs text-slate-500">Duplicate</p><p className="font-semibold break-words">{duplicateLabel[row.duplicateStatus] || row.duplicateStatus}</p></div>
+                <div><p className="text-xs text-slate-500">Symbol / Date</p><p className="font-semibold">{row.symbol || '--'} · {row.date || '--'}</p></div>
+                <div><p className="text-xs text-slate-500">Amount / Quantity</p><p className="font-semibold">{row.amountOrQuantity ?? '--'}</p></div>
+                <div><p className="text-xs text-slate-500">Activity</p><p className="font-semibold break-words">{row.activityType}</p></div>
+              </div>
+              {(row.errors.length > 0 || row.warnings.length > 0) && (
+                <div className="space-y-1 text-xs">
+                  {row.errors.length > 0 && <p className="text-red-600 break-words">{row.errors.join(' | ')}</p>}
+                  {row.warnings.length > 0 && <p className="text-amber-600 break-words">{row.warnings.join(' | ')}</p>}
+                </div>
+              )}
+              <button type="button" onClick={() => setSelectedRow(row)} className="text-blue-600 hover:bg-blue-50 rounded px-2 py-1 text-xs font-semibold">Details</button>
+            </div>
+          ))}
+        </div>
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
               <tr>

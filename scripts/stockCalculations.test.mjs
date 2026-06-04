@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { calculateStockPositions, getStockTradeCashImpact } from '../src/features/stocks/stockCalculations.js';
+import { normalizeStockTradeForStorage } from '../src/features/stocks/stockFirestore.js';
 
 const findPosition = (trades, symbol) => calculateStockPositions(trades).find((position) => position.symbol === symbol);
 const near = (actual, expected, message) => assert.ok(Math.abs(actual - expected) < 0.000001, `${message}: expected ${expected}, got ${actual}`);
@@ -93,3 +94,47 @@ const negativeOpening = findPosition([
   trade({ side: 'opening_position', quantity: -1, price: 450 }),
 ], 'VOO');
 assert.equal(negativeOpening, undefined, 'negative opening_position should not create a position');
+
+const editableTrades = [
+  trade({ id: 'edit-1', quantity: 2, price: 100, createdAt: '1' }),
+];
+let editedPosition = findPosition(
+  editableTrades.map((item) => (item.id === 'edit-1' ? { ...item, price: 120 } : item)),
+  'VOO',
+);
+near(editedPosition.remainingCost, 240, 'edited price updates remainingCost');
+near(editedPosition.averageCost, 120, 'edited price updates averageCost');
+
+editedPosition = findPosition(
+  editableTrades.map((item) => (item.id === 'edit-1' ? { ...item, quantity: 3 } : item)),
+  'VOO',
+);
+near(editedPosition.quantity, 3, 'edited quantity updates shares');
+near(editedPosition.remainingCost, 300, 'edited quantity updates remainingCost');
+
+const importedExistingTrade = {
+  id: 'imported-1',
+  createdAt: '2026-05-01T00:00:00.000Z',
+  source: 'firstrade_csv',
+  importFingerprint: 'stock_trade|VOO|2026-05-01',
+};
+const normalizedImportedEdit = normalizeStockTradeForStorage(
+  {
+    id: 'imported-1',
+    symbol: 'voo',
+    side: 'buy',
+    tradeDate: '2026-05-01',
+    quantity: 2,
+    price: 101,
+    commission: 0,
+    fees: 0,
+    currency: 'usd',
+    notes: 'edited',
+  },
+  'user-1',
+  importedExistingTrade,
+);
+assert.equal(normalizedImportedEdit.name, '', 'missing name normalizes to empty string');
+assert.equal(normalizedImportedEdit.createdAt, importedExistingTrade.createdAt, 'imported edit preserves createdAt');
+assert.equal(normalizedImportedEdit.source, importedExistingTrade.source, 'imported edit preserves source');
+assert.equal(normalizedImportedEdit.importFingerprint, importedExistingTrade.importFingerprint, 'imported edit preserves importFingerprint');

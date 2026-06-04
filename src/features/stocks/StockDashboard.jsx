@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Briefcase, DollarSign, Loader2, Plus, Trash2, TrendingUp, Wallet } from 'lucide-react';
+import { Briefcase, DollarSign, Edit2, Loader2, Plus, Trash2, TrendingUp, Wallet, XCircle } from 'lucide-react';
 import { EPSILON, calculateStockPortfolioTotals, calculateStockPositions, getStockTradeCashImpact, toNumber } from './stockCalculations';
-import { defaultStockTradeForm, deleteStockTrade, normalizeStockTradeForStorage, saveStockTrade, subscribeStockTrades } from './stockFirestore';
+import { defaultStockTradeForm, deleteStockTrade, normalizeStockTradeForStorage, saveStockTrade, subscribeStockTrades, updateStockTrade } from './stockFirestore';
 
 const money = (value, currency = 'USD') =>
   `${currency} ${toNumber(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -23,6 +23,8 @@ const sideLabel = (side) => {
 export default function StockDashboard({ db, user }) {
   const [stockTrades, setStockTrades] = useState([]);
   const [formData, setFormData] = useState(defaultStockTradeForm);
+  const [editingTradeId, setEditingTradeId] = useState('');
+  const [editingTrade, setEditingTrade] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -47,6 +49,10 @@ export default function StockDashboard({ db, user }) {
 
   const positions = useMemo(() => calculateStockPositions(stockTrades), [stockTrades]);
   const totals = useMemo(() => calculateStockPortfolioTotals(positions), [positions]);
+  const validationPositions = useMemo(
+    () => calculateStockPositions(editingTradeId ? stockTrades.filter((trade) => trade.id !== editingTradeId) : stockTrades),
+    [editingTradeId, stockTrades],
+  );
 
   const update = (field, value) => setFormData((prev) => ({ ...prev, [field]: value }));
   const updateSide = (value) => setFormData((prev) => ({
@@ -56,17 +62,45 @@ export default function StockDashboard({ db, user }) {
     fees: value === 'opening_position' ? 0 : prev.fees,
   }));
 
+  const resetForm = () => {
+    setFormData(defaultStockTradeForm());
+    setEditingTradeId('');
+    setEditingTrade(null);
+    setError('');
+  };
+
+  const handleEdit = (trade) => {
+    setEditingTradeId(trade.id);
+    setEditingTrade(trade);
+    setFormData({
+      ...defaultStockTradeForm(),
+      ...trade,
+      symbol: trade.symbol || '',
+      name: trade.name || '',
+      side: trade.side || 'buy',
+      tradeDate: trade.tradeDate || defaultStockTradeForm().tradeDate,
+      tradeTime: trade.tradeTime || '',
+      quantity: trade.quantity ?? '',
+      price: trade.price ?? '',
+      commission: trade.commission ?? 0,
+      fees: trade.fees ?? 0,
+      currency: trade.currency || 'USD',
+      notes: trade.notes || '',
+    });
+    setError('');
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     if (!user?.uid) return;
 
-    const normalized = normalizeStockTradeForStorage(formData, user.uid);
+    const normalized = normalizeStockTradeForStorage(formData, user.uid, editingTrade);
     if (!normalized.symbol || !normalized.tradeDate || normalized.quantity <= 0 || normalized.price < 0) {
-      setError('請輸入有效 Symbol、日期、數量及價格。');
+      setError('請輸入有效股票代號、日期、數量及價格。');
       return;
     }
     if (normalized.side === 'sell') {
-      const currentPosition = positions.find((position) => position.symbol === normalized.symbol);
+      const currentPosition = validationPositions.find((position) => position.symbol === normalized.symbol);
       const availableQuantity = currentPosition?.quantity || 0;
       if (normalized.quantity > availableQuantity + EPSILON) {
         setError(`持倉不足：${normalized.symbol} 現有 ${number(availableQuantity, 6)} 股，不可賣出 ${number(normalized.quantity, 6)} 股。`);
@@ -76,8 +110,12 @@ export default function StockDashboard({ db, user }) {
 
     setIsSaving(true);
     try {
-      await saveStockTrade(db, user.uid, normalized);
-      setFormData(defaultStockTradeForm());
+      if (editingTradeId) {
+        await updateStockTrade(db, user.uid, editingTradeId, normalized);
+      } else {
+        await saveStockTrade(db, user.uid, normalized);
+      }
+      resetForm();
       setError('');
     } catch (err) {
       setError(err.message || '未能儲存美股交易。');
@@ -130,7 +168,10 @@ export default function StockDashboard({ db, user }) {
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(340px,440px)_1fr] gap-4">
         <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 border-b border-slate-100">
-            <h3 className="text-sm font-medium text-slate-800 flex items-center gap-2"><Plus size={18} className="text-blue-600" />新增股票交易</h3>
+            <h3 className="text-sm font-medium text-slate-800 flex items-center gap-2">
+              {editingTradeId ? <Edit2 size={18} className="text-blue-600" /> : <Plus size={18} className="text-blue-600" />}
+              {editingTradeId ? '編輯股票交易' : '新增股票交易'}
+            </h3>
             <p className="text-xs text-slate-500 mt-1">Account 預設券商帳戶，可記錄美股及 ETF 買賣。</p>
           </div>
           <div className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -184,9 +225,15 @@ export default function StockDashboard({ db, user }) {
               <textarea value={formData.notes} onChange={(e) => update('notes', e.target.value)} rows={2} className="w-full min-h-20 p-2 border rounded-lg text-sm" />
             </div>
           </div>
-          <div className="p-4 border-t bg-slate-50 flex justify-end">
+          <div className="p-4 border-t bg-slate-50 flex flex-col sm:flex-row sm:justify-end gap-2">
+            {editingTradeId && (
+              <button type="button" onClick={resetForm} className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
+                <XCircle size={16} /> 取消編輯
+              </button>
+            )}
             <button disabled={isSaving} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center gap-2">
-              {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />} 儲存交易
+              {isSaving ? <Loader2 size={16} className="animate-spin" /> : editingTradeId ? <Edit2 size={16} /> : <Plus size={16} />}
+              {editingTradeId ? '儲存修改' : '儲存交易'}
             </button>
           </div>
         </form>
@@ -272,14 +319,20 @@ export default function StockDashboard({ db, user }) {
                         <p className="font-bold text-slate-900 truncate">{trade.symbol}</p>
                         <p className="text-xs text-slate-400">{trade.tradeDate}{trade.tradeTime ? ` · ${trade.tradeTime}` : ''}</p>
                       </div>
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white ${trade.side === 'sell' ? 'bg-red-500' : trade.side === 'opening_position' ? 'bg-blue-500' : 'bg-emerald-500'}`}>{sideLabel(trade.side)}</span>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white ${trade.side === 'sell' ? 'bg-red-500' : trade.side === 'opening_position' ? 'bg-blue-500' : 'bg-emerald-500'}`}>{sideLabel(trade.side)}</span>
+                        {trade.source === 'firstrade_csv' && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500">CSV 匯入</span>}
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3 text-sm">
                       <div><p className="text-xs text-slate-500">數量 × 價格</p><p className="font-semibold">{number(trade.quantity)} × {money(trade.price, trade.currency)}</p></div>
                       <div><p className="text-xs text-slate-500">手續費 / 費用</p><p className="font-semibold">{money(trade.commission, trade.currency)} / {money(trade.fees, trade.currency)}</p></div>
                       <div className="col-span-2"><p className="text-xs text-slate-500">現金影響</p><p className={`font-bold ${trade.side === 'opening_position' ? 'text-slate-500' : cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>{trade.side === 'opening_position' ? '不影響現金' : signedMoney(cashImpact, trade.currency)}</p></div>
                     </div>
-                    <div className="flex justify-end">
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => handleEdit(trade)} className="text-blue-500 hover:bg-blue-50 p-2 rounded" title="編輯交易">
+                        <Edit2 size={16} />
+                      </button>
                       <button onClick={() => handleDelete(trade.id)} className="text-red-500 hover:bg-red-50 p-2 rounded" title="刪除交易">
                         <Trash2 size={16} />
                       </button>
@@ -313,7 +366,10 @@ export default function StockDashboard({ db, user }) {
                     return (
                       <tr key={trade.id} className="hover:bg-slate-50">
                         <td className="p-3 whitespace-nowrap">{trade.tradeDate}<div className="text-[10px] text-slate-400">{trade.tradeTime || trade.accountId || 'firstrade'}</div></td>
-                        <td className="p-3"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white ${trade.side === 'sell' ? 'bg-red-500' : trade.side === 'opening_position' ? 'bg-blue-500' : 'bg-emerald-500'}`}>{sideLabel(trade.side)}</span></td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white ${trade.side === 'sell' ? 'bg-red-500' : trade.side === 'opening_position' ? 'bg-blue-500' : 'bg-emerald-500'}`}>{sideLabel(trade.side)}</span>
+                          {trade.source === 'firstrade_csv' && <div className="mt-1"><span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-500">CSV 匯入</span></div>}
+                        </td>
                         <td className="p-3 font-bold">{trade.symbol}<div className="text-[10px] text-slate-400 font-normal">{trade.name || '--'}</div></td>
                         <td className="p-3 text-right">{number(trade.quantity)}</td>
                         <td className="p-3 text-right">{money(trade.price, trade.currency)}</td>
@@ -323,6 +379,9 @@ export default function StockDashboard({ db, user }) {
                           {trade.side === 'opening_position' ? '不影響現金' : signedMoney(cashImpact, trade.currency)}
                         </td>
                         <td className="p-3 text-center">
+                          <button onClick={() => handleEdit(trade)} className="text-blue-500 hover:bg-blue-50 p-1.5 rounded" title="編輯交易">
+                            <Edit2 size={16} />
+                          </button>
                           <button onClick={() => handleDelete(trade.id)} className="text-red-500 hover:bg-red-50 p-1.5 rounded" title="刪除交易">
                             <Trash2 size={16} />
                           </button>

@@ -1,5 +1,5 @@
-import { collection, deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore';
-import { normalizeSymbol, toNumber } from './stockCalculations';
+import { collection, deleteDoc, doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
+import { normalizeSymbol, toNumber } from './stockCalculations.js';
 
 const makeStockTradeId = () => `stock-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -66,6 +66,21 @@ export const subscribeStockTrades = (db, userId, onTrades, onError) => {
 export const saveStockTrade = async (db, userId, trade) => {
   const tradeRef = doc(db, 'users', userId, 'stockTrades', trade.id);
   await setDoc(tradeRef, trade);
+};
+
+export const updateStockTrade = async (db, userId, tradeId, payload) => {
+  const tradeRef = doc(db, 'users', userId, 'stockTrades', tradeId);
+  const editablePayload = { ...payload };
+  delete editablePayload.id;
+  delete editablePayload.userId;
+  delete editablePayload.createdAt;
+  delete editablePayload.source;
+  delete editablePayload.importFingerprint;
+
+  await updateDoc(tradeRef, {
+    ...editablePayload,
+    updatedAt: payload.updatedAt || new Date().toISOString(),
+  });
 };
 
 export const deleteStockTrade = async (db, userId, tradeId) => {

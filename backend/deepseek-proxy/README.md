@@ -1,6 +1,7 @@
 # DeepSeek AI Proxy
 
-Cloudflare Worker proxy for the Treasury Dashboard AI features.
+Cloudflare Worker proxy for the Treasury Dashboard AI features and stock quote
+requests.
 
 The browser calls this worker through `VITE_AI_PROXY_URL`. The worker reads
 `DEEPSEEK_API_KEY` from Cloudflare secrets and calls DeepSeek server-side, so the
@@ -42,3 +43,22 @@ Optional worker variables in `wrangler.toml`:
 
 - `DEEPSEEK_MODEL`: defaults to `deepseek-v4-pro`.
 - `ALLOWED_ORIGIN`: comma-separated browser origins allowed to call this worker.
+
+## Stock Quotes
+
+The same worker can also serve the stock quote proxy contract used by the
+Portfolio Dashboard:
+
+```json
+{
+  "symbols": ["VOO", "NVDA"]
+}
+```
+
+The frontend will use `VITE_STOCK_QUOTE_PROXY_URL` when it is set. If it is not
+set, it can reuse `VITE_AI_PROXY_URL`, so GitHub Pages can call this worker for
+quotes without a separate proxy deployment.
+
+Stock quote requests do not use a DeepSeek API key. The worker calls Yahoo
+Finance unofficial quote data server-side and returns normalized quotes plus
+per-symbol errors.

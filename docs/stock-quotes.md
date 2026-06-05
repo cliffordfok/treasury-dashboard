@@ -26,6 +26,21 @@ For Firebase Functions, Netlify Functions, GitHub Pages, or any other static hos
 VITE_STOCK_QUOTE_PROXY_URL
 ```
 
+If you already use the included Cloudflare Worker for AI analysis, the same worker also accepts the stock quote contract after deploying the latest worker code. In that setup, the frontend can reuse:
+
+```text
+VITE_AI_PROXY_URL
+```
+
+Resolution order:
+
+1. `VITE_STOCK_QUOTE_PROXY_URL`
+2. `VITE_AI_PROXY_URL`
+3. `VITE_GEMINI_PROXY_URL`
+4. `/api/stock-quotes`
+
+GitHub Pages does not run `/api/stock-quotes`; it needs one of the proxy environment variables above.
+
 After changing any Vite environment variable, rebuild and redeploy the app. If the proxy is unavailable, users can still enter manual stock prices.
 
 ## Proxy Contract

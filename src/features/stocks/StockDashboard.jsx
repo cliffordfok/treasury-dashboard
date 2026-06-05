@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Briefcase, DollarSign, Edit2, Loader2, Plus, Trash2, TrendingUp, Wallet, XCircle } from 'lucide-react';
+import { Briefcase, DollarSign, Edit2, Loader2, Plus, RefreshCw, Trash2, TrendingUp, Wallet, XCircle } from 'lucide-react';
 import { EPSILON, calculateStockPortfolioTotals, calculateStockPositions, getStockTradeCashImpact, toNumber } from './stockCalculations';
 import { defaultStockTradeForm, deleteStockTrade, normalizeStockTradeForStorage, saveStockTrade, subscribeStockTrades, updateStockTrade } from './stockFirestore';
+import { fetchStockQuotes } from '../prices/stockQuoteClient.js';
+import { getStockPriceMap, saveManualStockPrice, saveStockPrices, subscribeStockPrices } from '../prices/stockPriceFirestore.js';
+import { attachPricesToPositions, calculateStockMarketTotals } from '../prices/stockPriceCalculations.js';
 
 const money = (value, currency = 'USD') =>
   `${currency} ${toNumber(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -14,6 +17,11 @@ const signedMoney = (value, currency = 'USD') => {
   return `${amount >= 0 ? '+' : ''}${money(amount, currency)}`;
 };
 
+const hasNumber = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+const nullableMoney = (value, currency = 'USD') => (hasNumber(value) ? money(value, currency) : '--');
+const signedNullableMoney = (value, currency = 'USD') => (hasNumber(value) ? signedMoney(value, currency) : '--');
+const todayInputValue = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0];
+
 const sideLabel = (side) => {
   if (side === 'sell') return '賣出';
   if (side === 'opening_position') return '期初持倉';
@@ -22,12 +30,17 @@ const sideLabel = (side) => {
 
 export default function StockDashboard({ db, user }) {
   const [stockTrades, setStockTrades] = useState([]);
+  const [stockPrices, setStockPrices] = useState([]);
   const [formData, setFormData] = useState(defaultStockTradeForm);
+  const [manualPriceForm, setManualPriceForm] = useState({ symbol: '', price: '', currency: 'USD', asOf: todayInputValue() });
   const [editingTradeId, setEditingTradeId] = useState('');
   const [editingTrade, setEditingTrade] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
+  const [isSavingManualPrice, setIsSavingManualPrice] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [priceError, setPriceError] = useState('');
 
   useEffect(() => {
     if (!db || !user?.uid) return undefined;
@@ -47,8 +60,24 @@ export default function StockDashboard({ db, user }) {
     );
   }, [db, user?.uid]);
 
+  useEffect(() => {
+    if (!db || !user?.uid) return undefined;
+    return subscribeStockPrices(
+      db,
+      user.uid,
+      (prices) => {
+        setStockPrices(prices);
+        setPriceError('');
+      },
+      (err) => setPriceError(err.message || 'Unable to load stock prices.'),
+    );
+  }, [db, user?.uid]);
+
   const positions = useMemo(() => calculateStockPositions(stockTrades), [stockTrades]);
   const totals = useMemo(() => calculateStockPortfolioTotals(positions), [positions]);
+  const priceMap = useMemo(() => getStockPriceMap(stockPrices), [stockPrices]);
+  const positionsWithPrices = useMemo(() => attachPricesToPositions(positions, priceMap), [positions, priceMap]);
+  const marketTotals = useMemo(() => calculateStockMarketTotals(positionsWithPrices), [positionsWithPrices]);
   const validationPositions = useMemo(
     () => calculateStockPositions(editingTradeId ? stockTrades.filter((trade) => trade.id !== editingTradeId) : stockTrades),
     [editingTradeId, stockTrades],
@@ -61,6 +90,50 @@ export default function StockDashboard({ db, user }) {
     commission: value === 'opening_position' ? 0 : prev.commission,
     fees: value === 'opening_position' ? 0 : prev.fees,
   }));
+  const updateManualPrice = (field, value) => setManualPriceForm((prev) => ({ ...prev, [field]: value }));
+
+  const handleRefreshPrices = async () => {
+    if (!db || !user?.uid) return;
+    const symbols = positions.map((position) => position.symbol).filter(Boolean);
+    if (symbols.length === 0) {
+      setPriceError('No stock positions to refresh.');
+      return;
+    }
+    setIsRefreshingPrices(true);
+    setPriceError('');
+    try {
+      const result = await fetchStockQuotes(symbols);
+      if (result.quotes.length > 0) {
+        await saveStockPrices(db, user.uid, result.quotes);
+      }
+      if (result.errors.length > 0) {
+        setPriceError(result.errors.map((item) => `${item.symbol}: ${item.error}`).join(' / '));
+      }
+    } catch (err) {
+      setPriceError(err.message || 'Unable to refresh stock prices.');
+    } finally {
+      setIsRefreshingPrices(false);
+    }
+  };
+
+  const handleSaveManualPrice = async (event) => {
+    event.preventDefault();
+    if (!db || !user?.uid) return;
+    setIsSavingManualPrice(true);
+    setPriceError('');
+    try {
+      await saveManualStockPrice(db, user.uid, {
+        ...manualPriceForm,
+        symbol: manualPriceForm.symbol.toUpperCase(),
+        asOf: manualPriceForm.asOf ? new Date(`${manualPriceForm.asOf}T00:00:00`).toISOString() : new Date().toISOString(),
+      });
+      setManualPriceForm({ symbol: '', price: '', currency: 'USD', asOf: todayInputValue() });
+    } catch (err) {
+      setPriceError(err.message || 'Unable to save manual stock price.');
+    } finally {
+      setIsSavingManualPrice(false);
+    }
+  };
 
   const resetForm = () => {
     setFormData(defaultStockTradeForm());
@@ -165,6 +238,67 @@ export default function StockDashboard({ db, user }) {
         </div>
       </div>
 
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 min-w-0">
+          <p className="text-[11px] text-slate-500 font-medium leading-tight">Market Value</p>
+          <p className="text-base sm:text-xl font-bold text-slate-800 truncate">{nullableMoney(marketTotals.totalMarketValue)}</p>
+          <p className="text-[10px] text-slate-400 mt-1 truncate">From saved stockPrices</p>
+        </div>
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 min-w-0">
+          <p className="text-[11px] text-slate-500 font-medium leading-tight">Unrealized P&amp;L</p>
+          <p className={`text-base sm:text-xl font-bold truncate ${marketTotals.totalUnrealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedNullableMoney(marketTotals.totalUnrealizedPnl)}</p>
+          <p className="text-[10px] text-slate-400 mt-1 truncate">Market value - remaining cost</p>
+        </div>
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 min-w-0">
+          <p className="text-[11px] text-slate-500 font-medium leading-tight">Priced Symbols</p>
+          <p className="text-base sm:text-xl font-bold text-slate-800 truncate">{marketTotals.pricedSymbolCount} / {positions.length}</p>
+          <p className="text-[10px] text-slate-400 mt-1 truncate">{marketTotals.missingPriceCount} missing</p>
+        </div>
+        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 min-w-0">
+          <p className="text-[11px] text-slate-500 font-medium leading-tight">Quote Status</p>
+          <p className={`text-base sm:text-xl font-bold truncate ${marketTotals.stalePriceCount > 0 ? 'text-amber-600' : 'text-slate-800'}`}>{marketTotals.stalePriceCount} stale</p>
+          <p className="text-[10px] text-slate-400 mt-1 truncate">Older than 3 calendar days</p>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-medium text-slate-800">Stock quote update</h3>
+            <p className="text-xs text-slate-500 mt-1">Uses a server-side proxy. Current source: Yahoo Finance unofficial.</p>
+          </div>
+          <button type="button" onClick={handleRefreshPrices} disabled={isRefreshingPrices || positions.length === 0} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
+            {isRefreshingPrices ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            Refresh quotes
+          </button>
+        </div>
+        <form onSubmit={handleSaveManualPrice} className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-5 gap-3 bg-slate-50/60">
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Manual symbol</label>
+            <input value={manualPriceForm.symbol} onChange={(e) => updateManualPrice('symbol', e.target.value.toUpperCase())} placeholder="VOO" className="w-full min-h-10 p-2 border rounded-lg text-sm uppercase" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Price</label>
+            <input type="number" min="0" step="0.0001" value={manualPriceForm.price} onChange={(e) => updateManualPrice('price', e.target.value)} placeholder="693.12" className="w-full min-h-10 p-2 border rounded-lg text-sm" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Currency</label>
+            <input value={manualPriceForm.currency} onChange={(e) => updateManualPrice('currency', e.target.value.toUpperCase())} className="w-full min-h-10 p-2 border rounded-lg text-sm uppercase" />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">As of</label>
+            <input type="date" value={manualPriceForm.asOf} onChange={(e) => updateManualPrice('asOf', e.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
+          </div>
+          <div className="flex items-end">
+            <button type="submit" disabled={isSavingManualPrice} className="w-full bg-slate-800 hover:bg-slate-900 disabled:bg-slate-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
+              {isSavingManualPrice ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+              Save price
+            </button>
+          </div>
+          {priceError && <p className="sm:col-span-5 text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-3">{priceError}</p>}
+        </form>
+      </div>
+
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(340px,440px)_1fr] gap-4">
         <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="p-4 border-b border-slate-100">
@@ -247,9 +381,9 @@ export default function StockDashboard({ db, user }) {
             <div className="md:hidden divide-y divide-slate-100">
               {isLoading ? (
                 <div className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</div>
-              ) : positions.length === 0 ? (
+              ) : positionsWithPrices.length === 0 ? (
                 <div className="p-6 text-center text-slate-400">未有股票交易。</div>
-              ) : positions.map((position) => (
+              ) : positionsWithPrices.map((position) => (
                 <div key={position.symbol} className="p-4 space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -263,6 +397,9 @@ export default function StockDashboard({ db, user }) {
                     <div><p className="text-xs text-slate-500">平均成本</p><p className="font-semibold">{money(position.averageCost, position.currency)}</p></div>
                     <div><p className="text-xs text-slate-500">剩餘成本</p><p className="font-semibold">{money(position.remainingCost, position.currency)}</p></div>
                     <div><p className="text-xs text-slate-500">已實現盈虧</p><p className={`font-semibold ${position.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(position.realizedPnl, position.currency)}</p></div>
+                    <div><p className="text-xs text-slate-500">Current Price</p><p className="font-semibold">{nullableMoney(position.currentPrice, position.currency)}</p></div>
+                    <div><p className="text-xs text-slate-500">Market Value</p><p className="font-semibold">{nullableMoney(position.marketValue, position.currency)}</p></div>
+                    <div className="col-span-2"><p className="text-xs text-slate-500">Unrealized P&amp;L</p><p className={`font-semibold ${hasNumber(position.unrealizedPnl) && position.unrealizedPnl < 0 ? 'text-red-600' : 'text-green-600'}`}>{signedNullableMoney(position.unrealizedPnl, position.currency)}{hasNumber(position.unrealizedPnlPercent) ? ` (${position.unrealizedPnlPercent.toFixed(2)}%)` : ''}</p></div>
                   </div>
                 </div>
               ))}
@@ -276,22 +413,26 @@ export default function StockDashboard({ db, user }) {
                     <th className="p-3 text-right">平均成本</th>
                     <th className="p-3 text-right">剩餘成本</th>
                     <th className="p-3 text-right">已實現盈虧</th>
-                    <th className="p-3 text-right">未實現盈虧</th>
+                    <th className="p-3 text-right">Current Price</th>
+                    <th className="p-3 text-right">Market Value</th>
+                    <th className="p-3 text-right">Unrealized P&amp;L</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {isLoading ? (
-                    <tr><td colSpan="6" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</td></tr>
-                  ) : positions.length === 0 ? (
-                    <tr><td colSpan="6" className="p-6 text-center text-slate-400">未有股票交易。</td></tr>
-                  ) : positions.map((position) => (
+                    <tr><td colSpan="8" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</td></tr>
+                  ) : positionsWithPrices.length === 0 ? (
+                    <tr><td colSpan="8" className="p-6 text-center text-slate-400">未有股票交易。</td></tr>
+                  ) : positionsWithPrices.map((position) => (
                     <tr key={position.symbol} className="hover:bg-slate-50">
                       <td className="p-3 font-bold text-slate-800">{position.symbol}<div className="text-[10px] text-slate-400 font-normal">{position.name || position.currency}</div></td>
                       <td className="p-3 text-right font-medium">{number(position.quantity)}</td>
                       <td className="p-3 text-right">{money(position.averageCost, position.currency)}</td>
                       <td className="p-3 text-right">{money(position.remainingCost, position.currency)}</td>
                       <td className={`p-3 text-right font-bold ${position.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(position.realizedPnl, position.currency)}</td>
-                      <td className="p-3 text-right text-slate-400">暫未接報價</td>
+                      <td className="p-3 text-right">{nullableMoney(position.currentPrice, position.currency)}{position.isPriceStale && <div className="text-[10px] text-amber-600">Stale</div>}</td>
+                      <td className="p-3 text-right">{nullableMoney(position.marketValue, position.currency)}</td>
+                      <td className={`p-3 text-right font-bold ${hasNumber(position.unrealizedPnl) && position.unrealizedPnl < 0 ? 'text-red-600' : 'text-green-600'}`}>{signedNullableMoney(position.unrealizedPnl, position.currency)}</td>
                     </tr>
                   ))}
                 </tbody>

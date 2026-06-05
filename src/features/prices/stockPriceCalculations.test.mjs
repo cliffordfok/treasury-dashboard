@@ -5,12 +5,12 @@ import {
   parseYahooQuoteResponse,
 } from './stockPriceCalculations.js';
 import {
+  buildStockQuoteProxyErrorMessage,
   DEFAULT_STOCK_QUOTE_PROXY_URL,
   fetchStockQuotes,
   getStockQuoteProxyUrl,
   normalizeStockQuoteProxyResponse,
   resolveStockQuoteProxyUrl,
-  STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE,
 } from './stockQuoteClient.js';
 import {
   filterQuotesForSave,
@@ -19,9 +19,39 @@ import {
   shouldAttemptAutoRefresh,
   shouldPreserveManualPrice,
 } from './autoQuoteRefresh.js';
+import stockQuoteApiHandler from '../../../api/stock-quotes.js';
+import {
+  handleStockQuoteRequest,
+  normalizeStockSymbols,
+  parseYahooQuotePayload,
+} from '../../../workers/stock-quotes-worker.js';
 
 const near = (actual, expected, message) =>
   assert.ok(Math.abs(actual - expected) < 0.000001, `${message}: expected ${expected}, got ${actual}`);
+
+const mockVercelResponse = () => {
+  const response = {
+    statusCode: 200,
+    headers: {},
+    body: '',
+    setHeader(key, value) {
+      this.headers[key] = value;
+    },
+    end(value = '') {
+      this.body = value;
+    },
+    json() {
+      return this.body ? JSON.parse(this.body) : null;
+    },
+  };
+  return response;
+};
+
+const makeYahooFetch = (payload, ok = true, status = 200) => async () => ({
+  ok,
+  status,
+  json: async () => payload,
+});
 
 const yahoo = parseYahooQuoteResponse(
   {
@@ -55,6 +85,17 @@ const missingPrice = parseYahooQuoteResponse(
 );
 assert.equal(missingPrice.quotes.length, 0, 'missing price creates no quote');
 assert.equal(missingPrice.errors[0].symbol, 'XYZ', 'missing price error symbol');
+
+const workerMissingPrice = parseYahooQuotePayload(
+  { quoteResponse: { result: [{ symbol: 'MU', currency: 'USD' }] } },
+  ['MU'],
+);
+assert.equal(workerMissingPrice.quotes.length, 0, 'worker missing price creates no quote');
+assert.equal(workerMissingPrice.errors[0].symbol, 'MU', 'worker missing price error symbol');
+
+assert.deepEqual(normalizeStockSymbols(['voo', 'VOO', 'BRK.B']), ['VOO', 'BRK.B'], 'worker normalizes symbols');
+assert.throws(() => normalizeStockSymbols(['bad symbol']), /Invalid symbol/, 'worker rejects invalid symbol');
+assert.throws(() => normalizeStockSymbols(Array.from({ length: 26 }, (_, index) => `T${index}`)), /Maximum 25/, 'worker rejects too many symbols');
 
 const positions = [
   { symbol: 'VOO', quantity: 2, remainingCost: 1000, currency: 'USD' },
@@ -111,7 +152,7 @@ await assert.rejects(
       return { ok: false, status: 404, text: async () => 'not found' };
     },
   }),
-  new RegExp(STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE),
+  (error) => error.message.includes('Proxy URL: /api/stock-quotes') && error.message.includes('HTTP 404'),
   '404 proxy unavailable error',
 );
 
@@ -121,8 +162,17 @@ await assert.rejects(
       throw new Error('network failed');
     },
   }),
-  new RegExp(STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE),
+  (error) => error.message.includes('Proxy URL: /api/stock-quotes') && error.message.includes('network failed'),
   'network proxy unavailable error',
+);
+
+await assert.rejects(
+  () => fetchStockQuotes(['VOO'], {
+    proxyUrl: 'https://worker.example.com',
+    fetchImpl: async () => ({ ok: false, status: 405, text: async () => 'method not allowed' }),
+  }),
+  (error) => error.message.includes('Proxy URL: https://worker.example.com') && error.message.includes('HTTP 405') && error.message.includes('GitHub Pages'),
+  '405 proxy error includes URL and deployment guidance',
 );
 
 const fetched = await fetchStockQuotes(['voo'], {
@@ -140,6 +190,90 @@ const fetched = await fetchStockQuotes(['voo'], {
   },
 });
 near(fetched.quotes[0].price, 601, 'fetch proxy quote');
+
+let apiRes = mockVercelResponse();
+await stockQuoteApiHandler({ method: 'GET' }, apiRes);
+assert.equal(apiRes.statusCode, 200, 'Vercel API GET health status');
+assert.equal(apiRes.json().ok, true, 'Vercel API GET health body');
+assert.equal(apiRes.headers['Access-Control-Allow-Methods'], 'GET, POST, OPTIONS', 'Vercel API CORS methods');
+
+apiRes = mockVercelResponse();
+await stockQuoteApiHandler({ method: 'OPTIONS' }, apiRes);
+assert.equal(apiRes.statusCode, 204, 'Vercel API OPTIONS status');
+
+const originalFetch = globalThis.fetch;
+globalThis.fetch = makeYahooFetch({
+  quoteResponse: {
+    result: [{ symbol: 'VOO', regularMarketPrice: 600, currency: 'USD', regularMarketTime: 1780593600 }],
+  },
+});
+try {
+  apiRes = mockVercelResponse();
+  await stockQuoteApiHandler({ method: 'POST', body: { symbols: ['voo'] } }, apiRes);
+  assert.equal(apiRes.statusCode, 200, 'Vercel API POST status');
+  assert.equal(apiRes.json().quotes[0].symbol, 'VOO', 'Vercel API POST quote symbol');
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+apiRes = mockVercelResponse();
+await stockQuoteApiHandler({ method: 'DELETE' }, apiRes);
+assert.equal(apiRes.statusCode, 405, 'Vercel API invalid method status');
+
+let workerResponse = await handleStockQuoteRequest(new Request('https://quotes.example.com', { method: 'GET' }));
+assert.equal(workerResponse.status, 200, 'Worker GET status');
+assert.equal((await workerResponse.json()).ok, true, 'Worker GET health body');
+
+workerResponse = await handleStockQuoteRequest(new Request('https://quotes.example.com', { method: 'OPTIONS' }));
+assert.equal(workerResponse.status, 204, 'Worker OPTIONS status');
+assert.equal(workerResponse.headers.get('Access-Control-Allow-Origin'), '*', 'Worker CORS origin');
+
+workerResponse = await handleStockQuoteRequest(
+  new Request('https://quotes.example.com', {
+    method: 'POST',
+    body: JSON.stringify({ symbols: ['voo'] }),
+    headers: { 'Content-Type': 'application/json' },
+  }),
+  makeYahooFetch({
+    quoteResponse: {
+      result: [{ symbol: 'VOO', regularMarketPrice: 602, currency: 'USD', regularMarketTime: 1780593600 }],
+    },
+  }),
+);
+assert.equal(workerResponse.status, 200, 'Worker POST status');
+near((await workerResponse.json()).quotes[0].price, 602, 'Worker POST quote price');
+
+workerResponse = await handleStockQuoteRequest(
+  new Request('https://quotes.example.com', {
+    method: 'POST',
+    body: JSON.stringify({ symbols: ['bad symbol'] }),
+    headers: { 'Content-Type': 'application/json' },
+  }),
+  makeYahooFetch({}),
+);
+assert.equal(workerResponse.status, 400, 'Worker invalid symbol status');
+
+workerResponse = await handleStockQuoteRequest(
+  new Request('https://quotes.example.com', {
+    method: 'POST',
+    body: JSON.stringify({ symbols: Array.from({ length: 26 }, (_, index) => `T${index}`) }),
+    headers: { 'Content-Type': 'application/json' },
+  }),
+  makeYahooFetch({}),
+);
+assert.equal(workerResponse.status, 400, 'Worker too many symbols status');
+
+workerResponse = await handleStockQuoteRequest(
+  new Request('https://quotes.example.com', {
+    method: 'POST',
+    body: JSON.stringify({ symbols: ['MU'] }),
+    headers: { 'Content-Type': 'application/json' },
+  }),
+  makeYahooFetch({ quoteResponse: { result: [{ symbol: 'MU', currency: 'USD' }] } }),
+);
+const workerMissingQuote = await workerResponse.json();
+assert.equal(workerMissingQuote.quotes.length, 0, 'Worker missing price quote count');
+assert.equal(workerMissingQuote.errors[0].symbol, 'MU', 'Worker missing price error symbol');
 
 const q3Now = new Date('2026-06-05T12:00:00.000Z');
 const q3Positions = [

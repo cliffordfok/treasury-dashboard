@@ -4,6 +4,15 @@ const SYMBOL_PATTERN = /^[A-Z0-9.-]+$/;
 const MAX_SYMBOLS = 25;
 const YAHOO_QUOTE_URL = 'https://query1.finance.yahoo.com/v7/finance/quote';
 const TIMEOUT_MS = 8000;
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+const HEALTH_PAYLOAD = {
+  ok: true,
+  message: 'Stock quote proxy is available. Use POST with symbols.',
+};
 
 const normalizeSymbols = (symbols = []) => {
   if (!Array.isArray(symbols)) throw new Error('symbols must be an array');
@@ -28,10 +37,23 @@ const readBody = async (req) => {
 const sendJson = (res, status, payload) => {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json');
+  Object.entries(CORS_HEADERS).forEach(([key, value]) => res.setHeader(key, value));
   res.end(JSON.stringify(payload));
 };
 
 export default async function handler(req, res) {
+  if (req.method === 'OPTIONS') {
+    res.statusCode = 204;
+    Object.entries(CORS_HEADERS).forEach(([key, value]) => res.setHeader(key, value));
+    res.end();
+    return;
+  }
+
+  if (req.method === 'GET') {
+    sendJson(res, 200, HEALTH_PAYLOAD);
+    return;
+  }
+
   if (req.method !== 'POST') {
     sendJson(res, 405, { error: 'Method not allowed' });
     return;
@@ -83,4 +105,3 @@ export default async function handler(req, res) {
     clearTimeout(timeout);
   }
 }
-

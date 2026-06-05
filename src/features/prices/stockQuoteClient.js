@@ -3,8 +3,17 @@ import { normalizeStockQuote, STOCK_QUOTE_PROVIDER, STOCK_QUOTE_TYPE } from './s
 const SYMBOL_PATTERN = /^[A-Z0-9.-]+$/;
 const MAX_SYMBOLS = 25;
 export const DEFAULT_STOCK_QUOTE_PROXY_URL = '/api/stock-quotes';
-export const STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE =
-  '股票報價 Proxy 未可用。如使用 Vercel，請確認 api/stock-quotes.js 已部署；如使用 GitHub Pages，請部署 Cloudflare Worker / Firebase / Netlify server-side proxy，並設定 VITE_STOCK_QUOTE_PROXY_URL 或 VITE_AI_PROXY_URL 指向該 proxy。';
+export const buildStockQuoteProxyErrorMessage = ({ proxyUrl, status, detail } = {}) => {
+  const statusText = status ? `HTTP ${status}` : 'network error';
+  const detailText = detail ? ` ${detail}` : '';
+  return [
+    `股票報價 Proxy 未可用。Proxy URL: ${proxyUrl || '(not configured)'}。Status: ${statusText}.${detailText}`,
+    '建議：1. Vercel 使用 /api/stock-quotes。',
+    '2. GitHub Pages 請部署 Cloudflare Worker，並設定 VITE_STOCK_QUOTE_PROXY_URL 指向可用的 Worker URL。',
+    '3. 修改 VITE env 後需要重新 build / deploy。',
+  ].join(' ');
+};
+export const STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE = buildStockQuoteProxyErrorMessage();
 
 export const resolveStockQuoteProxyUrl = (env = {}) =>
   env.VITE_STOCK_QUOTE_PROXY_URL || env.VITE_AI_PROXY_URL || env.VITE_GEMINI_PROXY_URL || DEFAULT_STOCK_QUOTE_PROXY_URL;
@@ -59,10 +68,10 @@ export const fetchStockQuotes = async (symbols = [], options = {}) => {
       body: JSON.stringify({ symbols: normalizedSymbols }),
     });
   } catch (error) {
-    throw new Error(`${STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE}${error?.message ? ` (${error.message})` : ''}`);
+    throw new Error(buildStockQuoteProxyErrorMessage({ proxyUrl, detail: error?.message ? `(${error.message})` : '' }));
   }
 
-  if (!response.ok) throw new Error(`${STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE} (HTTP ${response.status})`);
+  if (!response.ok) throw new Error(buildStockQuoteProxyErrorMessage({ proxyUrl, status: response.status }));
 
   const payload = await response.json();
   return normalizeStockQuoteProxyResponse(payload, normalizedSymbols);

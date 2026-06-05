@@ -89,6 +89,73 @@ Per-symbol errors should be returned without failing the full request:
 }
 ```
 
+## Deployment
+
+### Vercel
+
+Vercel can run the included serverless API route:
+
+```text
+/api/stock-quotes
+```
+
+`api/stock-quotes.js` supports:
+
+- `GET` health check
+- `POST` quote requests
+- `OPTIONS` CORS preflight
+
+No extra API key is required.
+
+### GitHub Pages
+
+GitHub Pages is static hosting. It cannot run `api/stock-quotes.js`.
+
+If the app is deployed on GitHub Pages, `/api/stock-quotes` may return `404` or
+`405` because it is handled as a static route. Use an external server-side proxy
+instead.
+
+### Cloudflare Worker
+
+The standalone Worker proxy lives at:
+
+```text
+workers/stock-quotes-worker.js
+```
+
+Deployment steps:
+
+1. Create a Cloudflare Worker.
+2. Paste the contents of `workers/stock-quotes-worker.js`.
+3. Deploy the Worker.
+4. Copy the Worker URL.
+5. Set the frontend environment variable:
+
+```text
+VITE_STOCK_QUOTE_PROXY_URL=https://your-worker-url
+```
+
+6. Rebuild and redeploy the frontend.
+
+You can test the proxy with:
+
+```bash
+curl -X POST "https://your-worker-url" \
+  -H "Content-Type: application/json" \
+  -d '{"symbols":["VOO","GOOGL","MU","NVDA"]}'
+```
+
+Expected response shape:
+
+```json
+{
+  "provider": "yahoo_finance_unofficial",
+  "quoteType": "delayed_or_regular_market",
+  "quotes": [],
+  "errors": []
+}
+```
+
 ## Proxy Safety Rules
 
 - Uppercase symbols before calling Yahoo Finance.

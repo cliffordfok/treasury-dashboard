@@ -5,8 +5,11 @@ import {
   parseYahooQuoteResponse,
 } from './stockPriceCalculations.js';
 import {
+  DEFAULT_STOCK_QUOTE_PROXY_URL,
   fetchStockQuotes,
+  getStockQuoteProxyUrl,
   normalizeStockQuoteProxyResponse,
+  STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE,
 } from './stockQuoteClient.js';
 
 const near = (actual, expected, message) =>
@@ -88,8 +91,29 @@ const proxyPayload = normalizeStockQuoteProxyResponse(
 assert.equal(proxyPayload.quotes[0].symbol, 'VOO', 'proxy normalizes symbol');
 assert.equal(proxyPayload.errors.length, 2, 'proxy adds missing requested error');
 
-await assert.rejects(() => fetchStockQuotes(['VOO'], { proxyUrl: '', fetchImpl: async () => ({}) }), /Proxy URL/, 'missing proxy URL error');
+assert.equal(getStockQuoteProxyUrl(), DEFAULT_STOCK_QUOTE_PROXY_URL, 'default proxy URL');
 await assert.rejects(() => fetchStockQuotes(['bad symbol'], { proxyUrl: '/api/stock-quotes', fetchImpl: async () => ({}) }), /Invalid stock symbol/, 'invalid symbol');
+
+await assert.rejects(
+  () => fetchStockQuotes(['VOO'], {
+    fetchImpl: async (url) => {
+      assert.equal(url, DEFAULT_STOCK_QUOTE_PROXY_URL, 'default fetch URL');
+      return { ok: false, status: 404, text: async () => 'not found' };
+    },
+  }),
+  new RegExp(STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE),
+  '404 proxy unavailable error',
+);
+
+await assert.rejects(
+  () => fetchStockQuotes(['VOO'], {
+    fetchImpl: async () => {
+      throw new Error('network failed');
+    },
+  }),
+  new RegExp(STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE),
+  'network proxy unavailable error',
+);
 
 const fetched = await fetchStockQuotes(['voo'], {
   proxyUrl: '/api/stock-quotes',
@@ -106,4 +130,3 @@ const fetched = await fetchStockQuotes(['voo'], {
   },
 });
 near(fetched.quotes[0].price, 601, 'fetch proxy quote');
-

@@ -2,8 +2,11 @@ import { normalizeStockQuote, STOCK_QUOTE_PROVIDER, STOCK_QUOTE_TYPE } from './s
 
 const SYMBOL_PATTERN = /^[A-Z0-9.-]+$/;
 const MAX_SYMBOLS = 25;
+export const DEFAULT_STOCK_QUOTE_PROXY_URL = '/api/stock-quotes';
+export const STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE =
+  '股票報價 Proxy 未可用。如使用 Vercel，請確認 api/stock-quotes.js 已部署；如使用 Firebase / Netlify / GitHub Pages，請設定 VITE_STOCK_QUOTE_PROXY_URL 指向可用的 server-side proxy。';
 
-const getProxyUrl = () => import.meta.env?.VITE_STOCK_QUOTE_PROXY_URL || '';
+export const getStockQuoteProxyUrl = () => import.meta.env?.VITE_STOCK_QUOTE_PROXY_URL || DEFAULT_STOCK_QUOTE_PROXY_URL;
 
 export const normalizeQuoteSymbols = (symbols = []) => {
   const normalized = [...new Set(symbols.map((symbol) => String(symbol || '').trim().toUpperCase()).filter(Boolean))];
@@ -42,23 +45,22 @@ export const normalizeStockQuoteProxyResponse = (payload = {}, requestedSymbols 
 
 export const fetchStockQuotes = async (symbols = [], options = {}) => {
   const normalizedSymbols = normalizeQuoteSymbols(symbols);
-  const proxyUrl = options.proxyUrl ?? getProxyUrl();
-  if (!proxyUrl) {
-    throw new Error('Please configure the stock quote Proxy URL (VITE_STOCK_QUOTE_PROXY_URL).');
-  }
+  const proxyUrl = options.proxyUrl || getStockQuoteProxyUrl();
   const fetchImpl = options.fetchImpl || fetch;
-  const response = await fetchImpl(proxyUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbols: normalizedSymbols }),
-  });
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`Stock quote proxy error: HTTP ${response.status}${text ? ` ${text.slice(0, 120)}` : ''}`);
+  let response;
+  try {
+    response = await fetchImpl(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbols: normalizedSymbols }),
+    });
+  } catch (error) {
+    throw new Error(`${STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE}${error?.message ? ` (${error.message})` : ''}`);
   }
+
+  if (!response.ok) throw new Error(`${STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE} (HTTP ${response.status})`);
 
   const payload = await response.json();
   return normalizeStockQuoteProxyResponse(payload, normalizedSymbols);
 };
-

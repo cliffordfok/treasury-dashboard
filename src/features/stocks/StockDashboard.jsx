@@ -264,7 +264,11 @@ export default function StockDashboard({ db, user }) {
     const lastAttemptKey = getAutoQuoteLastAttemptKey(user.uid);
     const lastAttempt = localStorage.getItem(lastAttemptKey);
     if (!shouldAttemptAutoRefresh(lastAttempt, AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES)) {
-      setAutoQuoteStatus((prev) => ({ ...prev, lastAttempt: lastAttempt || prev.lastAttempt, message: '自動更新 cooldown 中。' }));
+      setAutoQuoteStatus((prev) => ({
+        ...prev,
+        lastAttempt: lastAttempt || prev.lastAttempt,
+        message: '自動更新 cooldown 中；如 proxy 已修復，可按 Refresh quotes 立即重試。',
+      }));
       return;
     }
 

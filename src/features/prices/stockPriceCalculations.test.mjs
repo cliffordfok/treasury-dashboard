@@ -9,6 +9,7 @@ import {
   fetchStockQuotes,
   getStockQuoteProxyUrl,
   normalizeStockQuoteProxyResponse,
+  resolveStockQuoteProxyUrl,
   STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE,
 } from './stockQuoteClient.js';
 import {
@@ -99,6 +100,8 @@ assert.equal(proxyPayload.quotes[0].symbol, 'VOO', 'proxy normalizes symbol');
 assert.equal(proxyPayload.errors.length, 2, 'proxy adds missing requested error');
 
 assert.equal(getStockQuoteProxyUrl(), DEFAULT_STOCK_QUOTE_PROXY_URL, 'default proxy URL');
+assert.equal(resolveStockQuoteProxyUrl({ VITE_AI_PROXY_URL: 'https://worker.example.com' }), 'https://worker.example.com', 'AI proxy fallback URL');
+assert.equal(resolveStockQuoteProxyUrl({ VITE_STOCK_QUOTE_PROXY_URL: 'https://quotes.example.com', VITE_AI_PROXY_URL: 'https://worker.example.com' }), 'https://quotes.example.com', 'stock quote env takes priority');
 await assert.rejects(() => fetchStockQuotes(['bad symbol'], { proxyUrl: '/api/stock-quotes', fetchImpl: async () => ({}) }), /Invalid stock symbol/, 'invalid symbol');
 
 await assert.rejects(

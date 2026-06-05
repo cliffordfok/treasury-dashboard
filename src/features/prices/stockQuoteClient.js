@@ -4,9 +4,12 @@ const SYMBOL_PATTERN = /^[A-Z0-9.-]+$/;
 const MAX_SYMBOLS = 25;
 export const DEFAULT_STOCK_QUOTE_PROXY_URL = '/api/stock-quotes';
 export const STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE =
-  '股票報價 Proxy 未可用。如使用 Vercel，請確認 api/stock-quotes.js 已部署；如使用 Firebase / Netlify / GitHub Pages，請設定 VITE_STOCK_QUOTE_PROXY_URL 指向可用的 server-side proxy。';
+  '股票報價 Proxy 未可用。如使用 Vercel，請確認 api/stock-quotes.js 已部署；如使用 GitHub Pages，請部署 Cloudflare Worker / Firebase / Netlify server-side proxy，並設定 VITE_STOCK_QUOTE_PROXY_URL 或 VITE_AI_PROXY_URL 指向該 proxy。';
 
-export const getStockQuoteProxyUrl = () => import.meta.env?.VITE_STOCK_QUOTE_PROXY_URL || DEFAULT_STOCK_QUOTE_PROXY_URL;
+export const resolveStockQuoteProxyUrl = (env = {}) =>
+  env.VITE_STOCK_QUOTE_PROXY_URL || env.VITE_AI_PROXY_URL || env.VITE_GEMINI_PROXY_URL || DEFAULT_STOCK_QUOTE_PROXY_URL;
+
+export const getStockQuoteProxyUrl = () => resolveStockQuoteProxyUrl(import.meta.env);
 
 export const normalizeQuoteSymbols = (symbols = []) => {
   const normalized = [...new Set(symbols.map((symbol) => String(symbol || '').trim().toUpperCase()).filter(Boolean))];

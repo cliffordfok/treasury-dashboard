@@ -3,7 +3,20 @@ import { AlertCircle, Briefcase, ClipboardCheck, DollarSign, Landmark, Loader2, 
 import { subscribeCashMovements } from '../cash/cashFirestore.js';
 import { subscribeReconciliationSnapshots } from '../reconciliation/reconciliationFirestore.js';
 import { subscribeStockTrades } from '../stocks/stockFirestore.js';
-import { subscribeStockPrices } from '../prices/stockPriceFirestore.js';
+import { calculateStockPositions } from '../stocks/stockCalculations.js';
+import { fetchStockQuotes } from '../prices/stockQuoteClient.js';
+import { getStockPriceMap, saveStockPrices, subscribeStockPrices } from '../prices/stockPriceFirestore.js';
+import {
+  AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES,
+  AUTO_QUOTE_ENABLED_KEY,
+  AUTO_QUOTE_STALE_HOURS,
+  beginAutoQuoteRefresh,
+  endAutoQuoteRefresh,
+  filterQuotesForSave,
+  getAutoQuoteLastAttemptKey,
+  getSymbolsNeedingRefresh,
+  shouldAttemptAutoRefresh,
+} from '../prices/autoQuoteRefresh.js';
 import { buildPortfolioOverview } from './portfolioCalculations.js';
 
 const money = (value, currency = 'USD') => {
@@ -85,6 +98,41 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
       (err) => setError(err.message || 'Unable to load stock prices.'),
     );
   }, [db, user?.uid]);
+
+  useEffect(() => {
+    if (!db || !user?.uid || localStorage.getItem(AUTO_QUOTE_ENABLED_KEY) === 'false') return undefined;
+    const positions = calculateStockPositions(stockTrades);
+    const priceMap = getStockPriceMap(stockPrices);
+    const symbols = getSymbolsNeedingRefresh(positions, priceMap, { staleHours: AUTO_QUOTE_STALE_HOURS });
+    if (symbols.length === 0) return undefined;
+
+    const lastAttemptKey = getAutoQuoteLastAttemptKey(user.uid);
+    const lastAttempt = localStorage.getItem(lastAttemptKey);
+    if (!shouldAttemptAutoRefresh(lastAttempt, AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES)) return undefined;
+    if (!beginAutoQuoteRefresh()) return undefined;
+
+    const attemptedAt = new Date().toISOString();
+    localStorage.setItem(lastAttemptKey, attemptedAt);
+    let cancelled = false;
+
+    fetchStockQuotes(symbols)
+      .then((result) => {
+        if (cancelled) return;
+        const quotesToSave = filterQuotesForSave(result.quotes, priceMap, 'auto');
+        if (quotesToSave.length > 0) return saveStockPrices(db, user.uid, quotesToSave);
+        return undefined;
+      })
+      .catch(() => {
+        // Keep overview quiet; StockDashboard shows quote errors and manual fallback.
+      })
+      .finally(() => {
+        endAutoQuoteRefresh();
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [db, user?.uid, stockTrades, stockPrices]);
 
   useEffect(() => {
     if (!db || !user?.uid) return undefined;

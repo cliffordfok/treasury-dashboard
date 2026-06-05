@@ -11,6 +11,13 @@ import {
   normalizeStockQuoteProxyResponse,
   STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE,
 } from './stockQuoteClient.js';
+import {
+  filterQuotesForSave,
+  getSymbolsNeedingRefresh,
+  isQuoteStale,
+  shouldAttemptAutoRefresh,
+  shouldPreserveManualPrice,
+} from './autoQuoteRefresh.js';
 
 const near = (actual, expected, message) =>
   assert.ok(Math.abs(actual - expected) < 0.000001, `${message}: expected ${expected}, got ${actual}`);
@@ -130,3 +137,38 @@ const fetched = await fetchStockQuotes(['voo'], {
   },
 });
 near(fetched.quotes[0].price, 601, 'fetch proxy quote');
+
+const q3Now = new Date('2026-06-05T12:00:00.000Z');
+const q3Positions = [
+  { symbol: 'VOO', quantity: 2 },
+  { symbol: 'NVDA', quantity: 1 },
+  { symbol: 'CASH', quantity: 0 },
+  { symbol: 'BAD SYMBOL', quantity: 1 },
+];
+assert.deepEqual(
+  getSymbolsNeedingRefresh(q3Positions, { VOO: { symbol: 'VOO', price: 600, asOf: '2026-06-05T08:00:00.000Z' } }, { now: q3Now, staleHours: 12 }),
+  ['NVDA'],
+  'missing quote needs refresh',
+);
+assert.deepEqual(
+  getSymbolsNeedingRefresh(q3Positions, { VOO: { symbol: 'VOO', price: 600, asOf: '2026-06-05T08:00:00.000Z' }, NVDA: { symbol: 'NVDA', price: 120, asOf: '2026-06-05T08:00:00.000Z' } }, { now: q3Now, staleHours: 12 }),
+  [],
+  'fresh quotes do not need refresh',
+);
+assert.deepEqual(
+  getSymbolsNeedingRefresh(q3Positions, { VOO: { symbol: 'VOO', price: 600, asOf: '2026-06-04T12:00:00.000Z' }, NVDA: { symbol: 'NVDA', price: 120, asOf: '2026-06-05T08:00:00.000Z' } }, { now: q3Now, staleHours: 12 }),
+  ['VOO'],
+  'stale quote needs refresh',
+);
+assert.equal(isQuoteStale({ symbol: 'VOO', asOf: '2026-06-05T01:00:00.000Z' }, 12, q3Now), false, 'quote inside stale window');
+assert.equal(isQuoteStale({ symbol: 'VOO', asOf: '2026-06-04T23:00:00.000Z' }, 12, q3Now), true, 'quote outside stale window');
+assert.equal(shouldAttemptAutoRefresh('2026-06-05T11:50:00.000Z', 15, q3Now), false, 'cooldown blocks auto refresh');
+assert.equal(shouldAttemptAutoRefresh('2026-06-05T11:40:00.000Z', 15, q3Now), true, 'cooldown allows later auto refresh');
+assert.equal(shouldAttemptAutoRefresh('2026-06-05T11:50:00.000Z', 15, q3Now, 'manual'), true, 'manual refresh ignores cooldown');
+
+const manualExisting = { symbol: 'VOO', source: 'manual', asOf: '2026-06-05T12:00:00.000Z' };
+const olderYahoo = { symbol: 'VOO', source: 'yahoo_finance_unofficial', asOf: '2026-06-05T11:00:00.000Z' };
+assert.equal(shouldPreserveManualPrice(manualExisting, olderYahoo, 'auto'), true, 'auto preserves newer manual price');
+assert.equal(shouldPreserveManualPrice(manualExisting, olderYahoo, 'manual'), false, 'manual refresh can overwrite manual price');
+assert.deepEqual(filterQuotesForSave([olderYahoo], { VOO: manualExisting }, 'auto'), [], 'auto filters quote behind manual price');
+assert.deepEqual(filterQuotesForSave([olderYahoo], { VOO: manualExisting }, 'manual').map((quote) => quote.symbol), ['VOO'], 'manual refresh keeps quote');

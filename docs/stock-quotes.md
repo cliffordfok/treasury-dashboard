@@ -120,6 +120,19 @@ Manual fallback prices use the same collection with:
 }
 ```
 
+## Auto Refresh
+
+The app can attempt an automatic quote refresh when a user opens the app or visits the Stocks page.
+
+- Only current holdings with `shares > 0` are considered.
+- Symbols without a saved price are refreshed.
+- Symbols with a saved price older than 12 hours are refreshed.
+- Automatic attempts have a 15 minute local cooldown per user.
+- The user can disable automatic quote refresh with the `portfolio:autoQuote:enabled` localStorage setting.
+- Manual quote refresh ignores the cooldown.
+- Automatic refresh does not overwrite a newer manual price. Manual refresh can overwrite it.
+- There is no server-side cron, scheduled function, realtime feed, or quote history chart.
+
 ## Limitations
 
 - This does not add realtime market data guarantees.

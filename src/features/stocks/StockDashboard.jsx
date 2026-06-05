@@ -1,10 +1,21 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Briefcase, DollarSign, Edit2, Loader2, Plus, RefreshCw, Trash2, TrendingUp, Wallet, XCircle } from 'lucide-react';
 import { EPSILON, calculateStockPortfolioTotals, calculateStockPositions, getStockTradeCashImpact, toNumber } from './stockCalculations';
 import { defaultStockTradeForm, deleteStockTrade, normalizeStockTradeForStorage, saveStockTrade, subscribeStockTrades, updateStockTrade } from './stockFirestore';
 import { fetchStockQuotes } from '../prices/stockQuoteClient.js';
 import { getStockPriceMap, saveManualStockPrice, saveStockPrices, subscribeStockPrices } from '../prices/stockPriceFirestore.js';
 import { attachPricesToPositions, calculateStockMarketTotals } from '../prices/stockPriceCalculations.js';
+import {
+  AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES,
+  AUTO_QUOTE_ENABLED_KEY,
+  AUTO_QUOTE_STALE_HOURS,
+  beginAutoQuoteRefresh,
+  endAutoQuoteRefresh,
+  filterQuotesForSave,
+  getAutoQuoteLastAttemptKey,
+  getSymbolsNeedingRefresh,
+  shouldAttemptAutoRefresh,
+} from '../prices/autoQuoteRefresh.js';
 
 const money = (value, currency = 'USD') =>
   `${currency} ${toNumber(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -21,6 +32,12 @@ const hasNumber = (value) => value !== null && value !== undefined && value !== 
 const nullableMoney = (value, currency = 'USD') => (hasNumber(value) ? money(value, currency) : '--');
 const signedNullableMoney = (value, currency = 'USD') => (hasNumber(value) ? signedMoney(value, currency) : '--');
 const todayInputValue = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0];
+const formatDateTime = (value) => {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleString();
+};
 
 const sideLabel = (side) => {
   if (side === 'sell') return '賣出';
@@ -41,6 +58,16 @@ export default function StockDashboard({ db, user }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [priceError, setPriceError] = useState('');
+  const [isAutoQuoteEnabled, setIsAutoQuoteEnabled] = useState(() => localStorage.getItem(AUTO_QUOTE_ENABLED_KEY) !== 'false');
+  const [autoQuoteStatus, setAutoQuoteStatus] = useState({
+    isRunning: false,
+    lastAttempt: localStorage.getItem(getAutoQuoteLastAttemptKey(user?.uid)) || '',
+    updatedCount: 0,
+    failedCount: 0,
+    skippedCount: 0,
+    message: '',
+  });
+  const autoQuoteSignatureRef = useRef('');
 
   useEffect(() => {
     if (!db || !user?.uid) return undefined;
@@ -92,28 +119,37 @@ export default function StockDashboard({ db, user }) {
   }));
   const updateManualPrice = (field, value) => setManualPriceForm((prev) => ({ ...prev, [field]: value }));
 
-  const handleRefreshPrices = async () => {
+  const refreshQuotes = async (symbols, mode = 'manual') => {
     if (!db || !user?.uid) return;
-    const symbols = positions.map((position) => position.symbol).filter(Boolean);
     if (symbols.length === 0) {
       setPriceError('No stock positions to refresh.');
       return;
     }
-    setIsRefreshingPrices(true);
+    if (mode === 'manual') setIsRefreshingPrices(true);
     setPriceError('');
     try {
       const result = await fetchStockQuotes(symbols);
-      if (result.quotes.length > 0) {
-        await saveStockPrices(db, user.uid, result.quotes);
+      const quotesToSave = filterQuotesForSave(result.quotes, priceMap, mode);
+      if (quotesToSave.length > 0) {
+        await saveStockPrices(db, user.uid, quotesToSave);
       }
+      const skippedCount = result.quotes.length - quotesToSave.length;
       if (result.errors.length > 0) {
         setPriceError(result.errors.map((item) => `${item.symbol}: ${item.error}`).join(' / '));
       }
+      return { updatedCount: quotesToSave.length, failedCount: result.errors.length, skippedCount };
     } catch (err) {
       setPriceError(err.message || 'Unable to refresh stock prices.');
+      if (mode === 'auto') throw err;
+      return { updatedCount: 0, failedCount: symbols.length, skippedCount: 0 };
     } finally {
-      setIsRefreshingPrices(false);
+      if (mode === 'manual') setIsRefreshingPrices(false);
     }
+  };
+
+  const handleRefreshPrices = async () => {
+    const symbols = positions.map((position) => position.symbol).filter(Boolean).slice(0, 25);
+    await refreshQuotes(symbols, 'manual');
   };
 
   const handleSaveManualPrice = async (event) => {
@@ -210,6 +246,71 @@ export default function StockDashboard({ db, user }) {
     }
   };
 
+  const handleAutoQuoteToggle = (event) => {
+    const enabled = event.target.checked;
+    setIsAutoQuoteEnabled(enabled);
+    localStorage.setItem(AUTO_QUOTE_ENABLED_KEY, enabled ? 'true' : 'false');
+    if (!enabled) setAutoQuoteStatus((prev) => ({ ...prev, message: '自動更新已關閉。' }));
+  };
+
+  useEffect(() => {
+    if (!db || !user?.uid || isLoading || !isAutoQuoteEnabled) return;
+    const symbols = getSymbolsNeedingRefresh(positions, priceMap, { staleHours: AUTO_QUOTE_STALE_HOURS });
+    if (symbols.length === 0) {
+      setAutoQuoteStatus((prev) => ({ ...prev, message: '所有持倉報價仍然有效。' }));
+      return;
+    }
+
+    const lastAttemptKey = getAutoQuoteLastAttemptKey(user.uid);
+    const lastAttempt = localStorage.getItem(lastAttemptKey);
+    if (!shouldAttemptAutoRefresh(lastAttempt, AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES)) {
+      setAutoQuoteStatus((prev) => ({ ...prev, lastAttempt: lastAttempt || prev.lastAttempt, message: '自動更新 cooldown 中。' }));
+      return;
+    }
+
+    const signature = `${user.uid}:${symbols.join(',')}:${lastAttempt || ''}`;
+    if (autoQuoteSignatureRef.current === signature) return;
+    if (!beginAutoQuoteRefresh()) return;
+
+    autoQuoteSignatureRef.current = signature;
+    const attemptedAt = new Date().toISOString();
+    localStorage.setItem(lastAttemptKey, attemptedAt);
+    setAutoQuoteStatus((prev) => ({
+      ...prev,
+      isRunning: true,
+      lastAttempt: attemptedAt,
+      message: `自動更新 ${symbols.length} 個股票代號...`,
+    }));
+
+    refreshQuotes(symbols, 'auto')
+      .then((result) => {
+        setAutoQuoteStatus((prev) => ({
+          ...prev,
+          isRunning: false,
+          lastAttempt: attemptedAt,
+          updatedCount: result?.updatedCount || 0,
+          failedCount: result?.failedCount || 0,
+          skippedCount: result?.skippedCount || 0,
+          message: `自動更新完成：${result?.updatedCount || 0} 個成功，${result?.failedCount || 0} 個失敗。`,
+        }));
+      })
+      .catch((err) => {
+        setAutoQuoteStatus((prev) => ({
+          ...prev,
+          isRunning: false,
+          lastAttempt: attemptedAt,
+          updatedCount: 0,
+          failedCount: symbols.length,
+          skippedCount: 0,
+          message: '自動報價失敗，可稍後再試或使用手動價格。',
+        }));
+        setPriceError(err.message || '自動報價失敗，可稍後再試或使用手動價格。');
+      })
+      .finally(() => {
+        endAutoQuoteRefresh();
+      });
+  }, [db, user?.uid, isLoading, isAutoQuoteEnabled, positions, priceMap]);
+
   return (
     <div className="space-y-4 sm:space-y-6">
       <div className="bg-slate-900 text-white rounded-xl shadow-sm p-4 sm:p-5 relative overflow-hidden">
@@ -267,10 +368,36 @@ export default function StockDashboard({ db, user }) {
             <h3 className="text-sm font-medium text-slate-800">Stock quote update</h3>
             <p className="text-xs text-slate-500 mt-1">Uses a server-side proxy. Current source: Yahoo Finance unofficial.</p>
           </div>
-          <button type="button" onClick={handleRefreshPrices} disabled={isRefreshingPrices || positions.length === 0} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
-            {isRefreshingPrices ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-            Refresh quotes
-          </button>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input type="checkbox" checked={isAutoQuoteEnabled} onChange={handleAutoQuoteToggle} className="h-4 w-4 rounded border-slate-300" />
+              自動更新報價
+            </label>
+            <button type="button" onClick={handleRefreshPrices} disabled={isRefreshingPrices || positions.length === 0} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
+              {isRefreshingPrices ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              Refresh quotes
+            </button>
+          </div>
+        </div>
+        <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+          <div>
+            <p className="font-semibold text-slate-500">Auto quote status</p>
+            <p className={`${autoQuoteStatus.isRunning ? 'text-blue-600' : isAutoQuoteEnabled ? 'text-emerald-600' : 'text-slate-500'}`}>
+              {autoQuoteStatus.isRunning ? '自動更新中...' : isAutoQuoteEnabled ? '自動更新已啟用' : '自動更新已關閉'}
+            </p>
+          </div>
+          <div>
+            <p className="font-semibold text-slate-500">上次自動嘗試</p>
+            <p className="text-slate-600">{formatDateTime(autoQuoteStatus.lastAttempt)}</p>
+          </div>
+          <div>
+            <p className="font-semibold text-slate-500">本次結果</p>
+            <p className="text-slate-600">{autoQuoteStatus.updatedCount} updated / {autoQuoteStatus.failedCount} failed</p>
+          </div>
+          <div>
+            <p className="font-semibold text-slate-500">說明</p>
+            <p className="text-slate-600">{autoQuoteStatus.message || `Stale after ${AUTO_QUOTE_STALE_HOURS} hours · cooldown ${AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES} minutes`}</p>
+          </div>
         </div>
         <form onSubmit={handleSaveManualPrice} className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-5 gap-3 bg-slate-50/60">
           <div>

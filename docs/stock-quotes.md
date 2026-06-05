@@ -10,13 +10,23 @@ Phase Q2 adds optional stock quote support for the Portfolio Dashboard.
 - No API key is used or stored by the app.
 - Quotes may be delayed, unavailable, throttled, or changed by Yahoo Finance without notice.
 
-The browser must not call Yahoo Finance directly. It calls a server-side proxy configured with:
+The browser must not call Yahoo Finance directly. It calls a server-side proxy.
+
+On Vercel, the included Vercel-style endpoint can be used directly:
+
+```text
+/api/stock-quotes
+```
+
+If `VITE_STOCK_QUOTE_PROXY_URL` is not configured, the app defaults to that same-origin endpoint.
+
+For Firebase Functions, Netlify Functions, GitHub Pages, or any other static hosting setup, deploy your own server-side function with the same contract and configure:
 
 ```text
 VITE_STOCK_QUOTE_PROXY_URL
 ```
 
-If the proxy URL is not configured, users can still enter manual stock prices.
+After changing any Vite environment variable, rebuild and redeploy the app. If the proxy is unavailable, users can still enter manual stock prices.
 
 ## Proxy Contract
 
@@ -117,4 +127,3 @@ Manual fallback prices use the same collection with:
 - This does not change `stockTrades`, `cashMovements`, or reconciliation snapshots.
 - This does not change CSV import or duplicate fingerprint logic.
 - This does not change Treasury calculations.
-

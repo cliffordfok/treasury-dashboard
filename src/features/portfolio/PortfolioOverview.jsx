@@ -3,6 +3,7 @@ import { AlertCircle, Briefcase, ClipboardCheck, DollarSign, Landmark, Loader2, 
 import { subscribeCashMovements } from '../cash/cashFirestore.js';
 import { subscribeReconciliationSnapshots } from '../reconciliation/reconciliationFirestore.js';
 import { subscribeStockTrades } from '../stocks/stockFirestore.js';
+import { subscribeStockPrices } from '../prices/stockPriceFirestore.js';
 import { buildPortfolioOverview } from './portfolioCalculations.js';
 
 const money = (value, currency = 'USD') => {
@@ -42,6 +43,7 @@ const SummaryCard = ({ icon, label, value, subtext, tone = 'slate' }) => {
 
 export default function PortfolioOverview({ db, user, treasuryMetrics }) {
   const [stockTrades, setStockTrades] = useState([]);
+  const [stockPrices, setStockPrices] = useState([]);
   const [cashMovements, setCashMovements] = useState([]);
   const [reconciliationSnapshots, setReconciliationSnapshots] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -76,6 +78,16 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
 
   useEffect(() => {
     if (!db || !user?.uid) return undefined;
+    return subscribeStockPrices(
+      db,
+      user.uid,
+      setStockPrices,
+      (err) => setError(err.message || 'Unable to load stock prices.'),
+    );
+  }, [db, user?.uid]);
+
+  useEffect(() => {
+    if (!db || !user?.uid) return undefined;
     return subscribeReconciliationSnapshots(
       db,
       user.uid,
@@ -85,8 +97,8 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
   }, [db, user?.uid]);
 
   const overview = useMemo(
-    () => buildPortfolioOverview({ treasuryMetrics, stockTrades, cashMovements, reconciliationSnapshots }),
-    [treasuryMetrics, stockTrades, cashMovements, reconciliationSnapshots],
+    () => buildPortfolioOverview({ treasuryMetrics, stockTrades, stockPrices, cashMovements, reconciliationSnapshots }),
+    [treasuryMetrics, stockTrades, stockPrices, cashMovements, reconciliationSnapshots],
   );
 
   const reconciliationValue = overview.reconciliation.hasSnapshot
@@ -125,8 +137,10 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
         <SummaryCard
           icon={<Briefcase size={20} />}
           label="股票成本"
-          value={money(overview.stocks.remainingCost)}
-          subtext={`股票市值：${overview.stocks.marketValueLabel}`}
+          value={overview.stocks.hasMarketValue ? money(overview.stocks.marketValue) : money(overview.stocks.remainingCost)}
+          subtext={overview.stocks.hasMarketValue
+            ? `Market value · ${overview.stocks.pricedSymbolCount}/${overview.stocks.symbolCount} priced`
+            : `股票市值：${overview.stocks.marketValueLabel}`}
           tone="amber"
         />
         <SummaryCard
@@ -148,10 +162,10 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
         />
         <SummaryCard
           icon={<Briefcase size={20} />}
-          label="股票已實現盈虧"
-          value={signedMoney(overview.stocks.realizedPnl)}
-          subtext={`${overview.stocks.symbolCount} 個持倉 symbol`}
-          tone={overview.stocks.realizedPnl >= 0 ? 'emerald' : 'red'}
+          label={overview.stocks.hasMarketValue ? '股票未實現盈虧' : '股票已實現盈虧'}
+          value={overview.stocks.hasMarketValue ? signedMoney(overview.stocks.unrealizedPnl) : signedMoney(overview.stocks.realizedPnl)}
+          subtext={overview.stocks.hasMarketValue ? `Cost ${money(overview.stocks.remainingCost)}` : `${overview.stocks.symbolCount} 個持倉 symbol`}
+          tone={(overview.stocks.hasMarketValue ? overview.stocks.unrealizedPnl : overview.stocks.realizedPnl) >= 0 ? 'emerald' : 'red'}
         />
         <SummaryCard
           icon={<DollarSign size={20} />}

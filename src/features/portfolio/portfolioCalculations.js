@@ -1,7 +1,6 @@
 import { calculatePortfolioCashSummary } from '../cash/cashCalculations.js';
 import { buildReconciliationReport } from '../reconciliation/reconciliationCalculations.js';
 import { calculateStockPortfolioTotals, calculateStockPositions } from '../stocks/stockCalculations.js';
-import { attachPricesToPositions, calculateStockMarketTotals } from '../prices/stockPriceCalculations.js';
 
 const toNumber = (value) => {
   const number = Number(value);
@@ -16,19 +15,11 @@ export const getLatestReconciliationSnapshot = (snapshots = []) =>
 export const buildPortfolioOverview = ({
   treasuryMetrics = {},
   stockTrades = [],
-  stockPrices = [],
   cashMovements = [],
   reconciliationSnapshots = [],
 } = {}) => {
   const stockPositions = calculateStockPositions(stockTrades);
   const stockTotals = calculateStockPortfolioTotals(stockPositions);
-  const priceMap = stockPrices.reduce((map, price) => {
-    const symbol = String(price.symbol || price.id || '').trim().toUpperCase();
-    if (symbol) map[symbol] = { ...price, symbol };
-    return map;
-  }, {});
-  const stockPositionsWithPrices = attachPricesToPositions(stockPositions, priceMap);
-  const stockMarketTotals = calculateStockMarketTotals(stockPositionsWithPrices);
   const cashSummary = calculatePortfolioCashSummary(cashMovements, stockTrades);
   const latestSnapshot = getLatestReconciliationSnapshot(reconciliationSnapshots);
   const reconciliationReport = latestSnapshot
@@ -48,13 +39,6 @@ export const buildPortfolioOverview = ({
       remainingCost: stockTotals.remainingCost,
       realizedPnl: stockTotals.realizedPnl,
       cashImpact: stockTotals.cashImpact,
-      hasMarketValue: stockMarketTotals.pricedSymbolCount > 0,
-      marketValue: stockMarketTotals.totalMarketValue,
-      unrealizedPnl: stockMarketTotals.totalUnrealizedPnl,
-      pricedSymbolCount: stockMarketTotals.pricedSymbolCount,
-      missingPriceCount: stockMarketTotals.missingPriceCount,
-      stalePriceCount: stockMarketTotals.stalePriceCount,
-      marketValueLabel: stockMarketTotals.pricedSymbolCount > 0 ? '已接報價' : '暫未接報價',
     },
     cash: cashSummary,
     reconciliation: {

@@ -1,22 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Briefcase, ClipboardCheck, DollarSign, Landmark, Loader2, Receipt, TrendingUp, Wallet } from 'lucide-react';
 import { subscribeCashMovements } from '../cash/cashFirestore.js';
 import { subscribeReconciliationSnapshots } from '../reconciliation/reconciliationFirestore.js';
 import { subscribeStockTrades } from '../stocks/stockFirestore.js';
-import { calculateStockPositions } from '../stocks/stockCalculations.js';
-import { fetchStockQuotes } from '../prices/stockQuoteClient.js';
-import { getStockPriceMap, saveStockPrices, subscribeStockPrices } from '../prices/stockPriceFirestore.js';
-import {
-  AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES,
-  AUTO_QUOTE_ENABLED_KEY,
-  AUTO_QUOTE_STALE_HOURS,
-  beginAutoQuoteRefresh,
-  endAutoQuoteRefresh,
-  filterQuotesForSave,
-  getAutoQuoteLastAttemptKey,
-  getSymbolsNeedingRefresh,
-  shouldAttemptAutoRefresh,
-} from '../prices/autoQuoteRefresh.js';
 import { buildPortfolioOverview } from './portfolioCalculations.js';
 
 const money = (value, currency = 'USD') => {
@@ -56,7 +42,6 @@ const SummaryCard = ({ icon, label, value, subtext, tone = 'slate' }) => {
 
 export default function PortfolioOverview({ db, user, treasuryMetrics }) {
   const [stockTrades, setStockTrades] = useState([]);
-  const [stockPrices, setStockPrices] = useState([]);
   const [cashMovements, setCashMovements] = useState([]);
   const [reconciliationSnapshots, setReconciliationSnapshots] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -89,50 +74,7 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
     );
   }, [db, user?.uid]);
 
-  useEffect(() => {
-    if (!db || !user?.uid) return undefined;
-    return subscribeStockPrices(
-      db,
-      user.uid,
-      setStockPrices,
-      (err) => setError(err.message || 'Unable to load stock prices.'),
-    );
-  }, [db, user?.uid]);
 
-  useEffect(() => {
-    if (!db || !user?.uid || localStorage.getItem(AUTO_QUOTE_ENABLED_KEY) === 'false') return undefined;
-    const positions = calculateStockPositions(stockTrades);
-    const priceMap = getStockPriceMap(stockPrices);
-    const symbols = getSymbolsNeedingRefresh(positions, priceMap, { staleHours: AUTO_QUOTE_STALE_HOURS });
-    if (symbols.length === 0) return undefined;
-
-    const lastAttemptKey = getAutoQuoteLastAttemptKey(user.uid);
-    const lastAttempt = localStorage.getItem(lastAttemptKey);
-    if (!shouldAttemptAutoRefresh(lastAttempt, AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES)) return undefined;
-    if (!beginAutoQuoteRefresh()) return undefined;
-
-    const attemptedAt = new Date().toISOString();
-    localStorage.setItem(lastAttemptKey, attemptedAt);
-    let cancelled = false;
-
-    fetchStockQuotes(symbols)
-      .then((result) => {
-        if (cancelled) return;
-        const quotesToSave = filterQuotesForSave(result.quotes, priceMap, 'auto');
-        if (quotesToSave.length > 0) return saveStockPrices(db, user.uid, quotesToSave);
-        return undefined;
-      })
-      .catch(() => {
-        // Keep overview quiet; StockDashboard shows quote errors and manual fallback.
-      })
-      .finally(() => {
-        endAutoQuoteRefresh();
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [db, user?.uid, stockTrades, stockPrices]);
 
   useEffect(() => {
     if (!db || !user?.uid) return undefined;
@@ -145,8 +87,8 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
   }, [db, user?.uid]);
 
   const overview = useMemo(
-    () => buildPortfolioOverview({ treasuryMetrics, stockTrades, stockPrices, cashMovements, reconciliationSnapshots }),
-    [treasuryMetrics, stockTrades, stockPrices, cashMovements, reconciliationSnapshots],
+    () => buildPortfolioOverview({ treasuryMetrics, stockTrades, cashMovements, reconciliationSnapshots }),
+    [treasuryMetrics, stockTrades, cashMovements, reconciliationSnapshots],
   );
 
   const reconciliationValue = overview.reconciliation.hasSnapshot
@@ -185,10 +127,8 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
         <SummaryCard
           icon={<Briefcase size={20} />}
           label="股票成本"
-          value={overview.stocks.hasMarketValue ? money(overview.stocks.marketValue) : money(overview.stocks.remainingCost)}
-          subtext={overview.stocks.hasMarketValue
-            ? `Market value · ${overview.stocks.pricedSymbolCount}/${overview.stocks.symbolCount} priced`
-            : `股票市值：${overview.stocks.marketValueLabel}`}
+          value={money(overview.stocks.remainingCost)}
+          subtext={`${overview.stocks.symbolCount} 個持倉股票代號`}
           tone="amber"
         />
         <SummaryCard
@@ -210,10 +150,10 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
         />
         <SummaryCard
           icon={<Briefcase size={20} />}
-          label={overview.stocks.hasMarketValue ? '股票未實現盈虧' : '股票已實現盈虧'}
-          value={overview.stocks.hasMarketValue ? signedMoney(overview.stocks.unrealizedPnl) : signedMoney(overview.stocks.realizedPnl)}
-          subtext={overview.stocks.hasMarketValue ? `Cost ${money(overview.stocks.remainingCost)}` : `${overview.stocks.symbolCount} 個持倉 symbol`}
-          tone={(overview.stocks.hasMarketValue ? overview.stocks.unrealizedPnl : overview.stocks.realizedPnl) >= 0 ? 'emerald' : 'red'}
+          label="股票已實現盈虧"
+          value={signedMoney(overview.stocks.realizedPnl)}
+          subtext={`成本 ${money(overview.stocks.remainingCost)}`}
+          tone={overview.stocks.realizedPnl >= 0 ? 'emerald' : 'red'}
         />
         <SummaryCard
           icon={<DollarSign size={20} />}
@@ -256,3 +196,4 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
     </section>
   );
 }
+

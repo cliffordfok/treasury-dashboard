@@ -1,5 +1,5 @@
 {
-  "symbols": ["VOO", "GOOGL", "MU", "NVDA"],
+  "symbols": ["VOO", "GOOGL", "MU", "NVDA", "GLDM"],
   "provider": "yahoo_finance2",
   "note": "Used by GitHub Actions quote cache updater"
 }

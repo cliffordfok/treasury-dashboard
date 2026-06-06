@@ -24,7 +24,11 @@ import {
 } from './autoQuoteRefresh.js';
 import {
   buildQuoteCachePayload,
+  discoverFirestoreQuoteSymbols,
+  getUserIdFromStockTradePath,
+  loadCombinedQuoteSymbols,
   normalizeYahooFinance2Quote,
+  parseFirebaseServiceAccount,
   updateStockQuoteCache,
   validateQuoteSymbols,
 } from '../../../scripts/update-stock-quotes.mjs';
@@ -101,6 +105,10 @@ assert.equal(totals.stalePriceCount, 0, 'stale count');
 assert.deepEqual(validateQuoteSymbols(['voo', 'VOO', 'BRK.B']).symbols, ['VOO', 'BRK.B'], 'script normalizes symbols');
 assert.equal(validateQuoteSymbols(['bad symbol']).errors[0].symbol, 'BAD SYMBOL', 'script flags invalid symbol');
 assert.equal(validateQuoteSymbols(Array.from({ length: 51 }, (_, index) => `T${index}`)).symbols.length, 50, 'script limits symbols');
+assert.equal(parseFirebaseServiceAccount('{"project_id":"demo"}').project_id, 'demo', 'service account JSON parse');
+assert.equal(parseFirebaseServiceAccount(Buffer.from('{"project_id":"demo64"}').toString('base64')).project_id, 'demo64', 'service account base64 parse');
+assert.equal(parseFirebaseServiceAccount(''), null, 'blank service account is optional');
+assert.equal(getUserIdFromStockTradePath({ path: 'users/u1/stockTrades/t1' }), 'u1', 'extract user id from stock trade path');
 assert.deepEqual(normalizeQuoteCacheSymbols(['voo', 'VOO', 'BRK-B']), ['VOO', 'BRK-B'], 'client normalizes symbols');
 assert.throws(() => normalizeQuoteCacheSymbols(['bad symbol']), /Invalid stock symbol/, 'client rejects invalid symbol');
 assert.equal(
@@ -137,9 +145,29 @@ const tempQuoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'quote-cache-test-'
 const tempSymbolsPath = path.join(tempQuoteDir, 'symbols.json');
 const tempLatestPath = path.join(tempQuoteDir, 'latest.json');
 await fs.writeFile(tempSymbolsPath, JSON.stringify({ symbols: ['voo', 'missing'] }), 'utf8');
+const fakeDb = {
+  collectionGroup: (name) => {
+    assert.equal(name, 'stockTrades', 'Firestore discovery uses stockTrades collection group');
+    return {
+      get: async () => ({
+        docs: [
+          { ref: { path: 'users/u1/stockTrades/1' }, data: () => ({ symbol: 'GLDM', side: 'buy', tradeDate: '2026-06-01', quantity: 39, price: 84.8 }) },
+          { ref: { path: 'users/u1/stockTrades/2' }, data: () => ({ symbol: 'CLOSED', side: 'buy', tradeDate: '2026-06-01', quantity: 1, price: 10 }) },
+          { ref: { path: 'users/u1/stockTrades/3' }, data: () => ({ symbol: 'CLOSED', side: 'sell', tradeDate: '2026-06-02', quantity: 1, price: 10 }) },
+          { ref: { path: 'users/u2/stockTrades/1' }, data: () => ({ symbol: 'TSLA', side: 'opening_position', tradeDate: '2026-06-01', quantity: 2, price: 200 }) },
+        ],
+      }),
+    };
+  },
+};
+const discovered = await discoverFirestoreQuoteSymbols(fakeDb);
+assert.deepEqual(discovered.symbols, ['GLDM', 'TSLA'], 'Firestore discovery returns positive holding symbols');
+const combinedSymbols = await loadCombinedQuoteSymbols({ inputPath: tempSymbolsPath, db: fakeDb });
+assert.deepEqual(combinedSymbols.symbols, ['VOO', 'MISSING', 'GLDM', 'TSLA'], 'configured and discovered symbols merge');
 const generatedCache = await updateStockQuoteCache({
   inputPath: tempSymbolsPath,
   outputPath: tempLatestPath,
+  db: fakeDb,
   now: new Date('2026-06-06T12:00:00.000Z'),
   quoteClient: {
     quote: async (symbol) => {
@@ -155,6 +183,7 @@ const generatedCache = await updateStockQuoteCache({
 });
 assert.equal(generatedCache.quotes[0].symbol, 'VOO', 'updater writes quote from quote client instance');
 assert.equal(generatedCache.errors[0].symbol, 'MISSING', 'updater keeps per-symbol error');
+assert.equal(generatedCache.symbolSources.discoveredCount, 2, 'updater records Firestore discovery count');
 const generatedCacheFile = JSON.parse(await fs.readFile(tempLatestPath, 'utf8'));
 near(generatedCacheFile.quotes[0].price, 601.25, 'updater writes latest.json');
 
@@ -176,7 +205,11 @@ assert.equal(cache.provider, 'yahoo_finance2', 'cache provider');
 assert.equal(cache.quotes.length, 1, 'cache only includes matching valid quote');
 assert.equal(cache.quotes[0].symbol, 'VOO', 'cache quote symbol');
 assert.equal(cache.quotes[0].source, STOCK_QUOTE_CACHE_SOURCE, 'cache quote source');
-assert.equal(cache.errors.find((error) => error.symbol === 'NVDA').error, '報價快取未包含此股票', 'missing cache symbol');
+assert.equal(
+  cache.errors.find((error) => error.symbol === 'NVDA').error,
+  '報價快取未包含此股票；如剛新增持倉，請先執行 Update Stock Quotes workflow；如仍缺少，請確認 workflow 已設定 Firestore symbol discovery 或手動加入 symbols.json',
+  'missing cache symbol',
+);
 assert.equal(cache.errors.find((error) => error.symbol === 'BAD').error, 'Invalid cached quote price', 'invalid cached price');
 assert.equal(cache.isStale, false, 'fresh cache');
 

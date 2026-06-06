@@ -1,6 +1,6 @@
 # Stock Quote Cache
 
-The Portfolio Dashboard uses a static quote cache for stock market value and unrealized P&L estimates.
+The Portfolio Dashboard uses a static stock quote cache for current price, market value, and unrealized P&L estimates.
 
 ## Source
 
@@ -14,9 +14,30 @@ The Portfolio Dashboard uses a static quote cache for stock market value and unr
 
 The browser must not call Yahoo Finance directly. The project only uses `yahoo-finance2` in Node.js through GitHub Actions.
 
-## Cache Files
+## Dynamic Symbols From Firestore
 
-Symbols are maintained in:
+The preferred quote symbol source is Firestore:
+
+```text
+users/{QUOTE_USER_ID}/stockTrades/{tradeId}
+```
+
+When both `FIREBASE_SERVICE_ACCOUNT_JSON` and `QUOTE_USER_ID` are configured, the updater reads that user's Stock Ledger trades, reuses the same Stock Ledger position calculation, and keeps only symbols with remaining shares greater than zero.
+
+This supports:
+
+- `buy`
+- `sell`
+- `opening_position`
+- uppercase symbols
+- deduped symbols
+- maximum 50 symbols
+
+Newly added holdings can be quoted after the next `Update Stock Quotes` workflow run without editing `symbols.json`.
+
+## Static Fallback
+
+If either `FIREBASE_SERVICE_ACCOUNT_JSON` or `QUOTE_USER_ID` is missing, the updater falls back to:
 
 ```text
 public/stock-quotes/symbols.json
@@ -26,26 +47,13 @@ Example:
 
 ```json
 {
-  "symbols": ["VOO", "GOOGL", "MU", "NVDA"],
+  "symbols": ["VOO", "GOOGL", "MU", "NVDA", "GLDM"],
   "provider": "yahoo_finance2",
   "note": "Used by GitHub Actions quote cache updater"
 }
 ```
 
-The updater can also discover symbols from Firestore. If the GitHub secret
-`FIREBASE_SERVICE_ACCOUNT_JSON` is configured, the workflow reads:
-
-```text
-users/{uid}/stockTrades/{tradeId}
-```
-
-It calculates current stock positions per user and adds symbols with remaining
-shares greater than zero to the quote cache update. This means newly added
-holdings can be quoted after the next `Update Stock Quotes` workflow run without
-editing `symbols.json`.
-
-`symbols.json` remains useful as a fallback/static watch list when Firestore
-discovery is not configured.
+## Cache File
 
 The generated cache lives at:
 
@@ -60,6 +68,7 @@ Response shape:
   "provider": "yahoo_finance2",
   "quoteType": "delayed_or_regular_market",
   "updatedAt": "2026-06-06T22:30:00.000Z",
+  "symbolsSource": "firestore_stock_trades",
   "quotes": [
     {
       "symbol": "VOO",
@@ -73,9 +82,12 @@ Response shape:
       "quoteType": "delayed_or_regular_market"
     }
   ],
+  "warnings": [],
   "errors": []
 }
 ```
+
+If Firestore is configured but no active holdings are found, `quotes` can be empty with a warning.
 
 ## GitHub Actions
 
@@ -88,9 +100,10 @@ The workflow is:
 It supports:
 
 - `workflow_dispatch` manual runs.
-- A scheduled run at 06:30 Hong Kong time.
+- Scheduled runs at Hong Kong-friendly times.
 - `contents: write` so it can commit an updated `latest.json` back to `main`.
-- Optional Firestore symbol discovery via `FIREBASE_SERVICE_ACCOUNT_JSON`.
+- Firestore symbol discovery via `FIREBASE_SERVICE_ACCOUNT_JSON` and `QUOTE_USER_ID`.
+- Static fallback via `symbols.json`.
 
 The script is:
 
@@ -99,6 +112,24 @@ scripts/update-stock-quotes.mjs
 ```
 
 It validates symbols, fetches quotes with `yahoo-finance2`, writes per-symbol errors, and updates `public/stock-quotes/latest.json`.
+
+## Required GitHub Settings
+
+To make future newly added stocks appear automatically, add:
+
+```text
+FIREBASE_SERVICE_ACCOUNT_JSON
+```
+
+Use a GitHub repository secret. The value can be raw Firebase service account JSON or base64-encoded JSON. Do not commit this JSON to the repo.
+
+Also add:
+
+```text
+QUOTE_USER_ID
+```
+
+This can be a repository secret or variable. It should be the Firebase uid whose `stockTrades` should drive the quote cache.
 
 ## Manual Update
 
@@ -111,23 +142,23 @@ To update quotes manually:
 5. Wait for the workflow to commit `Update stock quote cache`.
 6. Let GitHub Pages redeploy from `main`.
 
-## Firestore Symbol Discovery
+You can inspect `public/stock-quotes/latest.json` and check:
 
-To make future newly added stocks appear automatically:
-
-1. Create a Firebase service account JSON for the same Firebase project.
-2. Add it as a GitHub repository secret named:
-
-```text
-FIREBASE_SERVICE_ACCOUNT_JSON
+```json
+{
+  "symbolsSource": "firestore_stock_trades"
+}
 ```
 
-The secret can be raw JSON or base64-encoded JSON.
+If it says:
 
-3. Run `Update Stock Quotes`.
+```json
+{
+  "symbolsSource": "static_symbols_json"
+}
+```
 
-The updater only reads stock trade symbols and writes `public/stock-quotes/latest.json`.
-It does not write to Firestore and does not change any ledger data.
+then the workflow used the fallback list because Firestore discovery was not configured.
 
 ## Frontend Behavior
 
@@ -157,9 +188,6 @@ If the cache does not contain a held symbol, the app shows:
 ```text
 報價快取未包含此股票；如剛新增持倉，請先執行 Update Stock Quotes workflow；如仍缺少，請確認 workflow 已設定 Firestore symbol discovery 或手動加入 symbols.json
 ```
-If Firestore symbol discovery is configured, running the workflow is enough for
-new positive holdings to be included. If it is not configured, add the symbol to
-`public/stock-quotes/symbols.json`.
 
 If the cache is stale, the app shows:
 
@@ -171,7 +199,7 @@ If the cache is stale, the app shows:
 
 - Symbols are uppercased.
 - Only `A-Z`, `0-9`, `.`, and `-` are allowed.
-- The GitHub Actions updater supports up to 50 configured symbols.
+- The GitHub Actions updater supports up to 50 symbols.
 - The app refresh action applies up to 25 current holding symbols at a time.
 - Arbitrary URLs are never accepted.
 
@@ -184,7 +212,7 @@ This quote system does not require:
 - API keys
 - Frontend environment variables for quote proxy URLs
 
-`yahoo-finance2` should not be imported from browser code. It is only for the Node.js updater script and GitHub Actions.
+`firebase-admin` and `yahoo-finance2` should not be imported from browser code. They are only for the Node.js updater script and GitHub Actions.
 
 ## Limitations
 

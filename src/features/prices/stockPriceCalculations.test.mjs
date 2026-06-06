@@ -24,11 +24,13 @@ import {
 } from './autoQuoteRefresh.js';
 import {
   buildQuoteCachePayload,
+  deriveActiveSymbolsFromStockTrades,
   discoverFirestoreQuoteSymbols,
-  getUserIdFromStockTradePath,
-  loadCombinedQuoteSymbols,
+  FIRESTORE_DISCOVERY_SOURCE,
+  loadQuoteSymbolsFromSource,
   normalizeYahooFinance2Quote,
   parseFirebaseServiceAccount,
+  STATIC_SYMBOLS_SOURCE,
   updateStockQuoteCache,
   validateQuoteSymbols,
 } from '../../../scripts/update-stock-quotes.mjs';
@@ -108,7 +110,17 @@ assert.equal(validateQuoteSymbols(Array.from({ length: 51 }, (_, index) => `T${i
 assert.equal(parseFirebaseServiceAccount('{"project_id":"demo"}').project_id, 'demo', 'service account JSON parse');
 assert.equal(parseFirebaseServiceAccount(Buffer.from('{"project_id":"demo64"}').toString('base64')).project_id, 'demo64', 'service account base64 parse');
 assert.equal(parseFirebaseServiceAccount(''), null, 'blank service account is optional');
-assert.equal(getUserIdFromStockTradePath({ path: 'users/u1/stockTrades/t1' }), 'u1', 'extract user id from stock trade path');
+assert.deepEqual(
+  deriveActiveSymbolsFromStockTrades([
+    { symbol: 'voo', side: 'buy', tradeDate: '2026-06-01', quantity: 2, price: 100 },
+    { symbol: 'VOO', side: 'buy', tradeDate: '2026-06-02', quantity: 1, price: 110 },
+    { symbol: 'CLOSED', side: 'opening_position', tradeDate: '2026-06-01', quantity: 5, price: 10 },
+    { symbol: 'CLOSED', side: 'sell', tradeDate: '2026-06-02', quantity: 5, price: 10 },
+    { symbol: 'TSLA', side: 'opening_position', tradeDate: '2026-06-01', quantity: 2, price: 200 },
+  ]).symbols,
+  ['TSLA', 'VOO'],
+  'derive active symbols from stock trades',
+);
 assert.deepEqual(normalizeQuoteCacheSymbols(['voo', 'VOO', 'BRK-B']), ['VOO', 'BRK-B'], 'client normalizes symbols');
 assert.throws(() => normalizeQuoteCacheSymbols(['bad symbol']), /Invalid stock symbol/, 'client rejects invalid symbol');
 assert.equal(
@@ -146,28 +158,42 @@ const tempSymbolsPath = path.join(tempQuoteDir, 'symbols.json');
 const tempLatestPath = path.join(tempQuoteDir, 'latest.json');
 await fs.writeFile(tempSymbolsPath, JSON.stringify({ symbols: ['voo', 'missing'] }), 'utf8');
 const fakeDb = {
-  collectionGroup: (name) => {
-    assert.equal(name, 'stockTrades', 'Firestore discovery uses stockTrades collection group');
+  collection: (name) => {
+    assert.equal(name, 'users', 'Firestore discovery starts at users collection');
     return {
-      get: async () => ({
-        docs: [
-          { ref: { path: 'users/u1/stockTrades/1' }, data: () => ({ symbol: 'GLDM', side: 'buy', tradeDate: '2026-06-01', quantity: 39, price: 84.8 }) },
-          { ref: { path: 'users/u1/stockTrades/2' }, data: () => ({ symbol: 'CLOSED', side: 'buy', tradeDate: '2026-06-01', quantity: 1, price: 10 }) },
-          { ref: { path: 'users/u1/stockTrades/3' }, data: () => ({ symbol: 'CLOSED', side: 'sell', tradeDate: '2026-06-02', quantity: 1, price: 10 }) },
-          { ref: { path: 'users/u2/stockTrades/1' }, data: () => ({ symbol: 'TSLA', side: 'opening_position', tradeDate: '2026-06-01', quantity: 2, price: 200 }) },
-        ],
-      }),
+      doc: (userId) => {
+        assert.equal(userId, 'user-123', 'Firestore discovery uses QUOTE_USER_ID');
+        return {
+          collection: (childName) => {
+            assert.equal(childName, 'stockTrades', 'Firestore discovery reads user stockTrades');
+            return {
+              get: async () => ({
+                docs: [
+                  { data: () => ({ symbol: 'GLDM', side: 'buy', tradeDate: '2026-06-01', quantity: 39, price: 84.8 }) },
+                  { data: () => ({ symbol: 'CLOSED', side: 'buy', tradeDate: '2026-06-01', quantity: 1, price: 10 }) },
+                  { data: () => ({ symbol: 'CLOSED', side: 'sell', tradeDate: '2026-06-02', quantity: 1, price: 10 }) },
+                ],
+              }),
+            };
+          },
+        };
+      },
     };
   },
 };
-const discovered = await discoverFirestoreQuoteSymbols(fakeDb);
-assert.deepEqual(discovered.symbols, ['GLDM', 'TSLA'], 'Firestore discovery returns positive holding symbols');
-const combinedSymbols = await loadCombinedQuoteSymbols({ inputPath: tempSymbolsPath, db: fakeDb });
-assert.deepEqual(combinedSymbols.symbols, ['VOO', 'MISSING', 'GLDM', 'TSLA'], 'configured and discovered symbols merge');
+const discovered = await discoverFirestoreQuoteSymbols(fakeDb, 'user-123');
+assert.deepEqual(discovered.symbols, ['GLDM'], 'Firestore discovery returns positive holding symbols for QUOTE_USER_ID');
+const firestoreSymbols = await loadQuoteSymbolsFromSource({ inputPath: tempSymbolsPath, db: fakeDb, quoteUserId: 'user-123' });
+assert.deepEqual(firestoreSymbols.symbols, ['GLDM'], 'Firestore source takes priority');
+assert.equal(firestoreSymbols.symbolsSource, FIRESTORE_DISCOVERY_SOURCE, 'Firestore symbols source');
+const fallbackSymbols = await loadQuoteSymbolsFromSource({ inputPath: tempSymbolsPath });
+assert.deepEqual(fallbackSymbols.symbols, ['VOO', 'MISSING'], 'missing Firestore env falls back to symbols.json');
+assert.equal(fallbackSymbols.symbolsSource, STATIC_SYMBOLS_SOURCE, 'static symbols source');
 const generatedCache = await updateStockQuoteCache({
   inputPath: tempSymbolsPath,
   outputPath: tempLatestPath,
   db: fakeDb,
+  env: { QUOTE_USER_ID: 'user-123' },
   now: new Date('2026-06-06T12:00:00.000Z'),
   quoteClient: {
     quote: async (symbol) => {
@@ -181,11 +207,11 @@ const generatedCache = await updateStockQuoteCache({
     },
   },
 });
-assert.equal(generatedCache.quotes[0].symbol, 'VOO', 'updater writes quote from quote client instance');
-assert.equal(generatedCache.errors[0].symbol, 'MISSING', 'updater keeps per-symbol error');
-assert.equal(generatedCache.symbolSources.discoveredCount, 2, 'updater records Firestore discovery count');
+assert.equal(generatedCache.quotes[0].symbol, 'GLDM', 'updater writes Firestore quote from quote client instance');
+assert.equal(generatedCache.symbolsSource, FIRESTORE_DISCOVERY_SOURCE, 'latest.json includes Firestore symbolsSource');
 const generatedCacheFile = JSON.parse(await fs.readFile(tempLatestPath, 'utf8'));
 near(generatedCacheFile.quotes[0].price, 601.25, 'updater writes latest.json');
+assert.equal(generatedCacheFile.symbolsSource, FIRESTORE_DISCOVERY_SOURCE, 'latest.json file includes symbolsSource');
 
 const cachePayload = buildQuoteCachePayload({
   updatedAt: '2026-06-05T20:00:00.000Z',

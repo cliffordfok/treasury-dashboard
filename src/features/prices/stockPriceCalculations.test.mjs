@@ -176,7 +176,11 @@ assert.equal(cache.provider, 'yahoo_finance2', 'cache provider');
 assert.equal(cache.quotes.length, 1, 'cache only includes matching valid quote');
 assert.equal(cache.quotes[0].symbol, 'VOO', 'cache quote symbol');
 assert.equal(cache.quotes[0].source, STOCK_QUOTE_CACHE_SOURCE, 'cache quote source');
-assert.equal(cache.errors.find((error) => error.symbol === 'NVDA').error, '報價快取未包含此股票', 'missing cache symbol');
+assert.equal(
+  cache.errors.find((error) => error.symbol === 'NVDA').error,
+  '報價快取未包含此股票；請先加入 public/stock-quotes/symbols.json，然後執行 Update Stock Quotes workflow',
+  'missing cache symbol',
+);
 assert.equal(cache.errors.find((error) => error.symbol === 'BAD').error, 'Invalid cached quote price', 'invalid cached price');
 assert.equal(cache.isStale, false, 'fresh cache');
 

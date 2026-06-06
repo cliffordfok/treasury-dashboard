@@ -121,8 +121,13 @@ Manual fallback prices still use the same collection with:
 If the cache does not contain a held symbol, the app shows:
 
 ```text
-報價快取未包含此股票
+報價快取未包含此股票；請先加入 public/stock-quotes/symbols.json，然後執行 Update Stock Quotes workflow
 ```
+
+New holdings are not discovered automatically by GitHub Actions because the static
+cache updater does not read user Firestore data. When a new stock or ETF is added
+to the ledger, add its symbol to `public/stock-quotes/symbols.json`, merge the
+change, then run the `Update Stock Quotes` workflow.
 
 If the cache is stale, the app shows:
 

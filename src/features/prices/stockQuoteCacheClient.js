@@ -80,7 +80,7 @@ export const normalizeStockQuoteCache = (payload = {}, requestedSymbols = [], op
 
   requested.forEach((symbol) => {
     if (!quotedSymbols.has(symbol) && !erroredSymbols.has(symbol)) {
-      errors.push({ symbol, error: '報價快取未包含此股票' });
+      errors.push({ symbol, error: '報價快取未包含此股票；請先加入 public/stock-quotes/symbols.json，然後執行 Update Stock Quotes workflow' });
     }
   });
 

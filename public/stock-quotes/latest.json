@@ -1,24 +1,52 @@
 {
   "provider": "yahoo_finance2",
   "quoteType": "delayed_or_regular_market",
-  "updatedAt": "2026-06-06T12:49:43.550Z",
-  "quotes": [],
-  "errors": [
+  "updatedAt": "2026-06-06T12:59:29.222Z",
+  "quotes": [
     {
       "symbol": "VOO",
-      "error": "Call `const yahooFinance = new YahooFinance()` first.  Upgrading from v2?  See https://github.com/gadicc/yahoo-finance2/blob/dev/docs/UPGRADING.md."
+      "price": 678,
+      "currency": "USD",
+      "asOf": "2026-06-05T20:00:00.000Z",
+      "previousClose": 696.06,
+      "change": -18.06,
+      "changePercent": -2.5946,
+      "source": "yahoo_finance2_quote_cache",
+      "quoteType": "delayed_or_regular_market"
     },
     {
       "symbol": "GOOGL",
-      "error": "Call `const yahooFinance = new YahooFinance()` first.  Upgrading from v2?  See https://github.com/gadicc/yahoo-finance2/blob/dev/docs/UPGRADING.md."
+      "price": 368.53,
+      "currency": "USD",
+      "asOf": "2026-06-05T20:00:01.000Z",
+      "previousClose": 372.19,
+      "change": -3.66,
+      "changePercent": -0.98337,
+      "source": "yahoo_finance2_quote_cache",
+      "quoteType": "delayed_or_regular_market"
     },
     {
       "symbol": "MU",
-      "error": "Call `const yahooFinance = new YahooFinance()` first.  Upgrading from v2?  See https://github.com/gadicc/yahoo-finance2/blob/dev/docs/UPGRADING.md."
+      "price": 864.01,
+      "currency": "USD",
+      "asOf": "2026-06-05T20:00:01.000Z",
+      "previousClose": 996,
+      "change": -131.99,
+      "changePercent": -13.252,
+      "source": "yahoo_finance2_quote_cache",
+      "quoteType": "delayed_or_regular_market"
     },
     {
       "symbol": "NVDA",
-      "error": "Call `const yahooFinance = new YahooFinance()` first.  Upgrading from v2?  See https://github.com/gadicc/yahoo-finance2/blob/dev/docs/UPGRADING.md."
+      "price": 205.1,
+      "currency": "USD",
+      "asOf": "2026-06-05T20:00:00.000Z",
+      "previousClose": 218.66,
+      "change": -13.56,
+      "changePercent": -6.20141,
+      "source": "yahoo_finance2_quote_cache",
+      "quoteType": "delayed_or_regular_market"
     }
-  ]
+  ],
+  "errors": []
 }

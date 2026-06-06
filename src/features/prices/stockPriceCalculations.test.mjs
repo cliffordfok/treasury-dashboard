@@ -8,6 +8,7 @@ import {
   parseYahooQuoteResponse,
 } from './stockPriceCalculations.js';
 import {
+  buildStockQuoteCacheRequestUrl,
   fetchStockQuoteCache,
   isQuoteCacheStale,
   normalizeQuoteCacheSymbols,
@@ -102,6 +103,21 @@ assert.equal(validateQuoteSymbols(['bad symbol']).errors[0].symbol, 'BAD SYMBOL'
 assert.equal(validateQuoteSymbols(Array.from({ length: 51 }, (_, index) => `T${index}`)).symbols.length, 50, 'script limits symbols');
 assert.deepEqual(normalizeQuoteCacheSymbols(['voo', 'VOO', 'BRK-B']), ['VOO', 'BRK-B'], 'client normalizes symbols');
 assert.throws(() => normalizeQuoteCacheSymbols(['bad symbol']), /Invalid stock symbol/, 'client rejects invalid symbol');
+assert.equal(
+  buildStockQuoteCacheRequestUrl('/stock-quotes/latest.json', 'abc123'),
+  '/stock-quotes/latest.json?_ts=abc123',
+  'cache request URL adds cache buster',
+);
+assert.equal(
+  buildStockQuoteCacheRequestUrl('/stock-quotes/latest.json?x=1', 'abc123'),
+  '/stock-quotes/latest.json?x=1&_ts=abc123',
+  'cache request URL preserves existing query',
+);
+assert.equal(
+  buildStockQuoteCacheRequestUrl('/stock-quotes/latest.json', false),
+  '/stock-quotes/latest.json',
+  'cache request URL can disable cache buster',
+);
 
 const normalizedYahoo2 = normalizeYahooFinance2Quote({
   symbol: 'mu',
@@ -174,8 +190,10 @@ assert.equal(isQuoteCacheStale(null), true, 'missing cache date is stale');
 
 const fetchedCache = await fetchStockQuoteCache(['voo'], {
   cacheUrl: '/stock-quotes/latest.json',
-  fetchImpl: async (url) => {
-    assert.equal(url, '/stock-quotes/latest.json', 'cache fetch URL');
+  cacheBust: 'test-run',
+  fetchImpl: async (url, options) => {
+    assert.equal(url, '/stock-quotes/latest.json?_ts=test-run', 'cache fetch URL');
+    assert.equal(options.cache, 'no-store', 'cache fetch disables browser cache');
     return {
       ok: true,
       json: async () => cachePayload,

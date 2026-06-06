@@ -32,6 +32,12 @@ export const getStockQuoteCacheUrl = (baseUrl = import.meta.env?.BASE_URL || '/'
   return `${base}${STOCK_QUOTE_CACHE_PATH}`;
 };
 
+export const buildStockQuoteCacheRequestUrl = (cacheUrl, cacheBust = Date.now()) => {
+  if (cacheBust === false || cacheBust === null || cacheBust === undefined) return cacheUrl;
+  const separator = String(cacheUrl).includes('?') ? '&' : '?';
+  return `${cacheUrl}${separator}_ts=${encodeURIComponent(String(cacheBust))}`;
+};
+
 export const isQuoteCacheStale = (updatedAt, staleHours = STOCK_QUOTE_CACHE_STALE_HOURS, now = new Date()) => {
   const updatedMillis = getTimestampMillis(updatedAt);
   const nowMillis = getTimestampMillis(now);
@@ -96,10 +102,14 @@ export const fetchStockQuoteCache = async (symbols = [], options = {}) => {
   const normalizedSymbols = normalizeQuoteCacheSymbols(symbols);
   const fetchImpl = options.fetchImpl || fetch;
   const cacheUrl = options.cacheUrl || getStockQuoteCacheUrl(options.baseUrl);
+  const requestUrl = buildStockQuoteCacheRequestUrl(cacheUrl, options.cacheBust ?? Date.now());
 
   let response;
   try {
-    response = await fetchImpl(cacheUrl, { headers: { Accept: 'application/json' } });
+    response = await fetchImpl(requestUrl, {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
   } catch (error) {
     throw new Error(`Unable to load stock quote cache from ${cacheUrl}. ${error?.message || ''}`.trim());
   }

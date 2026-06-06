@@ -1,199 +1,115 @@
-# Stock Quote Proxy
+# Stock Quote Cache
 
-Phase Q2 adds optional stock quote support for the Portfolio Dashboard.
+The Portfolio Dashboard uses a static quote cache for stock market value and unrealized P&L estimates.
 
 ## Source
 
-- Provider: `yahoo_finance_unofficial`
+- Provider: `yahoo_finance2`
+- Saved quote source: `yahoo_finance2_quote_cache`
 - Quote type: `delayed_or_regular_market`
-- This is an unofficial Yahoo Finance quote source.
-- No API key is used or stored by the app.
-- Quotes may be delayed, unavailable, throttled, or changed by Yahoo Finance without notice.
+- Yahoo does not provide an official public quote API for this use case.
+- `yahoo-finance2` is an unofficial wrapper and may break if Yahoo changes its responses.
+- No API key is required.
+- Quotes are for portfolio value estimates only and are not trading advice.
 
-The browser must not call Yahoo Finance directly. It calls a server-side proxy.
+The browser must not call Yahoo Finance directly. The project only uses `yahoo-finance2` in Node.js through GitHub Actions.
 
-On Vercel, the included Vercel-style endpoint can be used directly:
+## Cache Files
 
-```text
-/api/stock-quotes
-```
-
-If `VITE_STOCK_QUOTE_PROXY_URL` is not configured, the app defaults to that same-origin endpoint.
-
-For Firebase Functions, Netlify Functions, GitHub Pages, or any other static hosting setup, deploy your own server-side function with the same contract and configure:
+Symbols are maintained in:
 
 ```text
-VITE_STOCK_QUOTE_PROXY_URL
+public/stock-quotes/symbols.json
 ```
 
-If you already use the included Cloudflare Worker for AI analysis, the same worker also accepts the stock quote contract after deploying the latest worker code. In that setup, the frontend can reuse:
-
-```text
-VITE_AI_PROXY_URL
-```
-
-Resolution order:
-
-1. `VITE_STOCK_QUOTE_PROXY_URL`
-2. `VITE_AI_PROXY_URL`
-3. `VITE_GEMINI_PROXY_URL`
-4. `/api/stock-quotes`
-
-GitHub Pages does not run `/api/stock-quotes`; it needs one of the proxy environment variables above.
-
-After changing any Vite environment variable, rebuild and redeploy the app. If the proxy is unavailable, users can still enter manual stock prices.
-
-## Proxy Contract
-
-Request:
-
-```http
-POST /api/stock-quotes
-Content-Type: application/json
-```
+Example:
 
 ```json
 {
-  "symbols": ["VOO", "NVDA", "GOOGL"]
+  "symbols": ["VOO", "GOOGL", "MU", "NVDA"],
+  "provider": "yahoo_finance2",
+  "note": "Used by GitHub Actions quote cache updater"
 }
 ```
 
-Response:
+The generated cache lives at:
+
+```text
+public/stock-quotes/latest.json
+```
+
+Response shape:
 
 ```json
 {
-  "provider": "yahoo_finance_unofficial",
+  "provider": "yahoo_finance2",
   "quoteType": "delayed_or_regular_market",
+  "updatedAt": "2026-06-06T22:30:00.000Z",
   "quotes": [
     {
       "symbol": "VOO",
       "price": 693.12,
       "currency": "USD",
-      "asOf": "2026-06-04T20:00:00.000Z",
+      "asOf": "2026-06-06T20:00:00.000Z",
       "previousClose": 690.25,
       "change": 2.87,
       "changePercent": 0.42,
-      "source": "yahoo_finance_unofficial"
+      "source": "yahoo_finance2_quote_cache",
+      "quoteType": "delayed_or_regular_market"
     }
   ],
   "errors": []
 }
 ```
 
-Per-symbol errors should be returned without failing the full request:
+## GitHub Actions
 
-```json
-{
-  "symbol": "XYZ",
-  "error": "No quote returned"
-}
-```
-
-## Deployment
-
-### Vercel
-
-Vercel can run the included serverless API route:
+The workflow is:
 
 ```text
-/api/stock-quotes
+.github/workflows/update-stock-quotes.yml
 ```
 
-`api/stock-quotes.js` supports:
+It supports:
 
-- `GET` health check
-- `POST` quote requests
-- `OPTIONS` CORS preflight
+- `workflow_dispatch` manual runs.
+- A scheduled run at 06:30 Hong Kong time.
+- `contents: write` so it can commit an updated `latest.json` back to `main`.
 
-No extra API key is required.
-
-### GitHub Pages
-
-GitHub Pages is static hosting. It cannot run `api/stock-quotes.js`.
-
-If the app is deployed on GitHub Pages, `/api/stock-quotes` may return `404` or
-`405` because it is handled as a static route. Use an external server-side proxy
-instead.
-
-### Cloudflare Worker
-
-The standalone Worker proxy lives at:
+The script is:
 
 ```text
-workers/stock-quotes-worker.js
+scripts/update-stock-quotes.mjs
 ```
 
-Deployment steps:
+It validates symbols, fetches quotes with `yahoo-finance2`, writes per-symbol errors, and updates `public/stock-quotes/latest.json`.
 
-1. Create a Cloudflare Worker.
-2. Paste the contents of `workers/stock-quotes-worker.js`.
-3. Deploy the Worker.
-4. Copy the Worker URL.
-5. Set the frontend environment variable:
+## Manual Update
+
+To update quotes manually:
+
+1. Open the repository on GitHub.
+2. Go to Actions.
+3. Select `Update Stock Quotes`.
+4. Click `Run workflow`.
+5. Wait for the workflow to commit `Update stock quote cache`.
+6. Let GitHub Pages redeploy from `main`.
+
+## Frontend Behavior
+
+The app fetches:
 
 ```text
-VITE_STOCK_QUOTE_PROXY_URL=https://your-worker-url
+${import.meta.env.BASE_URL}stock-quotes/latest.json
 ```
 
-6. Rebuild and redeploy the frontend.
-
-You can test the proxy with:
-
-```bash
-curl -X POST "https://your-worker-url" \
-  -H "Content-Type: application/json" \
-  -d '{"symbols":["VOO","GOOGL","MU","NVDA"]}'
-```
-
-Expected response shape:
-
-```json
-{
-  "provider": "yahoo_finance_unofficial",
-  "quoteType": "delayed_or_regular_market",
-  "quotes": [],
-  "errors": []
-}
-```
-
-## Proxy Safety Rules
-
-- Uppercase symbols before calling Yahoo Finance.
-- Allow only `A-Z`, `0-9`, `.`, and `-` in symbols.
-- Limit each request to 25 symbols.
-- Do not accept arbitrary Yahoo URLs from the browser.
-- Do not expose any API key.
-- Use a timeout.
-- Return per-symbol errors when Yahoo has no quote.
-- Do not crash the whole request for one bad symbol.
-- Do not write to Firestore from the proxy.
-
-## Firestore Schema
-
-Stock prices are stored separately from stock trades:
+When the user clicks update quotes, matching symbols are copied into:
 
 ```text
 users/{uid}/stockPrices/{symbol}
 ```
 
-Document shape:
-
-```json
-{
-  "symbol": "VOO",
-  "price": 693.12,
-  "currency": "USD",
-  "asOf": "2026-06-04T20:00:00.000Z",
-  "source": "yahoo_finance_unofficial",
-  "quoteType": "delayed_or_regular_market",
-  "previousClose": 690.25,
-  "change": 2.87,
-  "changePercent": 0.42,
-  "updatedAt": "serverTimestamp"
-}
-```
-
-Manual fallback prices use the same collection with:
+Manual fallback prices still use the same collection with:
 
 ```json
 {
@@ -202,23 +118,40 @@ Manual fallback prices use the same collection with:
 }
 ```
 
-## Auto Refresh
+If the cache does not contain a held symbol, the app shows:
 
-The app can attempt an automatic quote refresh when a user opens the app or visits the Stocks page.
+```text
+報價快取未包含此股票
+```
 
-- Only current holdings with `shares > 0` are considered.
-- Symbols without a saved price are refreshed.
-- Symbols with a saved price older than 12 hours are refreshed.
-- Automatic attempts have a 15 minute local cooldown per user.
-- The user can disable automatic quote refresh with the `portfolio:autoQuote:enabled` localStorage setting.
-- Manual quote refresh ignores the cooldown.
-- Automatic refresh does not overwrite a newer manual price. Manual refresh can overwrite it.
-- There is no server-side cron, scheduled function, realtime feed, or quote history chart.
+If the cache is stale, the app shows:
+
+```text
+報價快取可能已過期
+```
+
+## Symbol Rules
+
+- Symbols are uppercased.
+- Only `A-Z`, `0-9`, `.`, and `-` are allowed.
+- The GitHub Actions updater supports up to 50 configured symbols.
+- The app refresh action applies up to 25 current holding symbols at a time.
+- Arbitrary URLs are never accepted.
+
+## Deployment Notes
+
+This quote system does not require:
+
+- Cloudflare Worker
+- Vercel serverless functions
+- API keys
+- Frontend environment variables for quote proxy URLs
+
+`yahoo-finance2` should not be imported from browser code. It is only for the Node.js updater script and GitHub Actions.
 
 ## Limitations
 
-- This does not add realtime market data guarantees.
-- This does not add stock quote history charts.
-- This does not change `stockTrades`, `cashMovements`, or reconciliation snapshots.
-- This does not change CSV import or duplicate fingerprint logic.
-- This does not change Treasury calculations.
+- Quotes may be delayed, stale, unavailable, throttled, or changed by Yahoo without notice.
+- There is no realtime feed.
+- There is no quote history chart.
+- This does not change `stockTrades`, `cashMovements`, reconciliation snapshots, CSV import, Treasury calculations, or portfolio cost/cash logic.

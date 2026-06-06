@@ -2,21 +2,23 @@ import { normalizeStockQuote, STOCK_QUOTE_PROVIDER, STOCK_QUOTE_TYPE } from './s
 
 const SYMBOL_PATTERN = /^[A-Z0-9.-]+$/;
 const MAX_SYMBOLS = 25;
+
 export const DEFAULT_STOCK_QUOTE_PROXY_URL = '/api/stock-quotes';
+
 export const buildStockQuoteProxyErrorMessage = ({ proxyUrl, status, detail } = {}) => {
   const statusText = status ? `HTTP ${status}` : 'network error';
   const detailText = detail ? ` ${detail}` : '';
   return [
     `股票報價 Proxy 未可用。Proxy URL: ${proxyUrl || '(not configured)'}。Status: ${statusText}.${detailText}`,
-    '建議：1. Vercel 使用 /api/stock-quotes。',
-    '2. GitHub Pages 請部署 Cloudflare Worker，並設定 VITE_STOCK_QUOTE_PROXY_URL 指向可用的 Worker URL。',
-    '3. 修改 VITE env 後需要重新 build / deploy。',
+    'GitHub Pages 不支援 serverless API，請改用 Vercel / Netlify 部署，或使用手動價格。',
+    '如使用 Vercel / Netlify，可使用 /api/stock-quotes；其他平台請設定 VITE_STOCK_QUOTE_PROXY_URL 指向可用的 server-side proxy。',
   ].join(' ');
 };
+
 export const STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE = buildStockQuoteProxyErrorMessage();
 
 export const resolveStockQuoteProxyUrl = (env = {}) =>
-  env.VITE_STOCK_QUOTE_PROXY_URL || env.VITE_AI_PROXY_URL || env.VITE_GEMINI_PROXY_URL || DEFAULT_STOCK_QUOTE_PROXY_URL;
+  env.VITE_STOCK_QUOTE_PROXY_URL || DEFAULT_STOCK_QUOTE_PROXY_URL;
 
 export const getStockQuoteProxyUrl = () => resolveStockQuoteProxyUrl(import.meta.env);
 

@@ -80,7 +80,7 @@ export const normalizeStockQuoteCache = (payload = {}, requestedSymbols = [], op
 
   requested.forEach((symbol) => {
     if (!quotedSymbols.has(symbol) && !erroredSymbols.has(symbol)) {
-      errors.push({ symbol, error: '報價快取未包含此股票；如剛新增持倉，請先執行 Update Stock Quotes workflow；如仍缺少，請確認 workflow 已設定 Firestore symbol discovery 或手動加入 symbols.json' });
+      errors.push({ symbol, error: '報價快取未包含此股票；可能是新加入，等待下一次報價快取更新，或使用手動價格。' });
     }
   });
 

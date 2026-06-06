@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import yahooFinance from 'yahoo-finance2';
+import YahooFinance from 'yahoo-finance2';
 
 export const QUOTE_CACHE_PROVIDER = 'yahoo_finance2';
 export const QUOTE_CACHE_SOURCE = 'yahoo_finance2_quote_cache';
@@ -14,6 +14,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const symbolsPath = path.join(repoRoot, 'public', 'stock-quotes', 'symbols.json');
 const latestPath = path.join(repoRoot, 'public', 'stock-quotes', 'latest.json');
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 const toNumberOrNull = (value) => {
   if (value === null || value === undefined || value === '') return null;

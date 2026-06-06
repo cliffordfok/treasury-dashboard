@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {
   attachPricesToPositions,
   calculateStockMarketTotals,
@@ -21,6 +24,7 @@ import {
 import {
   buildQuoteCachePayload,
   normalizeYahooFinance2Quote,
+  updateStockQuoteCache,
   validateQuoteSymbols,
 } from '../../../scripts/update-stock-quotes.mjs';
 
@@ -112,6 +116,31 @@ assert.equal(normalizedYahoo2.symbol, 'MU', 'script quote symbol');
 assert.equal(normalizedYahoo2.source, STOCK_QUOTE_CACHE_SOURCE, 'script quote source');
 near(normalizedYahoo2.price, 95.5, 'script quote price');
 assert.equal(normalizeYahooFinance2Quote({ symbol: 'MU' }), null, 'missing price is not converted to zero');
+
+const tempQuoteDir = await fs.mkdtemp(path.join(os.tmpdir(), 'quote-cache-test-'));
+const tempSymbolsPath = path.join(tempQuoteDir, 'symbols.json');
+const tempLatestPath = path.join(tempQuoteDir, 'latest.json');
+await fs.writeFile(tempSymbolsPath, JSON.stringify({ symbols: ['voo', 'missing'] }), 'utf8');
+const generatedCache = await updateStockQuoteCache({
+  inputPath: tempSymbolsPath,
+  outputPath: tempLatestPath,
+  now: new Date('2026-06-06T12:00:00.000Z'),
+  quoteClient: {
+    quote: async (symbol) => {
+      if (symbol === 'MISSING') throw new Error('mock missing quote');
+      return {
+        symbol,
+        regularMarketPrice: 601.25,
+        currency: 'USD',
+        regularMarketTime: new Date('2026-06-06T11:00:00.000Z'),
+      };
+    },
+  },
+});
+assert.equal(generatedCache.quotes[0].symbol, 'VOO', 'updater writes quote from quote client instance');
+assert.equal(generatedCache.errors[0].symbol, 'MISSING', 'updater keeps per-symbol error');
+const generatedCacheFile = JSON.parse(await fs.readFile(tempLatestPath, 'utf8'));
+near(generatedCacheFile.quotes[0].price, 601.25, 'updater writes latest.json');
 
 const cachePayload = buildQuoteCachePayload({
   updatedAt: '2026-06-05T20:00:00.000Z',

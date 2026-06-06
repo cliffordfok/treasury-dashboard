@@ -84,13 +84,17 @@ export const normalizeStockQuoteCache = (payload = {}, requestedSymbols = [], op
     }
   });
 
+  const payloadWarnings = Array.isArray(payload.warnings)
+    ? payload.warnings.map((item) => item.message || String(item)).filter(Boolean)
+    : [];
   const isStale = isQuoteCacheStale(payload.updatedAt, staleHours, now);
-  const warnings = isStale ? ['報價快取可能已過期'] : [];
+  const warnings = [...payloadWarnings, ...(isStale ? ['報價快取可能已過期'] : [])];
 
   return {
     provider: payload.provider || STOCK_QUOTE_CACHE_PROVIDER,
     quoteType: payload.quoteType || STOCK_QUOTE_TYPE,
     updatedAt: payload.updatedAt || null,
+    symbolsSource: payload.symbolsSource || '',
     quotes,
     errors,
     warnings,

@@ -10,6 +10,7 @@ export const QUOTE_CACHE_TYPE = 'delayed_or_regular_market';
 export const MAX_QUOTE_CACHE_SYMBOLS = 50;
 export const SYMBOL_PATTERN = /^[A-Z0-9.-]+$/;
 export const FIRESTORE_DISCOVERY_SOURCE = 'firestore_stock_trades';
+export const STATIC_SYMBOLS_SOURCE = 'static_symbols_json';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -96,6 +97,13 @@ export const loadQuoteSymbols = async (filePath = symbolsPath) => {
   return validateQuoteSymbols(payload.symbols);
 };
 
+export const deriveActiveSymbolsFromStockTrades = (trades = [], maxSymbols = MAX_QUOTE_CACHE_SYMBOLS) => {
+  const activeSymbols = calculateStockPositions(trades)
+    .filter((position) => Number(position.quantity) > 0)
+    .map((position) => position.symbol);
+  return validateQuoteSymbols(activeSymbols, maxSymbols);
+};
+
 export const parseFirebaseServiceAccount = (value) => {
   if (!value) return null;
   const trimmed = String(value).trim();
@@ -114,7 +122,8 @@ export const parseFirebaseServiceAccount = (value) => {
 
 export const createFirestoreClientFromEnv = async (env = process.env) => {
   const serviceAccount = parseFirebaseServiceAccount(env.FIREBASE_SERVICE_ACCOUNT_JSON);
-  if (!serviceAccount) return null;
+  const quoteUserId = String(env.QUOTE_USER_ID || '').trim();
+  if (!serviceAccount || !quoteUserId) return null;
 
   const { cert, getApps, initializeApp } = await import('firebase-admin/app');
   const { getFirestore } = await import('firebase-admin/firestore');
@@ -128,53 +137,44 @@ export const createFirestoreClientFromEnv = async (env = process.env) => {
   return getFirestore(app);
 };
 
-export const getUserIdFromStockTradePath = (docRef = {}) => {
-  const segments = String(docRef.path || '').split('/');
-  const usersIndex = segments.indexOf('users');
-  return usersIndex >= 0 ? segments[usersIndex + 1] || '' : '';
-};
-
-export const discoverFirestoreQuoteSymbols = async (db, options = {}) => {
+export const discoverFirestoreQuoteSymbols = async (db, userId, options = {}) => {
   if (!db) return { symbols: [], errors: [] };
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) return { symbols: [], errors: [{ symbol: '', error: 'QUOTE_USER_ID is required for Firestore symbol discovery' }] };
   const maxSymbols = options.maxSymbols ?? MAX_QUOTE_CACHE_SYMBOLS;
-  const tradesByUser = new Map();
-  const errors = [];
 
-  const snapshot = await db.collectionGroup('stockTrades').get();
-  snapshot.docs.forEach((docSnap) => {
-    const trade = docSnap.data();
-    const userId = getUserIdFromStockTradePath(docSnap.ref);
-    if (!userId) return;
-    const userTrades = tradesByUser.get(userId) || [];
-    userTrades.push(trade);
-    tradesByUser.set(userId, userTrades);
-  });
-
-  const discovered = [];
-  tradesByUser.forEach((trades) => {
-    calculateStockPositions(trades).forEach((position) => {
-      if (Number(position.quantity) > 0) discovered.push(position.symbol);
-    });
-  });
-
-  const validated = validateQuoteSymbols(discovered, maxSymbols);
-  errors.push(...validated.errors.map((error) => ({ ...error, source: FIRESTORE_DISCOVERY_SOURCE })));
-  return { symbols: validated.symbols, errors };
+  const snapshot = await db.collection('users').doc(normalizedUserId).collection('stockTrades').get();
+  const trades = snapshot.docs.map((docSnap) => docSnap.data());
+  const validated = deriveActiveSymbolsFromStockTrades(trades, maxSymbols);
+  return {
+    symbols: validated.symbols,
+    errors: validated.errors.map((error) => ({ ...error, source: FIRESTORE_DISCOVERY_SOURCE })),
+  };
 };
 
-export const loadCombinedQuoteSymbols = async ({
+export const loadQuoteSymbolsFromSource = async ({
   inputPath = symbolsPath,
   db = null,
+  quoteUserId = '',
   maxSymbols = MAX_QUOTE_CACHE_SYMBOLS,
 } = {}) => {
+  if (db && quoteUserId) {
+    const discovered = await discoverFirestoreQuoteSymbols(db, quoteUserId, { maxSymbols });
+    return {
+      symbols: discovered.symbols,
+      errors: discovered.errors,
+      warnings: discovered.symbols.length === 0 ? [{ message: 'No active stock holdings found from Firestore stockTrades' }] : [],
+      symbolsSource: FIRESTORE_DISCOVERY_SOURCE,
+    };
+  }
+
   const configured = await loadQuoteSymbols(inputPath);
-  const discovered = db ? await discoverFirestoreQuoteSymbols(db, { maxSymbols }) : { symbols: [], errors: [] };
-  const merged = validateQuoteSymbols([...configured.symbols, ...discovered.symbols], maxSymbols);
+  const validated = validateQuoteSymbols(configured.symbols, maxSymbols);
   return {
-    symbols: merged.symbols,
-    errors: [...configured.errors, ...discovered.errors, ...merged.errors],
-    configuredSymbols: configured.symbols,
-    discoveredSymbols: discovered.symbols,
+    symbols: validated.symbols,
+    errors: [...configured.errors, ...validated.errors],
+    warnings: validated.symbols.length === 0 ? [{ message: 'No symbols configured in public/stock-quotes/symbols.json' }] : [],
+    symbolsSource: STATIC_SYMBOLS_SOURCE,
   };
 };
 
@@ -194,9 +194,11 @@ export const updateStockQuoteCache = async ({
   now = new Date(),
 } = {}) => {
   const firestoreDb = db || await createFirestoreClientFromEnv(env);
-  const { symbols, errors, configuredSymbols, discoveredSymbols } = await loadCombinedQuoteSymbols({
+  const quoteUserId = String(env.QUOTE_USER_ID || '').trim();
+  const { symbols, errors, warnings, symbolsSource } = await loadQuoteSymbolsFromSource({
     inputPath,
     db: firestoreDb,
+    quoteUserId,
   });
   const quotes = [];
   const quoteErrors = [...errors];
@@ -216,12 +218,8 @@ export const updateStockQuoteCache = async ({
     errors: quoteErrors,
     updatedAt: now instanceof Date ? now.toISOString() : new Date(now).toISOString(),
   });
-  payload.symbolSources = {
-    configuredCount: configuredSymbols.length,
-    discoveredCount: discoveredSymbols.length,
-    totalCount: symbols.length,
-    firestoreDiscoveryEnabled: Boolean(firestoreDb),
-  };
+  payload.symbolsSource = symbolsSource;
+  payload.warnings = warnings;
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');

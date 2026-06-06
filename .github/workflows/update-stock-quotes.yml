@@ -5,6 +5,8 @@ on:
   schedule:
     # 06:30 Hong Kong time.
     - cron: '30 22 * * *'
+    # 21:00 Hong Kong time.
+    - cron: '0 13 * * *'
 
 permissions:
   contents: write
@@ -31,6 +33,7 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
           FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          QUOTE_USER_ID: ${{ secrets.QUOTE_USER_ID || vars.QUOTE_USER_ID }}
 
       - name: Commit Quote Cache
         run: |

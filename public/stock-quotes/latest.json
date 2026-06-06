@@ -1,7 +1,7 @@
 {
   "provider": "yahoo_finance2",
   "quoteType": "delayed_or_regular_market",
-  "updatedAt": "2026-06-06T12:59:29.222Z",
+  "updatedAt": "2026-06-06T13:43:19.304Z",
   "quotes": [
     {
       "symbol": "VOO",
@@ -46,7 +46,24 @@
       "changePercent": -6.20141,
       "source": "yahoo_finance2_quote_cache",
       "quoteType": "delayed_or_regular_market"
+    },
+    {
+      "symbol": "GLDM",
+      "price": 85.42,
+      "currency": "USD",
+      "asOf": "2026-06-05T20:00:00.000Z",
+      "previousClose": 88.67,
+      "change": -3.25,
+      "changePercent": -3.66528,
+      "source": "yahoo_finance2_quote_cache",
+      "quoteType": "delayed_or_regular_market"
     }
   ],
-  "errors": []
+  "errors": [],
+  "symbolSources": {
+    "configuredCount": 5,
+    "discoveredCount": 0,
+    "totalCount": 5,
+    "firestoreDiscoveryEnabled": false
+  }
 }

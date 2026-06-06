@@ -1,0 +1,42 @@
+name: Update Stock Quotes
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 06:30 Hong Kong time.
+    - cron: '30 22 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  update-stock-quotes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Update Stock Quote Cache
+        run: node scripts/update-stock-quotes.mjs
+
+      - name: Commit Quote Cache
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/stock-quotes/latest.json
+          if git diff --cached --quiet; then
+            echo "No stock quote cache changes to commit."
+          else
+            git commit -m "Update stock quote cache"
+            git push origin HEAD:main
+          fi

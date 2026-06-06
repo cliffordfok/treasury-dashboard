@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Briefcase, DollarSign, Edit2, Loader2, Plus, RefreshCw, Trash2, TrendingUp, Wallet, XCircle } from 'lucide-react';
 import { EPSILON, calculateStockPortfolioTotals, calculateStockPositions, getStockTradeCashImpact, toNumber } from './stockCalculations';
 import { defaultStockTradeForm, deleteStockTrade, normalizeStockTradeForStorage, saveStockTrade, subscribeStockTrades, updateStockTrade } from './stockFirestore';
-import { fetchStockQuotes } from '../prices/stockQuoteClient.js';
+import { fetchStockQuoteCache } from '../prices/stockQuoteCacheClient.js';
 import { getStockPriceMap, saveManualStockPrice, saveStockPrices, subscribeStockPrices } from '../prices/stockPriceFirestore.js';
 import { attachPricesToPositions, calculateStockMarketTotals } from '../prices/stockPriceCalculations.js';
 import {
@@ -128,14 +128,18 @@ export default function StockDashboard({ db, user }) {
     if (mode === 'manual') setIsRefreshingPrices(true);
     setPriceError('');
     try {
-      const result = await fetchStockQuotes(symbols);
+      const result = await fetchStockQuoteCache(symbols);
       const quotesToSave = filterQuotesForSave(result.quotes, priceMap, mode);
       if (quotesToSave.length > 0) {
         await saveStockPrices(db, user.uid, quotesToSave);
       }
       const skippedCount = result.quotes.length - quotesToSave.length;
-      if (result.errors.length > 0) {
-        setPriceError(result.errors.map((item) => `${item.symbol}: ${item.error}`).join(' / '));
+      const messages = [
+        ...(result.warnings || []),
+        ...(result.errors || []).map((item) => `${item.symbol}: ${item.error}`),
+      ];
+      if (messages.length > 0) {
+        setPriceError(messages.join(' / '));
       }
       return { updatedCount: quotesToSave.length, failedCount: result.errors.length, skippedCount };
     } catch (err) {
@@ -267,7 +271,7 @@ export default function StockDashboard({ db, user }) {
       setAutoQuoteStatus((prev) => ({
         ...prev,
         lastAttempt: lastAttempt || prev.lastAttempt,
-        message: '自動更新 cooldown 中；如 proxy 已修復，可按 Refresh quotes 立即重試。',
+        message: '自動更新 cooldown 中；可按更新報價立即重新讀取快取。',
       }));
       return;
     }
@@ -370,7 +374,8 @@ export default function StockDashboard({ db, user }) {
         <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
             <h3 className="text-sm font-medium text-slate-800">Stock quote update</h3>
-            <p className="text-xs text-slate-500 mt-1">Uses a server-side proxy. Current source: Yahoo Finance unofficial.</p>
+            <p className="text-xs text-slate-500 mt-1">報價來源：Yahoo Finance 非官方快取。此報價只用於估算市值及未實現盈虧。</p>
+            <p className="text-xs text-slate-400 mt-1">如報價未更新，可到 GitHub Actions 手動執行 Update Stock Quotes workflow。</p>
           </div>
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <label className="flex items-center gap-2 text-sm text-slate-600">
@@ -379,7 +384,7 @@ export default function StockDashboard({ db, user }) {
             </label>
             <button type="button" onClick={handleRefreshPrices} disabled={isRefreshingPrices || positions.length === 0} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
               {isRefreshingPrices ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-              Refresh quotes
+              更新報價
             </button>
           </div>
         </div>

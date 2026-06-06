@@ -1,0 +1,7 @@
+{
+  "provider": "yahoo_finance2",
+  "quoteType": "delayed_or_regular_market",
+  "updatedAt": null,
+  "quotes": [],
+  "errors": []
+}

@@ -8,8 +8,8 @@ let overview = buildPortfolioOverview();
 equal(overview.stocks.symbolCount, 0, 'empty overview stock symbols');
 equal(overview.cash.calculatedCashBalance, 0, 'empty overview cash balance');
 equal(overview.reconciliation.hasSnapshot, false, 'empty overview reconciliation snapshot');
-equal(overview.stocks.marketValueLabel, '暫未接報價', 'stock market value is not estimated');
-equal(overview.stocks.hasMarketValue, false, 'empty overview has no stock market value');
+equal('marketValue' in overview.stocks, false, 'stock market value is disabled');
+equal('unrealizedPnl' in overview.stocks, false, 'stock unrealized pnl is disabled');
 
 overview = buildPortfolioOverview({
   stockTrades: [
@@ -20,7 +20,6 @@ overview = buildPortfolioOverview({
 equal(overview.stocks.symbolCount, 2, 'stock summary symbol count');
 near(overview.stocks.remainingCost, 1460, 'stock summary remaining cost');
 near(overview.stocks.cashImpact, -1460, 'stock summary cash impact');
-equal(overview.stocks.hasMarketValue, false, 'stock summary has no market value without prices');
 
 overview = buildPortfolioOverview({
   stockTrades: [
@@ -30,10 +29,8 @@ overview = buildPortfolioOverview({
     { symbol: 'VOO', price: 700, currency: 'USD', asOf: new Date().toISOString(), source: 'manual' },
   ],
 });
-equal(overview.stocks.hasMarketValue, true, 'stock summary has market value with prices');
-near(overview.stocks.marketValue, 1400, 'stock summary market value');
-near(overview.stocks.unrealizedPnl, 40, 'stock summary unrealized pnl');
-equal(overview.stocks.pricedSymbolCount, 1, 'stock summary priced count');
+near(overview.stocks.remainingCost, 1360, 'stockPrices are ignored while quotes are disabled');
+equal('marketValue' in overview.stocks, false, 'stockPrices do not create market value');
 
 overview = buildPortfolioOverview({
   cashMovements: [{ type: 'opening_balance', date: '2026-05-01', amount: 10000 }],

@@ -1,21 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Briefcase, DollarSign, Edit2, Loader2, Plus, RefreshCw, Trash2, TrendingUp, Wallet, XCircle } from 'lucide-react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
+import { Briefcase, DollarSign, Edit2, Loader2, Plus, Trash2, TrendingUp, Wallet, XCircle } from 'lucide-react';
 import { EPSILON, calculateStockPortfolioTotals, calculateStockPositions, getStockTradeCashImpact, toNumber } from './stockCalculations';
 import { defaultStockTradeForm, deleteStockTrade, normalizeStockTradeForStorage, saveStockTrade, subscribeStockTrades, updateStockTrade } from './stockFirestore';
-import { fetchStockQuotes } from '../prices/stockQuoteClient.js';
-import { getStockPriceMap, saveManualStockPrice, saveStockPrices, subscribeStockPrices } from '../prices/stockPriceFirestore.js';
-import { attachPricesToPositions, calculateStockMarketTotals } from '../prices/stockPriceCalculations.js';
-import {
-  AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES,
-  AUTO_QUOTE_ENABLED_KEY,
-  AUTO_QUOTE_STALE_HOURS,
-  beginAutoQuoteRefresh,
-  endAutoQuoteRefresh,
-  filterQuotesForSave,
-  getAutoQuoteLastAttemptKey,
-  getSymbolsNeedingRefresh,
-  shouldAttemptAutoRefresh,
-} from '../prices/autoQuoteRefresh.js';
 
 const money = (value, currency = 'USD') =>
   `${currency} ${toNumber(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -28,17 +14,6 @@ const signedMoney = (value, currency = 'USD') => {
   return `${amount >= 0 ? '+' : ''}${money(amount, currency)}`;
 };
 
-const hasNumber = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
-const nullableMoney = (value, currency = 'USD') => (hasNumber(value) ? money(value, currency) : '--');
-const signedNullableMoney = (value, currency = 'USD') => (hasNumber(value) ? signedMoney(value, currency) : '--');
-const todayInputValue = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0];
-const formatDateTime = (value) => {
-  if (!value) return '--';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '--';
-  return date.toLocaleString();
-};
-
 const sideLabel = (side) => {
   if (side === 'sell') return '賣出';
   if (side === 'opening_position') return '期初持倉';
@@ -47,27 +22,12 @@ const sideLabel = (side) => {
 
 export default function StockDashboard({ db, user }) {
   const [stockTrades, setStockTrades] = useState([]);
-  const [stockPrices, setStockPrices] = useState([]);
   const [formData, setFormData] = useState(defaultStockTradeForm);
-  const [manualPriceForm, setManualPriceForm] = useState({ symbol: '', price: '', currency: 'USD', asOf: todayInputValue() });
   const [editingTradeId, setEditingTradeId] = useState('');
   const [editingTrade, setEditingTrade] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [isRefreshingPrices, setIsRefreshingPrices] = useState(false);
-  const [isSavingManualPrice, setIsSavingManualPrice] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-  const [priceError, setPriceError] = useState('');
-  const [isAutoQuoteEnabled, setIsAutoQuoteEnabled] = useState(() => localStorage.getItem(AUTO_QUOTE_ENABLED_KEY) !== 'false');
-  const [autoQuoteStatus, setAutoQuoteStatus] = useState({
-    isRunning: false,
-    lastAttempt: localStorage.getItem(getAutoQuoteLastAttemptKey(user?.uid)) || '',
-    updatedCount: 0,
-    failedCount: 0,
-    skippedCount: 0,
-    message: '',
-  });
-  const autoQuoteSignatureRef = useRef('');
 
   useEffect(() => {
     if (!db || !user?.uid) return undefined;
@@ -87,24 +47,8 @@ export default function StockDashboard({ db, user }) {
     );
   }, [db, user?.uid]);
 
-  useEffect(() => {
-    if (!db || !user?.uid) return undefined;
-    return subscribeStockPrices(
-      db,
-      user.uid,
-      (prices) => {
-        setStockPrices(prices);
-        setPriceError('');
-      },
-      (err) => setPriceError(err.message || 'Unable to load stock prices.'),
-    );
-  }, [db, user?.uid]);
-
   const positions = useMemo(() => calculateStockPositions(stockTrades), [stockTrades]);
   const totals = useMemo(() => calculateStockPortfolioTotals(positions), [positions]);
-  const priceMap = useMemo(() => getStockPriceMap(stockPrices), [stockPrices]);
-  const positionsWithPrices = useMemo(() => attachPricesToPositions(positions, priceMap), [positions, priceMap]);
-  const marketTotals = useMemo(() => calculateStockMarketTotals(positionsWithPrices), [positionsWithPrices]);
   const validationPositions = useMemo(
     () => calculateStockPositions(editingTradeId ? stockTrades.filter((trade) => trade.id !== editingTradeId) : stockTrades),
     [editingTradeId, stockTrades],
@@ -117,68 +61,6 @@ export default function StockDashboard({ db, user }) {
     commission: value === 'opening_position' ? 0 : prev.commission,
     fees: value === 'opening_position' ? 0 : prev.fees,
   }));
-  const updateManualPrice = (field, value) => setManualPriceForm((prev) => ({ ...prev, [field]: value }));
-
-  const refreshQuotes = async (symbols, mode = 'manual') => {
-    if (!db || !user?.uid) return;
-    if (symbols.length === 0) {
-      setPriceError('No stock positions to refresh.');
-      return;
-    }
-    if (mode === 'manual') setIsRefreshingPrices(true);
-    setPriceError('');
-    try {
-      const result = await fetchStockQuotes(symbols);
-      const quotesToSave = filterQuotesForSave(result.quotes, priceMap, mode);
-      if (quotesToSave.length > 0) {
-        await saveStockPrices(db, user.uid, quotesToSave);
-      }
-      const skippedCount = result.quotes.length - quotesToSave.length;
-      const messages = [
-        ...(result.warnings || []),
-        ...(result.errors || []).map((item) => `${item.symbol}: ${item.error}`),
-      ];
-      if (messages.length > 0) {
-        setPriceError(messages.join(' / '));
-      }
-      return { updatedCount: quotesToSave.length, failedCount: result.errors.length, skippedCount };
-    } catch (err) {
-      setPriceError(err.message || 'Unable to refresh stock prices.');
-      if (mode === 'auto') throw err;
-      return { updatedCount: 0, failedCount: symbols.length, skippedCount: 0 };
-    } finally {
-      if (mode === 'manual') setIsRefreshingPrices(false);
-    }
-  };
-
-  const handleRefreshPrices = async () => {
-    const symbols = positions
-      .filter((position) => Number(position.quantity) > 0)
-      .map((position) => position.symbol)
-      .filter(Boolean)
-      .slice(0, 25);
-    await refreshQuotes(symbols, 'manual');
-  };
-
-  const handleSaveManualPrice = async (event) => {
-    event.preventDefault();
-    if (!db || !user?.uid) return;
-    setIsSavingManualPrice(true);
-    setPriceError('');
-    try {
-      await saveManualStockPrice(db, user.uid, {
-        ...manualPriceForm,
-        symbol: manualPriceForm.symbol.toUpperCase(),
-        asOf: manualPriceForm.asOf ? new Date(`${manualPriceForm.asOf}T00:00:00`).toISOString() : new Date().toISOString(),
-      });
-      setManualPriceForm({ symbol: '', price: '', currency: 'USD', asOf: todayInputValue() });
-    } catch (err) {
-      setPriceError(err.message || 'Unable to save manual stock price.');
-    } finally {
-      setIsSavingManualPrice(false);
-    }
-  };
-
   const resetForm = () => {
     setFormData(defaultStockTradeForm());
     setEditingTradeId('');
@@ -254,75 +136,6 @@ export default function StockDashboard({ db, user }) {
     }
   };
 
-  const handleAutoQuoteToggle = (event) => {
-    const enabled = event.target.checked;
-    setIsAutoQuoteEnabled(enabled);
-    localStorage.setItem(AUTO_QUOTE_ENABLED_KEY, enabled ? 'true' : 'false');
-    if (!enabled) setAutoQuoteStatus((prev) => ({ ...prev, message: '自動更新已關閉。' }));
-  };
-
-  useEffect(() => {
-    if (!db || !user?.uid || isLoading || !isAutoQuoteEnabled) return;
-    const symbols = getSymbolsNeedingRefresh(positions, priceMap, { staleHours: AUTO_QUOTE_STALE_HOURS });
-    if (symbols.length === 0) {
-      setAutoQuoteStatus((prev) => ({ ...prev, message: '所有持倉報價仍然有效。' }));
-      return;
-    }
-
-    const lastAttemptKey = getAutoQuoteLastAttemptKey(user.uid);
-    const lastAttempt = localStorage.getItem(lastAttemptKey);
-    if (!shouldAttemptAutoRefresh(lastAttempt, AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES)) {
-      setAutoQuoteStatus((prev) => ({
-        ...prev,
-        lastAttempt: lastAttempt || prev.lastAttempt,
-        message: '自動更新 cooldown 中；可按更新報價立即重新讀取快取。',
-      }));
-      return;
-    }
-
-    const signature = `${user.uid}:${symbols.join(',')}:${lastAttempt || ''}`;
-    if (autoQuoteSignatureRef.current === signature) return;
-    if (!beginAutoQuoteRefresh()) return;
-
-    autoQuoteSignatureRef.current = signature;
-    const attemptedAt = new Date().toISOString();
-    localStorage.setItem(lastAttemptKey, attemptedAt);
-    setAutoQuoteStatus((prev) => ({
-      ...prev,
-      isRunning: true,
-      lastAttempt: attemptedAt,
-      message: `自動更新 ${symbols.length} 個股票代號...`,
-    }));
-
-    refreshQuotes(symbols, 'auto')
-      .then((result) => {
-        setAutoQuoteStatus((prev) => ({
-          ...prev,
-          isRunning: false,
-          lastAttempt: attemptedAt,
-          updatedCount: result?.updatedCount || 0,
-          failedCount: result?.failedCount || 0,
-          skippedCount: result?.skippedCount || 0,
-          message: `自動更新完成：${result?.updatedCount || 0} 個成功，${result?.failedCount || 0} 個失敗。`,
-        }));
-      })
-      .catch((err) => {
-        setAutoQuoteStatus((prev) => ({
-          ...prev,
-          isRunning: false,
-          lastAttempt: attemptedAt,
-          updatedCount: 0,
-          failedCount: symbols.length,
-          skippedCount: 0,
-          message: '自動報價失敗，可稍後再試或使用手動價格。',
-        }));
-        setPriceError(err.message || '自動報價失敗，可稍後再試或使用手動價格。');
-      })
-      .finally(() => {
-        endAutoQuoteRefresh();
-      });
-  }, [db, user?.uid, isLoading, isAutoQuoteEnabled, positions, priceMap]);
-
   return (
     <div className="space-y-4 sm:space-y-6">
       <div className="bg-slate-900 text-white rounded-xl shadow-sm p-4 sm:p-5 relative overflow-hidden">
@@ -349,94 +162,6 @@ export default function StockDashboard({ db, user }) {
           <div className={`p-2.5 rounded-lg ${totals.cashImpact >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}><Wallet size={20} /></div>
           <div className="min-w-0"><p className="text-[11px] text-slate-500 font-medium leading-tight">股票交易現金影響</p><p className={`text-base sm:text-xl font-bold truncate ${totals.cashImpact >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(totals.cashImpact)}</p></div>
         </div>
-      </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 min-w-0">
-          <p className="text-[11px] text-slate-500 font-medium leading-tight">Market Value</p>
-          <p className="text-base sm:text-xl font-bold text-slate-800 truncate">{nullableMoney(marketTotals.totalMarketValue)}</p>
-          <p className="text-[10px] text-slate-400 mt-1 truncate">From saved stockPrices</p>
-        </div>
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 min-w-0">
-          <p className="text-[11px] text-slate-500 font-medium leading-tight">Unrealized P&amp;L</p>
-          <p className={`text-base sm:text-xl font-bold truncate ${marketTotals.totalUnrealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedNullableMoney(marketTotals.totalUnrealizedPnl)}</p>
-          <p className="text-[10px] text-slate-400 mt-1 truncate">Market value - remaining cost</p>
-        </div>
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 min-w-0">
-          <p className="text-[11px] text-slate-500 font-medium leading-tight">Priced Symbols</p>
-          <p className="text-base sm:text-xl font-bold text-slate-800 truncate">{marketTotals.pricedSymbolCount} / {positions.length}</p>
-          <p className="text-[10px] text-slate-400 mt-1 truncate">{marketTotals.missingPriceCount} missing</p>
-        </div>
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 min-w-0">
-          <p className="text-[11px] text-slate-500 font-medium leading-tight">Quote Status</p>
-          <p className={`text-base sm:text-xl font-bold truncate ${marketTotals.stalePriceCount > 0 ? 'text-amber-600' : 'text-slate-800'}`}>{marketTotals.stalePriceCount} stale</p>
-          <p className="text-[10px] text-slate-400 mt-1 truncate">Older than 3 calendar days</p>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-medium text-slate-800">Stock quote update</h3>
-            <p className="text-xs text-slate-500 mt-1">報價來源：server-side quote proxy（Yahoo Finance 非官方）。此報價只用於估算市值及未實現盈虧。</p>
-            <p className="text-xs text-slate-400 mt-1">報價清單會由目前持倉自動推算；新增股票後，下一次進入頁面或按更新持倉報價會自動包含該股票。</p>
-          </div>
-          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-            <label className="flex items-center gap-2 text-sm text-slate-600">
-              <input type="checkbox" checked={isAutoQuoteEnabled} onChange={handleAutoQuoteToggle} className="h-4 w-4 rounded border-slate-300" />
-              自動更新報價
-            </label>
-            <button type="button" onClick={handleRefreshPrices} disabled={isRefreshingPrices || positions.length === 0} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
-              {isRefreshingPrices ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-              更新持倉報價
-            </button>
-          </div>
-        </div>
-        <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
-          <div>
-            <p className="font-semibold text-slate-500">Auto quote status</p>
-            <p className={`${autoQuoteStatus.isRunning ? 'text-blue-600' : isAutoQuoteEnabled ? 'text-emerald-600' : 'text-slate-500'}`}>
-              {autoQuoteStatus.isRunning ? '自動更新中...' : isAutoQuoteEnabled ? '自動更新已啟用' : '自動更新已關閉'}
-            </p>
-          </div>
-          <div>
-            <p className="font-semibold text-slate-500">上次自動嘗試</p>
-            <p className="text-slate-600">{formatDateTime(autoQuoteStatus.lastAttempt)}</p>
-          </div>
-          <div>
-            <p className="font-semibold text-slate-500">本次結果</p>
-            <p className="text-slate-600">{autoQuoteStatus.updatedCount} updated / {autoQuoteStatus.failedCount} failed</p>
-          </div>
-          <div>
-            <p className="font-semibold text-slate-500">說明</p>
-            <p className="text-slate-600">{autoQuoteStatus.message || `Stale after ${AUTO_QUOTE_STALE_HOURS} hours · cooldown ${AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES} minutes`}</p>
-          </div>
-        </div>
-        <form onSubmit={handleSaveManualPrice} className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-5 gap-3 bg-slate-50/60">
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Manual symbol</label>
-            <input value={manualPriceForm.symbol} onChange={(e) => updateManualPrice('symbol', e.target.value.toUpperCase())} placeholder="VOO" className="w-full min-h-10 p-2 border rounded-lg text-sm uppercase" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Price</label>
-            <input type="number" min="0" step="0.0001" value={manualPriceForm.price} onChange={(e) => updateManualPrice('price', e.target.value)} placeholder="693.12" className="w-full min-h-10 p-2 border rounded-lg text-sm" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">Currency</label>
-            <input value={manualPriceForm.currency} onChange={(e) => updateManualPrice('currency', e.target.value.toUpperCase())} className="w-full min-h-10 p-2 border rounded-lg text-sm uppercase" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1">As of</label>
-            <input type="date" value={manualPriceForm.asOf} onChange={(e) => updateManualPrice('asOf', e.target.value)} className="w-full min-h-10 p-2 border rounded-lg text-sm" />
-          </div>
-          <div className="flex items-end">
-            <button type="submit" disabled={isSavingManualPrice} className="w-full bg-slate-800 hover:bg-slate-900 disabled:bg-slate-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
-              {isSavingManualPrice ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-              Save price
-            </button>
-          </div>
-          {priceError && <p className="sm:col-span-5 text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-3">{priceError}</p>}
-        </form>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(340px,440px)_1fr] gap-4">
@@ -521,9 +246,9 @@ export default function StockDashboard({ db, user }) {
             <div className="md:hidden divide-y divide-slate-100">
               {isLoading ? (
                 <div className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</div>
-              ) : positionsWithPrices.length === 0 ? (
+              ) : positions.length === 0 ? (
                 <div className="p-6 text-center text-slate-400">未有股票交易。</div>
-              ) : positionsWithPrices.map((position) => (
+              ) : positions.map((position) => (
                 <div key={position.symbol} className="p-4 space-y-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -537,9 +262,6 @@ export default function StockDashboard({ db, user }) {
                     <div><p className="text-xs text-slate-500">平均成本</p><p className="font-semibold">{money(position.averageCost, position.currency)}</p></div>
                     <div><p className="text-xs text-slate-500">剩餘成本</p><p className="font-semibold">{money(position.remainingCost, position.currency)}</p></div>
                     <div><p className="text-xs text-slate-500">已實現盈虧</p><p className={`font-semibold ${position.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(position.realizedPnl, position.currency)}</p></div>
-                    <div><p className="text-xs text-slate-500">Current Price</p><p className="font-semibold">{nullableMoney(position.currentPrice, position.currency)}</p></div>
-                    <div><p className="text-xs text-slate-500">Market Value</p><p className="font-semibold">{nullableMoney(position.marketValue, position.currency)}</p></div>
-                    <div className="col-span-2"><p className="text-xs text-slate-500">Unrealized P&amp;L</p><p className={`font-semibold ${hasNumber(position.unrealizedPnl) && position.unrealizedPnl < 0 ? 'text-red-600' : 'text-green-600'}`}>{signedNullableMoney(position.unrealizedPnl, position.currency)}{hasNumber(position.unrealizedPnlPercent) ? ` (${position.unrealizedPnlPercent.toFixed(2)}%)` : ''}</p></div>
                   </div>
                 </div>
               ))}
@@ -553,26 +275,20 @@ export default function StockDashboard({ db, user }) {
                     <th className="p-3 text-right">平均成本</th>
                     <th className="p-3 text-right">剩餘成本</th>
                     <th className="p-3 text-right">已實現盈虧</th>
-                    <th className="p-3 text-right">Current Price</th>
-                    <th className="p-3 text-right">Market Value</th>
-                    <th className="p-3 text-right">Unrealized P&amp;L</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {isLoading ? (
-                    <tr><td colSpan="8" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</td></tr>
-                  ) : positionsWithPrices.length === 0 ? (
-                    <tr><td colSpan="8" className="p-6 text-center text-slate-400">未有股票交易。</td></tr>
-                  ) : positionsWithPrices.map((position) => (
+                    <tr><td colSpan="5" className="p-6 text-center text-slate-400"><Loader2 className="animate-spin inline mr-2" size={16} />載入中...</td></tr>
+                  ) : positions.length === 0 ? (
+                    <tr><td colSpan="5" className="p-6 text-center text-slate-400">未有股票交易。</td></tr>
+                  ) : positions.map((position) => (
                     <tr key={position.symbol} className="hover:bg-slate-50">
                       <td className="p-3 font-bold text-slate-800">{position.symbol}<div className="text-[10px] text-slate-400 font-normal">{position.name || position.currency}</div></td>
                       <td className="p-3 text-right font-medium">{number(position.quantity)}</td>
                       <td className="p-3 text-right">{money(position.averageCost, position.currency)}</td>
                       <td className="p-3 text-right">{money(position.remainingCost, position.currency)}</td>
                       <td className={`p-3 text-right font-bold ${position.realizedPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>{signedMoney(position.realizedPnl, position.currency)}</td>
-                      <td className="p-3 text-right">{nullableMoney(position.currentPrice, position.currency)}{position.isPriceStale && <div className="text-[10px] text-amber-600">Stale</div>}</td>
-                      <td className="p-3 text-right">{nullableMoney(position.marketValue, position.currency)}</td>
-                      <td className={`p-3 text-right font-bold ${hasNumber(position.unrealizedPnl) && position.unrealizedPnl < 0 ? 'text-red-600' : 'text-green-600'}`}>{signedNullableMoney(position.unrealizedPnl, position.currency)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -679,3 +395,4 @@ export default function StockDashboard({ db, user }) {
     </div>
   );
 }
+

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Briefcase, DollarSign, Edit2, Loader2, Plus, RefreshCw, Trash2, TrendingUp, Wallet, XCircle } from 'lucide-react';
 import { EPSILON, calculateStockPortfolioTotals, calculateStockPositions, getStockTradeCashImpact, toNumber } from './stockCalculations';
 import { defaultStockTradeForm, deleteStockTrade, normalizeStockTradeForStorage, saveStockTrade, subscribeStockTrades, updateStockTrade } from './stockFirestore';
-import { fetchStockQuoteCache } from '../prices/stockQuoteCacheClient.js';
+import { fetchStockQuotes } from '../prices/stockQuoteClient.js';
 import { getStockPriceMap, saveManualStockPrice, saveStockPrices, subscribeStockPrices } from '../prices/stockPriceFirestore.js';
 import { attachPricesToPositions, calculateStockMarketTotals } from '../prices/stockPriceCalculations.js';
 import {
@@ -128,7 +128,7 @@ export default function StockDashboard({ db, user }) {
     if (mode === 'manual') setIsRefreshingPrices(true);
     setPriceError('');
     try {
-      const result = await fetchStockQuoteCache(symbols);
+      const result = await fetchStockQuotes(symbols);
       const quotesToSave = filterQuotesForSave(result.quotes, priceMap, mode);
       if (quotesToSave.length > 0) {
         await saveStockPrices(db, user.uid, quotesToSave);
@@ -152,7 +152,11 @@ export default function StockDashboard({ db, user }) {
   };
 
   const handleRefreshPrices = async () => {
-    const symbols = positions.map((position) => position.symbol).filter(Boolean).slice(0, 25);
+    const symbols = positions
+      .filter((position) => Number(position.quantity) > 0)
+      .map((position) => position.symbol)
+      .filter(Boolean)
+      .slice(0, 25);
     await refreshQuotes(symbols, 'manual');
   };
 
@@ -374,8 +378,8 @@ export default function StockDashboard({ db, user }) {
         <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
             <h3 className="text-sm font-medium text-slate-800">Stock quote update</h3>
-            <p className="text-xs text-slate-500 mt-1">報價來源：Yahoo Finance 非官方快取。此報價只用於估算市值及未實現盈虧。</p>
-            <p className="text-xs text-slate-400 mt-1">如報價未更新，可到 GitHub Actions 手動執行 Update Stock Quotes workflow。</p>
+            <p className="text-xs text-slate-500 mt-1">報價來源：server-side quote proxy（Yahoo Finance 非官方）。此報價只用於估算市值及未實現盈虧。</p>
+            <p className="text-xs text-slate-400 mt-1">報價清單會由目前持倉自動推算；新增股票後，下一次進入頁面或按更新持倉報價會自動包含該股票。</p>
           </div>
           <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <label className="flex items-center gap-2 text-sm text-slate-600">
@@ -384,7 +388,7 @@ export default function StockDashboard({ db, user }) {
             </label>
             <button type="button" onClick={handleRefreshPrices} disabled={isRefreshingPrices || positions.length === 0} className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2">
               {isRefreshingPrices ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-              更新報價
+              更新持倉報價
             </button>
           </div>
         </div>

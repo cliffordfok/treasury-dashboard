@@ -4,7 +4,7 @@ import { subscribeCashMovements } from '../cash/cashFirestore.js';
 import { subscribeReconciliationSnapshots } from '../reconciliation/reconciliationFirestore.js';
 import { subscribeStockTrades } from '../stocks/stockFirestore.js';
 import { calculateStockPositions } from '../stocks/stockCalculations.js';
-import { fetchStockQuoteCache } from '../prices/stockQuoteCacheClient.js';
+import { fetchStockQuotes } from '../prices/stockQuoteClient.js';
 import { getStockPriceMap, saveStockPrices, subscribeStockPrices } from '../prices/stockPriceFirestore.js';
 import {
   AUTO_QUOTE_ATTEMPT_COOLDOWN_MINUTES,
@@ -115,7 +115,7 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
     localStorage.setItem(lastAttemptKey, attemptedAt);
     let cancelled = false;
 
-    fetchStockQuoteCache(symbols)
+    fetchStockQuotes(symbols)
       .then((result) => {
         if (cancelled) return;
         const quotesToSave = filterQuotesForSave(result.quotes, priceMap, 'auto');

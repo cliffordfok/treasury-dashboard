@@ -1,7 +1,24 @@
 {
   "provider": "yahoo_finance2",
   "quoteType": "delayed_or_regular_market",
-  "updatedAt": null,
+  "updatedAt": "2026-06-06T12:49:43.550Z",
   "quotes": [],
-  "errors": []
+  "errors": [
+    {
+      "symbol": "VOO",
+      "error": "Call `const yahooFinance = new YahooFinance()` first.  Upgrading from v2?  See https://github.com/gadicc/yahoo-finance2/blob/dev/docs/UPGRADING.md."
+    },
+    {
+      "symbol": "GOOGL",
+      "error": "Call `const yahooFinance = new YahooFinance()` first.  Upgrading from v2?  See https://github.com/gadicc/yahoo-finance2/blob/dev/docs/UPGRADING.md."
+    },
+    {
+      "symbol": "MU",
+      "error": "Call `const yahooFinance = new YahooFinance()` first.  Upgrading from v2?  See https://github.com/gadicc/yahoo-finance2/blob/dev/docs/UPGRADING.md."
+    },
+    {
+      "symbol": "NVDA",
+      "error": "Call `const yahooFinance = new YahooFinance()` first.  Upgrading from v2?  See https://github.com/gadicc/yahoo-finance2/blob/dev/docs/UPGRADING.md."
+    }
+  ]
 }

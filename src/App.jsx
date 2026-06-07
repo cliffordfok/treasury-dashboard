@@ -12,6 +12,7 @@ import ImportPreviewDashboard from './features/import/ImportPreviewDashboard';
 import { subscribeStockTrades } from './features/stocks/stockFirestore';
 import { calculateStockPositions, normalizeSymbol } from './features/stocks/stockCalculations';
 import { subscribeCashMovements } from './features/cash/cashFirestore';
+import { subscribeStockPrices } from './features/prices/stockPriceFirestore';
 import { buildPortfolioAiSnapshot } from './features/ai/portfolioAiSnapshot';
 import { AI_MODE_LABELS, buildPortfolioAiMessages } from './features/ai/portfolioAiPrompts';
 import { buildAiSnapshotSummary, detectForbiddenAdvice, isSingleStockModeReady, parseAiReportSections, sanitizeAiSnapshotForCopy } from './features/ai/portfolioAiReport';
@@ -531,6 +532,7 @@ export default function App() {
   const [aiAnalysisMode, setAiAnalysisMode] = useState('total_assets');
   const [aiSelectedSymbol, setAiSelectedSymbol] = useState('');
   const [aiStockTrades, setAiStockTrades] = useState([]);
+  const [aiStockPrices, setAiStockPrices] = useState([]);
   const [aiCashMovements, setAiCashMovements] = useState([]);
   const [aiLastSnapshot, setAiLastSnapshot] = useState(null);
   const [aiCopyStatus, setAiCopyStatus] = useState('');
@@ -664,6 +666,19 @@ export default function App() {
 
   useEffect(() => {
     if (!user) {
+      setAiStockPrices([]);
+      return undefined;
+    }
+    return subscribeStockPrices(
+      db,
+      user.uid,
+      setAiStockPrices,
+      (error) => console.error('AI stock price subscription failed:', error),
+    );
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
       setAiCashMovements([]);
       return undefined;
     }
@@ -762,6 +777,7 @@ export default function App() {
     mode: aiAnalysisMode,
     selectedSymbol: aiSelectedSymbol,
     stockTrades: aiStockTrades,
+    stockPrices: aiStockPrices,
     cashMovements: aiCashMovements,
     treasuryData: { trades },
     treasurySummary: portfolioMetrics,
@@ -770,7 +786,7 @@ export default function App() {
 
   const aiPreviewSnapshot = useMemo(
     () => buildCurrentAiSnapshot(),
-    [aiAnalysisMode, aiSelectedSymbol, aiStockTrades, aiCashMovements, trades, portfolioMetrics],
+    [aiAnalysisMode, aiSelectedSymbol, aiStockTrades, aiStockPrices, aiCashMovements, trades, portfolioMetrics],
   );
   const aiSnapshotForDisplay = aiLastSnapshot || aiPreviewSnapshot;
   const aiSnapshotSummary = useMemo(() => buildAiSnapshotSummary(aiSnapshotForDisplay), [aiSnapshotForDisplay]);
@@ -1356,7 +1372,7 @@ export default function App() {
                 <div className="p-1.5 bg-white/80 rounded-lg shadow-sm"><Bot size={20} /></div>
                 <h3 className="text-lg sm:text-xl font-semibold text-slate-900">AI 投資組合分析</h3>
               </div>
-              <p className="text-xs sm:text-sm text-indigo-700/80 mt-2 max-w-3xl">以系統帳本 snapshot 生成報告，聚焦成本、持倉、現金流及美債資料。</p>
+              <p className="text-xs sm:text-sm text-indigo-700/80 mt-2 max-w-3xl">以系統帳本 snapshot 生成報告，聚焦成本、現金流、美債，以及已儲存股票報價帶來的現價、市值、未實現盈虧、集中度和風險訊號。</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm">DeepSeek-V4-Pro</span>
@@ -1434,7 +1450,7 @@ export default function App() {
         )}
         <div className="p-4 sm:p-5 space-y-4">
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs sm:text-sm text-amber-900">
-            本 AI 分析只根據系統內已記錄資料生成，不包含未記錄交易、即時股價、市場新聞或外部研究資料。不構成買賣建議。
+            本 AI 分析只根據系統內已記錄資料生成；股票現價、市值及未實現盈虧只來自已儲存報價資料。不包含未記錄交易、市場新聞或外部研究資料，不構成買賣建議、目標價或預測。
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -1445,6 +1461,11 @@ export default function App() {
               <div><p className="text-xs text-slate-500">Data as-of</p><p className="font-semibold text-slate-800 break-words">{aiSnapshotSummary.asOf ? new Date(aiSnapshotSummary.asOf).toLocaleString('zh-HK', { hour12: false }) : '--'}</p></div>
               <div><p className="text-xs text-slate-500">分析模式</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.modeLabel}</p></div>
               <div><p className="text-xs text-slate-500">股票代號</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.stockSymbolsCount}</p></div>
+              <div><p className="text-xs text-slate-500">報價股票</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.pricedSymbolCount} / {aiSnapshotSummary.stockSymbolsCount}</p></div>
+              <div><p className="text-xs text-slate-500">缺少報價</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.missingPriceCount}</p></div>
+              <div><p className="text-xs text-slate-500">風險訊號</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.riskSignalCount}</p></div>
+              <div><p className="text-xs text-slate-500">股票市值</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.stockMarketValue == null ? '--' : `USD ${Number(aiSnapshotSummary.stockMarketValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</p></div>
+              <div><p className="text-xs text-slate-500">未實現盈虧</p><p className={`font-semibold ${(aiSnapshotSummary.stockUnrealizedPnl || 0) >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>{aiSnapshotSummary.stockUnrealizedPnl == null ? '--' : `${Number(aiSnapshotSummary.stockUnrealizedPnl || 0) >= 0 ? '+' : ''}USD ${Number(aiSnapshotSummary.stockUnrealizedPnl || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</p></div>
               <div><p className="text-xs text-slate-500">現金流水</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.cashMovementCount}</p></div>
               <div><p className="text-xs text-slate-500">美債持倉</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.treasuryHoldingCount}</p></div>
               <div className="col-span-2"><p className="text-xs text-slate-500">資料模組</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.modules.join(' · ')}</p></div>
@@ -1485,7 +1506,7 @@ export default function App() {
             </div>
           ) : (
             <div className="rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 p-4 text-sm text-indigo-500">
-              選擇分析範圍後按「產生分析」。系統會把帳本摘要傳給 AI，不會傳送 API key，也不會包含即時股價或市場新聞。
+              選擇分析範圍後按「產生分析」。系統會把帳本摘要及已儲存股票報價摘要傳給 AI，不會傳送 API key，也不會包含市場新聞。
             </div>
           )}
         </div>

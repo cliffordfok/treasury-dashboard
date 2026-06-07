@@ -1,9 +1,11 @@
 import { AI_MODE_LABELS } from './portfolioAiPrompts.js';
-import { STOCK_QUOTES_DISABLED_LIMITATION } from './portfolioAiSnapshot.js';
+import { STOCK_QUOTES_ANALYSIS_LIMITATION } from './portfolioAiSnapshot.js';
 
 export const AI_REPORT_SECTIONS = [
   '數據摘要',
   '主要觀察',
+  '股票風險訊號',
+  '估值觀察',
   '集中度 / 風險',
   '現金流 / 收益',
   '資料限制',
@@ -13,6 +15,13 @@ export const AI_REPORT_SECTIONS = [
 const SECTION_ALIASES = new Map([
   ['數據摘要', '數據摘要'],
   ['主要觀察', '主要觀察'],
+  ['股票風險訊號', '股票風險訊號'],
+  ['股票風險信號', '股票風險訊號'],
+  ['風險訊號', '股票風險訊號'],
+  ['風險信號', '股票風險訊號'],
+  ['估值觀察', '估值觀察'],
+  ['估值 / 觀察', '估值觀察'],
+  ['估值/觀察', '估值觀察'],
   ['集中度/風險', '集中度 / 風險'],
   ['集中度 / 風險', '集中度 / 風險'],
   ['現金流/收益', '現金流 / 收益'],
@@ -82,6 +91,7 @@ export const detectForbiddenAdvice = (text = '') => {
     /(?:買入|賣出|持有|加倉|減倉)\s*(?:建議|策略|時機)/,
     /目標價|target\s*price/i,
     /股價預測|預測股價|price\s*forecast/i,
+    /回報預測|預測回報|return\s*forecast/i,
     /利率預測|預測利率|rate\s*forecast/i,
     /止賺|止盈|止蝕|止損|take\s*profit|stop\s*loss/i,
   ];
@@ -125,8 +135,14 @@ export const buildAiSnapshotSummary = (snapshot = {}) => ({
     snapshot.cash ? 'Cash' : null,
     snapshot.treasuries ? 'Treasuries' : null,
   ].filter(Boolean),
-  quoteStatus: STOCK_QUOTES_DISABLED_LIMITATION,
+  quoteStatus: STOCK_QUOTES_ANALYSIS_LIMITATION,
   stockSymbolsCount: snapshot.allStocks?.holdingCount ?? snapshot.stocks?.holdingCount ?? 0,
+  pricedSymbolCount: snapshot.allStocks?.quoteSummary?.pricedSymbolCount ?? snapshot.stocks?.quoteSummary?.pricedSymbolCount ?? 0,
+  missingPriceCount: snapshot.allStocks?.quoteSummary?.missingPriceCount ?? snapshot.stocks?.quoteSummary?.missingPriceCount ?? 0,
+  stalePriceCount: snapshot.allStocks?.quoteSummary?.stalePriceCount ?? snapshot.stocks?.quoteSummary?.stalePriceCount ?? 0,
+  stockMarketValue: snapshot.allStocks?.quoteSummary?.totalMarketValue ?? snapshot.stocks?.quoteSummary?.totalMarketValue ?? null,
+  stockUnrealizedPnl: snapshot.allStocks?.quoteSummary?.totalUnrealizedPnl ?? snapshot.stocks?.quoteSummary?.totalUnrealizedPnl ?? null,
+  riskSignalCount: snapshot.allStocks?.riskSignals?.length ?? snapshot.stocks?.riskSignals?.length ?? 0,
   cashMovementCount: snapshot.cash?.movementCount ?? 0,
   treasuryHoldingCount: snapshot.treasuries?.holdingCount ?? 0,
 });

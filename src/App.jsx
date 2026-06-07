@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound, Briefcase, Banknote, ClipboardCheck } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound, Briefcase, Banknote, ClipboardCheck, Copy, FileJson, ShieldAlert, XCircle } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
@@ -11,11 +11,12 @@ import ReconciliationDashboard from './features/reconciliation/ReconciliationDas
 import PortfolioOverview from './features/portfolio/PortfolioOverview';
 import ImportPreviewDashboard from './features/import/ImportPreviewDashboard';
 import { subscribeStockTrades } from './features/stocks/stockFirestore';
-import { calculateStockPositions } from './features/stocks/stockCalculations';
+import { calculateStockPositions, normalizeSymbol } from './features/stocks/stockCalculations';
 import { subscribeCashMovements } from './features/cash/cashFirestore';
 import { subscribeReconciliationSnapshots } from './features/reconciliation/reconciliationFirestore';
 import { buildPortfolioAiSnapshot } from './features/ai/portfolioAiSnapshot';
 import { AI_MODE_LABELS, buildPortfolioAiMessages } from './features/ai/portfolioAiPrompts';
+import { buildAiSnapshotSummary, detectForbiddenAdvice, isSingleStockModeReady, parseAiReportSections, sanitizeAiSnapshotForCopy } from './features/ai/portfolioAiReport';
 
 // --- 真實環境 Firebase 設定 (使用環境變數) ---
 const firebaseConfig = {
@@ -534,6 +535,9 @@ export default function App() {
   const [aiStockTrades, setAiStockTrades] = useState([]);
   const [aiCashMovements, setAiCashMovements] = useState([]);
   const [aiReconciliationSnapshots, setAiReconciliationSnapshots] = useState([]);
+  const [aiLastSnapshot, setAiLastSnapshot] = useState(null);
+  const [aiCopyStatus, setAiCopyStatus] = useState('');
+  const [isAiSnapshotOpen, setIsAiSnapshotOpen] = useState(false);
   const [rawTradeText, setRawTradeText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
   const [userDeepSeekApiKey, setUserDeepSeekApiKey] = useState(() => {
@@ -706,9 +710,13 @@ export default function App() {
   const maturedTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && isMatured(t.maturityDate)), [trades]);
   const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
   const aiStockSymbols = useMemo(
-    () => calculateStockPositions(aiStockTrades)
-      .filter((position) => Math.abs(Number(position.quantity || 0)) > 0.000001 || Math.abs(Number(position.remainingCost || 0)) > 0.01)
-      .map((position) => position.symbol),
+    () => {
+      const positionSymbols = calculateStockPositions(aiStockTrades)
+        .filter((position) => Math.abs(Number(position.quantity || 0)) > 0.000001 || Math.abs(Number(position.remainingCost || 0)) > 0.01)
+        .map((position) => position.symbol);
+      const tradeSymbols = aiStockTrades.map((trade) => normalizeSymbol(trade.symbol)).filter(Boolean);
+      return [...new Set([...positionSymbols, ...tradeSymbols])].sort();
+    },
     [aiStockTrades],
   );
 
@@ -765,6 +773,35 @@ export default function App() {
     totalWeightYTM = totalYtmMarketValue > 0 ? totalWeightYTM / totalYtmMarketValue : null;
     return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalAccruedInterest, totalFullMarketValue, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
   }, [activeTrades, maturedTrades, closedTrades, receivedCoupons, todayObj]);
+
+  const buildCurrentAiSnapshot = (asOf = new Date().toISOString()) => buildPortfolioAiSnapshot({
+    mode: aiAnalysisMode,
+    selectedSymbol: aiSelectedSymbol,
+    stockTrades: aiStockTrades,
+    cashMovements: aiCashMovements,
+    reconciliationSnapshots: aiReconciliationSnapshots,
+    treasuryData: { trades },
+    treasurySummary: portfolioMetrics,
+    asOf,
+  });
+
+  const aiPreviewSnapshot = useMemo(
+    () => buildCurrentAiSnapshot(),
+    [aiAnalysisMode, aiSelectedSymbol, aiStockTrades, aiCashMovements, aiReconciliationSnapshots, trades, portfolioMetrics],
+  );
+  const aiSnapshotForDisplay = aiLastSnapshot || aiPreviewSnapshot;
+  const aiSnapshotSummary = useMemo(() => buildAiSnapshotSummary(aiSnapshotForDisplay), [aiSnapshotForDisplay]);
+  const aiReportSections = useMemo(() => parseAiReportSections(aiInsights || ''), [aiInsights]);
+  const aiHasForbiddenAdvice = useMemo(() => detectForbiddenAdvice(aiInsights || ''), [aiInsights]);
+  const aiSnapshotCopyJson = useMemo(
+    () => JSON.stringify(sanitizeAiSnapshotForCopy(aiSnapshotForDisplay), null, 2),
+    [aiSnapshotForDisplay],
+  );
+  const isSingleStockReady = isSingleStockModeReady({
+    mode: aiAnalysisMode,
+    selectedSymbol: aiSelectedSymbol,
+    symbols: aiStockSymbols,
+  });
 
   // --- Chart Data ---
   const yieldCurveChartData = useMemo(() => {
@@ -968,22 +1005,35 @@ export default function App() {
 
   const handleAnalyzePortfolio = async () => {
     if (!hasAiTransport) { setInsightError('請先設定 AI proxy 或按 API Key 輸入 DeepSeek key。'); return; }
-    setIsAnalyzing(true); setInsightError('');
+    if (!isSingleStockReady) { setInsightError('單一股票模式需要先選擇股票代號。'); return; }
+    setIsAnalyzing(true); setInsightError(''); setAiCopyStatus('');
     try {
-      const snapshot = buildPortfolioAiSnapshot({
-        mode: aiAnalysisMode,
-        selectedSymbol: aiSelectedSymbol,
-        stockTrades: aiStockTrades,
-        cashMovements: aiCashMovements,
-        reconciliationSnapshots: aiReconciliationSnapshots,
-        treasuryData: { trades },
-        treasurySummary: portfolioMetrics,
-        asOf: new Date().toISOString(),
-      });
+      const snapshot = buildCurrentAiSnapshot(new Date().toISOString());
       const messages = buildPortfolioAiMessages({ snapshot, mode: aiAnalysisMode });
       const response = await generateText(messages, userDeepSeekApiKey);
+      setAiLastSnapshot(snapshot);
       setAiInsights(response);
-    } catch (err) { setInsightError('分析時發生錯誤。請確保已設定 API Key。'); } finally { setIsAnalyzing(false); }
+      setIsAiSnapshotOpen(false);
+    } catch (err) { setInsightError('分析時發生錯誤，請稍後再試，或檢查 DeepSeek API Key / AI proxy 設定。'); } finally { setIsAnalyzing(false); }
+  };
+
+  const copyToClipboard = async (text, successMessage) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setAiCopyStatus(successMessage);
+      window.setTimeout(() => setAiCopyStatus(''), 1800);
+    } catch (err) {
+      setAiCopyStatus('複製失敗，請檢查瀏覽器權限。');
+    }
+  };
+
+  const handleClearAiResult = () => {
+    setAiInsights(null);
+    setInsightError('');
+    setAiLastSnapshot(null);
+    setAiCopyStatus('');
+    setIsAiSnapshotOpen(false);
   };
 
   // --- 匯出 / 匯入 ---
@@ -1315,54 +1365,74 @@ export default function App() {
           );
         })()}
       </div>
-      <div className="bg-gradient-to-br from-indigo-50 via-blue-50 to-indigo-50 p-4 sm:p-6 rounded-xl shadow-sm border border-indigo-100">
-        <div className="flex flex-wrap justify-between items-center gap-3 mb-4">
-          <div className="flex items-center gap-2 text-indigo-700">
-            <div className="p-1.5 bg-white/70 rounded-lg shadow-sm"><Bot size={20} /></div>
-            <h3 className="text-base sm:text-lg font-bold">AI 投資組合分析</h3>
+      <div className="bg-white rounded-xl shadow-sm border border-indigo-100 overflow-hidden">
+        <div className="p-4 sm:p-5 border-b border-indigo-100 bg-gradient-to-br from-indigo-50 via-blue-50 to-white">
+          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-indigo-700">
+                <div className="p-1.5 bg-white/80 rounded-lg shadow-sm"><Bot size={20} /></div>
+                <h3 className="text-lg sm:text-xl font-semibold text-slate-900">AI 投資組合分析</h3>
+              </div>
+              <p className="text-xs sm:text-sm text-indigo-700/80 mt-2 max-w-3xl">以系統帳本 snapshot 生成報告，聚焦成本、持倉、現金流及對帳狀態。</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm">DeepSeek-V4-Pro</span>
+              <button type="button" onClick={openApiKeySettings} className={`border px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm ${hasUserDeepSeekApiKey ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-white/80 border-indigo-200 text-indigo-700 hover:bg-white'}`} title="Set personal DeepSeek API key">
+                <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人 Key' : 'API Key'}
+              </button>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={aiAnalysisMode}
-              onChange={(event) => {
-                setAiAnalysisMode(event.target.value);
-                setAiInsights(null);
-                setInsightError('');
-              }}
-              className="bg-white/80 border border-indigo-200 text-indigo-800 rounded-lg px-2.5 py-2 text-xs sm:text-sm font-semibold shadow-sm"
-            >
-              {Object.entries(AI_MODE_LABELS).map(([mode, label]) => (
-                <option key={mode} value={mode}>{label}</option>
-              ))}
-            </select>
-            {aiAnalysisMode === 'stock_single' && (
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-end">
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">分析模式</label>
               <select
-                value={aiSelectedSymbol}
+                value={aiAnalysisMode}
                 onChange={(event) => {
-                  setAiSelectedSymbol(event.target.value);
+                  setAiAnalysisMode(event.target.value);
                   setAiInsights(null);
+                  setAiLastSnapshot(null);
                   setInsightError('');
+                  setIsAiSnapshotOpen(false);
                 }}
-                className="bg-white/80 border border-indigo-200 text-indigo-800 rounded-lg px-2.5 py-2 text-xs sm:text-sm font-semibold shadow-sm"
+                className="w-full bg-white border border-indigo-200 text-slate-800 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm"
               >
-                {aiStockSymbols.length === 0 ? (
-                  <option value="">未有股票</option>
-                ) : aiStockSymbols.map((symbol) => (
-                  <option key={symbol} value={symbol}>{symbol}</option>
+                {Object.entries(AI_MODE_LABELS).map(([mode, label]) => (
+                  <option key={mode} value={mode}>{label}</option>
                 ))}
               </select>
-            )}
-            <span className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm">DeepSeek-V4-Pro</span>
-            <button type="button" onClick={openApiKeySettings} className={`border px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm ${hasUserDeepSeekApiKey ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-white/80 border-indigo-200 text-indigo-700 hover:bg-white'}`} title="Set personal DeepSeek API key">
-              <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人 Key' : 'API Key'}
-            </button>
-            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || !hasAiTransport} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
-              {isAnalyzing ? <Loader2 size={15} className="animate-spin mr-1.5" /> : <Sparkles size={15} className="mr-1.5" />} 智能分析
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">股票代號</label>
+              {aiAnalysisMode === 'stock_single' ? (
+                <select
+                  value={aiSelectedSymbol}
+                  onChange={(event) => {
+                    setAiSelectedSymbol(event.target.value);
+                    setAiInsights(null);
+                    setAiLastSnapshot(null);
+                    setInsightError('');
+                    setIsAiSnapshotOpen(false);
+                  }}
+                  className="w-full bg-white border border-indigo-200 text-slate-800 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm"
+                >
+                  {aiStockSymbols.length === 0 ? (
+                    <option value="">未有股票代號</option>
+                  ) : aiStockSymbols.map((symbol) => (
+                    <option key={symbol} value={symbol}>{symbol}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">只適用於單一股票模式</div>
+              )}
+              {aiAnalysisMode === 'stock_single' && aiStockSymbols.length === 0 && <p className="text-xs text-amber-600 mt-1">目前沒有股票交易或持倉可供選擇。</p>}
+            </div>
+            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || !hasAiTransport || !isSingleStockReady} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center shadow-sm min-h-[40px]">
+              {isAnalyzing ? <Loader2 size={16} className="animate-spin mr-1.5" /> : <Sparkles size={16} className="mr-1.5" />} {isAnalyzing ? '分析中' : '產生分析'}
             </button>
           </div>
         </div>
         {isApiKeyOpen && (
-          <div className="mb-4 bg-white/90 border border-indigo-100 rounded-lg p-3 shadow-inner">
+          <div className="m-4 sm:m-5 bg-white border border-indigo-100 rounded-lg p-3 shadow-inner">
             <div className="flex flex-col sm:flex-row gap-2">
               <input
                 type="password"
@@ -1379,8 +1449,64 @@ export default function App() {
             <p className="text-[11px] text-slate-500 mt-2">Key 只會儲存在呢部機嘅瀏覽器 localStorage，不會寫入 Firestore 或備份檔。無 AI proxy 時會嘗試直接呼叫 DeepSeek；如瀏覽器封鎖請改用 proxy。</p>
           </div>
         )}
-        {insightError && <p className="text-sm text-red-600 flex items-center mt-2 mb-2"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
-        {aiInsights ? <div className="bg-white/90 p-4 rounded-lg text-sm text-slate-700 leading-relaxed whitespace-pre-wrap border border-white shadow-inner">{aiInsights}</div> : <p className="text-sm text-indigo-400/90 italic">選擇分析範圍，讓 AI 根據帳本 snapshot 分析資料摘要、集中度、現金流及對帳問題。股票報價功能已停用，不會包含即時市值或未實現盈虧。</p>}
+        <div className="p-4 sm:p-5 space-y-4">
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs sm:text-sm text-amber-900">
+            本 AI 分析只根據系統內已記錄資料生成，不包含未記錄交易、即時股價、市場新聞或外部研究資料。不構成買賣建議。
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <h4 className="text-sm font-semibold text-slate-800">本次分析資料</h4>
+              <span className="text-xs text-slate-500">{aiLastSnapshot ? '已生成報告 snapshot' : '預覽目前選擇範圍'}</span>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+              <div><p className="text-xs text-slate-500">Data as-of</p><p className="font-semibold text-slate-800 break-words">{aiSnapshotSummary.asOf ? new Date(aiSnapshotSummary.asOf).toLocaleString('zh-HK', { hour12: false }) : '--'}</p></div>
+              <div><p className="text-xs text-slate-500">分析模式</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.modeLabel}</p></div>
+              <div><p className="text-xs text-slate-500">股票代號</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.stockSymbolsCount}</p></div>
+              <div><p className="text-xs text-slate-500">現金流水</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.cashMovementCount}</p></div>
+              <div><p className="text-xs text-slate-500">美債持倉</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.treasuryHoldingCount}</p></div>
+              <div><p className="text-xs text-slate-500">對帳差異</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.reconciliationIssueCount ?? '未有快照'}</p></div>
+              <div className="col-span-2"><p className="text-xs text-slate-500">資料模組</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.modules.join(' · ')}</p></div>
+            </div>
+            <p className="text-xs text-slate-500 mt-3">{aiSnapshotSummary.quoteStatus}</p>
+          </div>
+          {insightError && <p className="text-sm text-red-600 flex items-center"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
+          {aiCopyStatus && <p className="text-sm text-emerald-700 flex items-center"><CheckCircle2 size={16} className="mr-1"/>{aiCopyStatus}</p>}
+          {aiHasForbiddenAdvice && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 flex gap-2">
+              <ShieldAlert size={17} className="mt-0.5 flex-shrink-0" />
+              <span>AI 回應可能包含不應提供的建議，請忽略並重新分析。</span>
+            </div>
+          )}
+          {aiInsights ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => copyToClipboard(aiInsights, '已複製分析')} className="bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><Copy size={14} className="mr-1.5" />複製分析</button>
+                <button type="button" onClick={() => copyToClipboard(aiSnapshotCopyJson, '已複製分析資料 JSON')} className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><FileJson size={14} className="mr-1.5" />複製分析資料 JSON</button>
+                <button type="button" onClick={handleAnalyzePortfolio} disabled={isAnalyzing || !hasAiTransport || !isSingleStockReady} className="bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 text-indigo-700 border border-indigo-100 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><RefreshCw size={14} className="mr-1.5" />重新分析</button>
+                <button type="button" onClick={handleClearAiResult} className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><XCircle size={14} className="mr-1.5" />清除結果</button>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                {aiReportSections.map((section, index) => (
+                  <div key={`${section.title}-${index}`} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <h4 className="text-sm font-semibold text-slate-900 mb-2">{section.title}</h4>
+                    <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words">{section.content || '資料不足'}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
+                <button type="button" onClick={() => setIsAiSnapshotOpen(prev => !prev)} className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-slate-700">
+                  <span className="flex items-center"><FileJson size={15} className="mr-1.5" />分析資料 JSON</span>
+                  <span className="text-xs text-slate-500">{isAiSnapshotOpen ? '收起' : '展開'}</span>
+                </button>
+                {isAiSnapshotOpen && <pre className="max-h-80 overflow-auto border-t border-slate-200 p-4 text-xs text-slate-600 whitespace-pre-wrap break-words">{aiSnapshotCopyJson}</pre>}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 p-4 text-sm text-indigo-500">
+              選擇分析範圍後按「產生分析」。系統會把帳本摘要傳給 AI，不會傳送 API key，也不會包含即時股價或市場新聞。
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

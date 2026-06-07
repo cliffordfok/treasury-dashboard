@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { AI_MODE_LABELS } from '../src/features/ai/portfolioAiPrompts.js';
 import { buildPortfolioAiMessages } from '../src/features/ai/portfolioAiPrompts.js';
+import { buildAiSnapshotSummary, detectForbiddenAdvice, isSingleStockModeReady, parseAiReportSections, sanitizeAiSnapshotForCopy } from '../src/features/ai/portfolioAiReport.js';
 import { buildCashAiSnapshot, buildPortfolioAiSnapshot, buildStockAiSnapshot, STOCK_QUOTES_DISABLED_LIMITATION } from '../src/features/ai/portfolioAiSnapshot.js';
 
 const equal = (actual, expected, message) => assert.equal(actual, expected, `${message}: expected ${expected}, got ${actual}`);
@@ -75,3 +77,54 @@ assert.match(fullPrompt, /不要預測股價/, 'prompt contains no stock predict
 assert.match(fullPrompt, /不要引用 snapshot 以外的市場資料/, 'prompt contains no external data limit');
 assert.match(fullPrompt, /目前股票報價功能已停用/, 'prompt contains quote disabled limitation');
 assert.match(fullPrompt, /1\. 數據摘要/, 'prompt contains fixed output format');
+
+assert.equal(AI_MODE_LABELS.total_assets, '整體資產', 'total assets mode label');
+assert.equal(AI_MODE_LABELS.stock_portfolio, '股票組合', 'stock portfolio mode label');
+assert.equal(AI_MODE_LABELS.stock_single, '單一股票', 'single stock mode label');
+assert.equal(AI_MODE_LABELS.cash, '現金', 'cash mode label');
+assert.equal(AI_MODE_LABELS.reconciliation, '對帳', 'reconciliation mode label');
+assert.equal(AI_MODE_LABELS.treasury, '美債', 'treasury mode label');
+
+assert.equal(isSingleStockModeReady({ mode: 'stock_single', selectedSymbol: '', symbols: ['VOO'] }), false, 'single stock mode requires symbol');
+assert.equal(isSingleStockModeReady({ mode: 'stock_single', selectedSymbol: 'VOO', symbols: ['VOO'] }), true, 'single stock mode accepts selected symbol');
+assert.equal(isSingleStockModeReady({ mode: 'cash', selectedSymbol: '', symbols: [] }), true, 'non single stock mode does not require symbol');
+
+const markdownReport = [
+  '## 數據摘要',
+  '- 股票剩餘成本為 100。',
+  '',
+  '2. 主要觀察',
+  '沒有即時報價。',
+  '',
+  '**集中度 / 風險**: VOO 比重較高。',
+  '',
+  '現金流 / 收益：股息已記錄。',
+  '',
+  '### 對帳問題',
+  '資料不足。',
+].join('\n');
+const parsedSections = parseAiReportSections(markdownReport);
+assert.deepEqual(parsedSections.map((section) => section.title), ['數據摘要', '主要觀察', '集中度 / 風險', '現金流 / 收益', '對帳問題'], 'markdown report sections are parsed');
+assert.match(parsedSections[0].content, /股票剩餘成本/, 'section content preserved');
+
+assert.equal(detectForbiddenAdvice('建議買入 VOO，目標價 800。'), true, 'forbidden advice detector catches buy and target price');
+assert.equal(detectForbiddenAdvice('可以賣出部分持倉。'), true, 'forbidden advice detector catches sell wording');
+assert.equal(detectForbiddenAdvice('以下只描述帳本資料，不構成買賣建議。'), false, 'forbidden advice detector allows safety disclaimer');
+
+const unsafeSnapshot = {
+  ...portfolioSnapshot,
+  apiKey: 'sk-test',
+  nested: { accessToken: 'abc', normalValue: 1 },
+};
+const safeSnapshot = sanitizeAiSnapshotForCopy(unsafeSnapshot);
+assert.equal(safeSnapshot.apiKey, '[redacted]', 'snapshot copy redacts api key');
+assert.equal(safeSnapshot.nested.accessToken, '[redacted]', 'snapshot copy redacts token');
+assert.equal(JSON.stringify(safeSnapshot).includes('sk-test'), false, 'snapshot JSON does not include api key value');
+assert.equal(JSON.stringify(safeSnapshot).includes('abc'), false, 'snapshot JSON does not include token value');
+
+const snapshotSummary = buildAiSnapshotSummary(portfolioSnapshot);
+assert.equal(snapshotSummary.modeLabel, '整體資產', 'snapshot summary includes mode label');
+assert.equal(snapshotSummary.stockSymbolsCount, 2, 'snapshot summary includes stock symbols count');
+assert.equal(snapshotSummary.cashMovementCount, 7, 'snapshot summary includes cash movement count');
+assert.equal(snapshotSummary.treasuryHoldingCount, 1, 'snapshot summary includes treasury holdings count');
+assert.equal(snapshotSummary.quoteStatus, STOCK_QUOTES_DISABLED_LIMITATION, 'snapshot summary includes quote disabled status');

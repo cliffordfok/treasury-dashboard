@@ -1,5 +1,4 @@
 import { calculateCashMovementSummary, calculatePortfolioCashSummary, getCashMovementImpact } from '../cash/cashCalculations.js';
-import { buildReconciliationReport } from '../reconciliation/reconciliationCalculations.js';
 import { calculateStockPortfolioTotals, calculateStockPositions, getStockTradeCashImpact, normalizeSymbol, toNumber } from '../stocks/stockCalculations.js';
 
 export const AI_ANALYSIS_MODES = [
@@ -7,12 +6,11 @@ export const AI_ANALYSIS_MODES = [
   'stock_single',
   'stock_portfolio',
   'cash',
-  'reconciliation',
   'total_assets',
 ];
 
 export const STOCK_QUOTES_DISABLED_LIMITATION =
-  '目前股票報價功能已停用，因此本分析以成本、持倉及現金流為主，不包含即時市值及未實現盈虧。';
+  'AI 分析目前不使用股票報價，因此本分析以成本、持倉及現金流為主，不包含即時市值及未實現盈虧。';
 
 const round = (value, digits = 2) => {
   const number = Number(value);
@@ -53,8 +51,8 @@ export const buildStockAiSnapshot = (stockTrades = [], stockSummary = null, opti
     }));
 
   const warnings = [STOCK_QUOTES_DISABLED_LIMITATION];
-  if (filteredTrades.length === 0) warnings.push(selectedSymbol ? `沒有 ${selectedSymbol} 的股票交易資料。` : '沒有股票交易資料。');
-  if (activePositions.length === 0) warnings.push('沒有帳本上的股票持倉。');
+  if (filteredTrades.length === 0) warnings.push(selectedSymbol ? `沒有 ${selectedSymbol} 的股票交易紀錄。` : '沒有股票交易資料。');
+  if (activePositions.length === 0) warnings.push('沒有目前仍持有的股票 / ETF 持倉。');
 
   return {
     mode: selectedSymbol ? 'stock_single' : 'stock_portfolio',
@@ -160,50 +158,11 @@ export const buildTreasuryAiSnapshot = (treasuryData = {}, treasurySummary = {})
   };
 };
 
-export const buildReconciliationAiSnapshot = ({ snapshots = [], stockTrades = [], cashMovements = [] } = {}) => {
-  const latestSnapshot = [...snapshots].sort((a, b) => `${b.date || ''}:${b.createdAt || ''}`.localeCompare(`${a.date || ''}:${a.createdAt || ''}`))[0] || null;
-  if (!latestSnapshot) {
-    return {
-      hasSnapshot: false,
-      latestSnapshotDate: '',
-      cashDifference: null,
-      holdingsDifferences: [],
-      costBasisDifferences: [],
-      unresolvedIssuesCount: 0,
-      missingDataWarnings: ['尚未建立對帳快照。'],
-    };
-  }
-
-  const report = buildReconciliationReport({ snapshot: latestSnapshot, stockTrades, cashMovements });
-  const holdingIssues = report.holdingComparisons.filter((item) => item.status !== 'OK');
-  return {
-    hasSnapshot: true,
-    latestSnapshotDate: latestSnapshot.date || '',
-    cashDifference: report.summary.cashDifference,
-    holdingsDifferences: holdingIssues.map((item) => ({
-      symbol: item.symbol,
-      status: item.status,
-      systemQuantity: round(item.systemQuantity, 6),
-      brokerQuantity: round(item.brokerQuantity, 6),
-      quantityDifference: round(item.quantityDifference, 6),
-      systemCostBasis: round(item.systemCostBasis),
-      brokerCostBasis: item.brokerCostBasis == null ? null : round(item.brokerCostBasis),
-      costDifference: item.costDifference == null ? null : round(item.costDifference),
-    })),
-    costBasisDifferences: holdingIssues
-      .filter((item) => item.costDifference !== null && nonZero(item.costDifference))
-      .map((item) => ({ symbol: item.symbol, costDifference: round(item.costDifference) })),
-    unresolvedIssuesCount: report.summary.issueCount,
-    missingDataWarnings: [],
-  };
-};
-
 export const buildPortfolioAiSnapshot = ({
   mode = 'total_assets',
   selectedSymbol = '',
   stockTrades = [],
   cashMovements = [],
-  reconciliationSnapshots = [],
   treasuryData = {},
   treasurySummary = {},
   asOf = new Date().toISOString(),
@@ -213,13 +172,11 @@ export const buildPortfolioAiSnapshot = ({
   const allStocks = buildStockAiSnapshot(stockTrades);
   const cash = buildCashAiSnapshot(cashMovements, cashSummary);
   const treasuries = buildTreasuryAiSnapshot(treasuryData, treasurySummary);
-  const reconciliation = buildReconciliationAiSnapshot({ snapshots: reconciliationSnapshots, stockTrades, cashMovements });
   const dataLimitations = [
     STOCK_QUOTES_DISABLED_LIMITATION,
     ...stocks.missingDataWarnings,
     ...cash.missingDataWarnings,
     ...treasuries.missingDataWarnings,
-    ...reconciliation.missingDataWarnings,
   ];
 
   return {
@@ -236,13 +193,11 @@ export const buildPortfolioAiSnapshot = ({
       totalBookValueApproximation: round(allStocks.totals.remainingCost + cash.cashBalance + treasuries.fullMarketValue),
       dividendNetReceived: round(cash.dividends),
       interest: round(cash.interest + treasuries.monthlyAverageInterest),
-      reconciliationIssues: reconciliation.unresolvedIssuesCount,
     },
     stocks,
     allStocks,
     cash,
     treasuries,
-    reconciliation,
     dataLimitations: [...new Set(dataLimitations.filter(Boolean))],
   };
 };

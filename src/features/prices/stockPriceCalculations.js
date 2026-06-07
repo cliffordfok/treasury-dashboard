@@ -1,4 +1,4 @@
-const PROVIDER = 'yahoo_finance_unofficial';
+const PROVIDER = 'twelve_data';
 const QUOTE_TYPE = 'delayed_or_regular_market';
 const STALE_DAYS = 3;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -70,6 +70,70 @@ export const parseYahooQuoteResponse = (response = {}, requestedSymbols = []) =>
       quotes.push(quote);
     } else {
       errors.push({ symbol, error: 'No quote returned' });
+    }
+  });
+
+  requested.forEach((symbol) => {
+    if (!seen.has(symbol)) errors.push({ symbol, error: 'No quote returned' });
+  });
+
+  return {
+    provider: PROVIDER,
+    quoteType: QUOTE_TYPE,
+    quotes,
+    errors,
+  };
+};
+
+const readTwelveDataRows = (response = {}, requestedSymbols = []) => {
+  if (Array.isArray(response)) return response;
+  if (response?.symbol) return [response];
+  const requested = requestedSymbols.map(normalizeSymbol).filter(Boolean);
+  return requested.map((symbol) => response?.[symbol]).filter(Boolean);
+};
+
+const readTwelveDataError = (row = {}) => {
+  if (!row || typeof row !== 'object') return 'No quote returned';
+  if (row.status === 'error') return row.message || row.code || 'Twelve Data quote error';
+  if (row.code && row.message) return row.message;
+  return '';
+};
+
+export const parseTwelveDataQuoteResponse = (response = {}, requestedSymbols = []) => {
+  const requested = requestedSymbols.map(normalizeSymbol).filter(Boolean);
+  const rows = readTwelveDataRows(response, requested);
+  const quotes = [];
+  const errors = [];
+  const seen = new Set();
+
+  rows.forEach((row) => {
+    const symbol = normalizeSymbol(row?.symbol);
+    const fallbackSymbol = requested.length === 1 ? requested[0] : '';
+    const normalizedSymbol = symbol || fallbackSymbol;
+    if (!normalizedSymbol) return;
+    seen.add(normalizedSymbol);
+
+    const rowError = readTwelveDataError(row);
+    if (rowError) {
+      errors.push({ symbol: normalizedSymbol, error: rowError });
+      return;
+    }
+
+    const quote = normalizeStockQuote({
+      symbol: normalizedSymbol,
+      price: row.price ?? row.close,
+      currency: row.currency || 'USD',
+      asOf: row.timestamp || row.datetime,
+      previousClose: row.previous_close,
+      change: row.change,
+      changePercent: row.percent_change,
+      source: PROVIDER,
+      quoteType: QUOTE_TYPE,
+    });
+    if (quote) {
+      quotes.push(quote);
+    } else {
+      errors.push({ symbol: normalizedSymbol, error: 'No valid quote price returned' });
     }
   });
 

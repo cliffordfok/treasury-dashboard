@@ -1,79 +1,61 @@
-import { normalizeStockQuote, STOCK_QUOTE_PROVIDER, STOCK_QUOTE_TYPE } from './stockPriceCalculations.js';
+import { parseTwelveDataQuoteResponse, STOCK_QUOTE_PROVIDER, STOCK_QUOTE_TYPE } from './stockPriceCalculations.js';
 
 const SYMBOL_PATTERN = /^[A-Z0-9.-]+$/;
 const MAX_SYMBOLS = 25;
 
-export const DEFAULT_STOCK_QUOTE_PROXY_URL = '/api/stock-quotes';
+export const TWELVE_DATA_API_URL = 'https://api.twelvedata.com/quote';
 
-export const buildStockQuoteProxyErrorMessage = ({ proxyUrl, status, detail } = {}) => {
+export const buildTwelveDataErrorMessage = ({ status, detail } = {}) => {
   const statusText = status ? `HTTP ${status}` : 'network error';
   const detailText = detail ? ` ${detail}` : '';
-  return [
-    `股票報價 Proxy 未可用。Proxy URL: ${proxyUrl || '(not configured)'}。Status: ${statusText}.${detailText}`,
-    'GitHub Pages 不支援 serverless API，請改用 Vercel / Netlify 部署，或使用手動價格。',
-    '如使用 Vercel / Netlify，可使用 /api/stock-quotes；其他平台請設定 VITE_STOCK_QUOTE_PROXY_URL 指向可用的 server-side proxy。',
-  ].join(' ');
+  return `Twelve Data 報價失敗（${statusText}）。${detailText}`.trim();
 };
-
-export const STOCK_QUOTE_PROXY_UNAVAILABLE_MESSAGE = buildStockQuoteProxyErrorMessage();
-
-export const resolveStockQuoteProxyUrl = (env = {}) =>
-  env.VITE_STOCK_QUOTE_PROXY_URL || DEFAULT_STOCK_QUOTE_PROXY_URL;
-
-export const getStockQuoteProxyUrl = () => resolveStockQuoteProxyUrl(import.meta.env);
 
 export const normalizeQuoteSymbols = (symbols = []) => {
   const normalized = [...new Set(symbols.map((symbol) => String(symbol || '').trim().toUpperCase()).filter(Boolean))];
-  if (normalized.length === 0) throw new Error('Please provide at least one stock symbol.');
-  if (normalized.length > MAX_SYMBOLS) throw new Error(`Quote request supports up to ${MAX_SYMBOLS} symbols.`);
+  if (normalized.length === 0) throw new Error('請提供至少一個股票代號。');
+  if (normalized.length > MAX_SYMBOLS) throw new Error(`每次最多可更新 ${MAX_SYMBOLS} 個股票代號。`);
 
   const invalid = normalized.find((symbol) => !SYMBOL_PATTERN.test(symbol));
-  if (invalid) throw new Error(`Invalid stock symbol: ${invalid}`);
+  if (invalid) throw new Error(`股票代號格式不正確：${invalid}`);
   return normalized;
 };
 
+export const buildTwelveDataQuoteUrl = (symbols = [], apiKey = '', endpoint = TWELVE_DATA_API_URL) => {
+  const key = String(apiKey || '').trim();
+  if (!key) throw new Error('請先輸入 Twelve Data API Key。');
+  const normalizedSymbols = normalizeQuoteSymbols(symbols);
+  const url = new URL(endpoint);
+  url.searchParams.set('symbol', normalizedSymbols.join(','));
+  url.searchParams.set('apikey', key);
+  return url.toString();
+};
+
 export const normalizeStockQuoteProxyResponse = (payload = {}, requestedSymbols = []) => {
-  const requested = requestedSymbols.map((symbol) => String(symbol || '').trim().toUpperCase()).filter(Boolean);
-  const quoteRows = Array.isArray(payload.quotes) ? payload.quotes : [];
-  const quotes = quoteRows.map(normalizeStockQuote).filter(Boolean);
-  const errors = Array.isArray(payload.errors) ? payload.errors.map((item) => ({
-    symbol: String(item.symbol || '').trim().toUpperCase(),
-    error: item.error || 'No quote returned',
-  })) : [];
-  const quotedSymbols = new Set(quotes.map((quote) => quote.symbol));
-  const erroredSymbols = new Set(errors.map((error) => error.symbol));
-
-  requested.forEach((symbol) => {
-    if (!quotedSymbols.has(symbol) && !erroredSymbols.has(symbol)) {
-      errors.push({ symbol, error: 'No quote returned' });
-    }
-  });
-
+  const parsed = parseTwelveDataQuoteResponse(payload, requestedSymbols);
   return {
-    provider: payload.provider || STOCK_QUOTE_PROVIDER,
-    quoteType: payload.quoteType || STOCK_QUOTE_TYPE,
-    quotes,
-    errors,
+    provider: parsed.provider || STOCK_QUOTE_PROVIDER,
+    quoteType: parsed.quoteType || STOCK_QUOTE_TYPE,
+    quotes: parsed.quotes,
+    errors: parsed.errors,
   };
 };
 
 export const fetchStockQuotes = async (symbols = [], options = {}) => {
   const normalizedSymbols = normalizeQuoteSymbols(symbols);
-  const proxyUrl = options.proxyUrl || getStockQuoteProxyUrl();
   const fetchImpl = options.fetchImpl || fetch;
+  const apiKey = options.apiKey || '';
+  const endpoint = options.endpoint || TWELVE_DATA_API_URL;
+  const requestUrl = buildTwelveDataQuoteUrl(normalizedSymbols, apiKey, endpoint);
 
   let response;
   try {
-    response = await fetchImpl(proxyUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbols: normalizedSymbols }),
-    });
+    response = await fetchImpl(requestUrl, { method: 'GET' });
   } catch (error) {
-    throw new Error(buildStockQuoteProxyErrorMessage({ proxyUrl, detail: error?.message ? `(${error.message})` : '' }));
+    throw new Error(buildTwelveDataErrorMessage({ detail: error?.message ? `(${error.message})` : '' }));
   }
 
-  if (!response.ok) throw new Error(buildStockQuoteProxyErrorMessage({ proxyUrl, status: response.status }));
+  if (!response.ok) throw new Error(buildTwelveDataErrorMessage({ status: response.status }));
 
   const payload = await response.json();
   return normalizeStockQuoteProxyResponse(payload, normalizedSymbols);

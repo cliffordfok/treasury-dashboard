@@ -80,6 +80,7 @@ const hasExistingFingerprint = (draft, existingStockTrades = [], existingCashMov
 };
 
 export const classifyConfirmImportRow = (row, seenFingerprints, existingStockTrades = [], existingCashMovements = [], trackingStartDate = '') => {
+  if (row.targetDraft === 'Position Row') return { importable: false, reason: 'position' };
   if (row.status === PREVIEW_STATUS.IGNORED) return { importable: false, reason: 'ignored' };
   if (!row?.draft) return { importable: false, reason: 'missing_draft' };
   if (row.status === PREVIEW_STATUS.ERROR) return { importable: false, reason: 'error' };

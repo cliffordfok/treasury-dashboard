@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound, Briefcase, Banknote, ClipboardCheck, Copy, FileJson, ShieldAlert, XCircle } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound, Briefcase, Banknote, Copy, FileJson, ShieldAlert, XCircle } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
@@ -7,13 +7,11 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChang
 import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
 import StockDashboard from './features/stocks/StockDashboard';
 import CashDashboard from './features/cash/CashDashboard';
-import ReconciliationDashboard from './features/reconciliation/ReconciliationDashboard';
 import PortfolioOverview from './features/portfolio/PortfolioOverview';
 import ImportPreviewDashboard from './features/import/ImportPreviewDashboard';
 import { subscribeStockTrades } from './features/stocks/stockFirestore';
 import { calculateStockPositions, normalizeSymbol } from './features/stocks/stockCalculations';
 import { subscribeCashMovements } from './features/cash/cashFirestore';
-import { subscribeReconciliationSnapshots } from './features/reconciliation/reconciliationFirestore';
 import { buildPortfolioAiSnapshot } from './features/ai/portfolioAiSnapshot';
 import { AI_MODE_LABELS, buildPortfolioAiMessages } from './features/ai/portfolioAiPrompts';
 import { buildAiSnapshotSummary, detectForbiddenAdvice, isSingleStockModeReady, parseAiReportSections, sanitizeAiSnapshotForCopy } from './features/ai/portfolioAiReport';
@@ -534,7 +532,6 @@ export default function App() {
   const [aiSelectedSymbol, setAiSelectedSymbol] = useState('');
   const [aiStockTrades, setAiStockTrades] = useState([]);
   const [aiCashMovements, setAiCashMovements] = useState([]);
-  const [aiReconciliationSnapshots, setAiReconciliationSnapshots] = useState([]);
   const [aiLastSnapshot, setAiLastSnapshot] = useState(null);
   const [aiCopyStatus, setAiCopyStatus] = useState('');
   const [isAiSnapshotOpen, setIsAiSnapshotOpen] = useState(false);
@@ -678,19 +675,6 @@ export default function App() {
     );
   }, [user]);
 
-  useEffect(() => {
-    if (!user) {
-      setAiReconciliationSnapshots([]);
-      return undefined;
-    }
-    return subscribeReconciliationSnapshots(
-      db,
-      user.uid,
-      setAiReconciliationSnapshots,
-      (error) => console.error('AI reconciliation snapshot subscription failed:', error),
-    );
-  }, [user]);
-
   // --- Google 登入/登出 Function ---
   const handleGoogleLogin = async () => {
     try {
@@ -779,7 +763,6 @@ export default function App() {
     selectedSymbol: aiSelectedSymbol,
     stockTrades: aiStockTrades,
     cashMovements: aiCashMovements,
-    reconciliationSnapshots: aiReconciliationSnapshots,
     treasuryData: { trades },
     treasurySummary: portfolioMetrics,
     asOf,
@@ -787,7 +770,7 @@ export default function App() {
 
   const aiPreviewSnapshot = useMemo(
     () => buildCurrentAiSnapshot(),
-    [aiAnalysisMode, aiSelectedSymbol, aiStockTrades, aiCashMovements, aiReconciliationSnapshots, trades, portfolioMetrics],
+    [aiAnalysisMode, aiSelectedSymbol, aiStockTrades, aiCashMovements, trades, portfolioMetrics],
   );
   const aiSnapshotForDisplay = aiLastSnapshot || aiPreviewSnapshot;
   const aiSnapshotSummary = useMemo(() => buildAiSnapshotSummary(aiSnapshotForDisplay), [aiSnapshotForDisplay]);
@@ -1373,7 +1356,7 @@ export default function App() {
                 <div className="p-1.5 bg-white/80 rounded-lg shadow-sm"><Bot size={20} /></div>
                 <h3 className="text-lg sm:text-xl font-semibold text-slate-900">AI 投資組合分析</h3>
               </div>
-              <p className="text-xs sm:text-sm text-indigo-700/80 mt-2 max-w-3xl">以系統帳本 snapshot 生成報告，聚焦成本、持倉、現金流及對帳狀態。</p>
+              <p className="text-xs sm:text-sm text-indigo-700/80 mt-2 max-w-3xl">以系統帳本 snapshot 生成報告，聚焦成本、持倉、現金流及美債資料。</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm">DeepSeek-V4-Pro</span>
@@ -1464,7 +1447,6 @@ export default function App() {
               <div><p className="text-xs text-slate-500">股票代號</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.stockSymbolsCount}</p></div>
               <div><p className="text-xs text-slate-500">現金流水</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.cashMovementCount}</p></div>
               <div><p className="text-xs text-slate-500">美債持倉</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.treasuryHoldingCount}</p></div>
-              <div><p className="text-xs text-slate-500">對帳差異</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.reconciliationIssueCount ?? '未有快照'}</p></div>
               <div className="col-span-2"><p className="text-xs text-slate-500">資料模組</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.modules.join(' · ')}</p></div>
             </div>
             <p className="text-xs text-slate-500 mt-3">{aiSnapshotSummary.quoteStatus}</p>
@@ -1767,15 +1749,12 @@ export default function App() {
           <button onClick={() => setActiveTab('cash')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'cash' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <Banknote size={15}/> 現金
           </button>
-          <button onClick={() => setActiveTab('reconcile')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'reconcile' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
-            <ClipboardCheck size={15}/> 對帳
-          </button>
           <button onClick={() => setActiveTab('import')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'import' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <Upload size={15}/> 匯入預覽
           </button>
         </div>
         </div>
-        {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : activeTab === 'stocks' ? <StockDashboard db={db} user={user} /> : activeTab === 'cash' ? <CashDashboard db={db} user={user} /> : activeTab === 'reconcile' ? <ReconciliationDashboard db={db} user={user} /> : activeTab === 'import' ? <ImportPreviewDashboard db={db} user={user} /> : renderTrades()}
+        {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : activeTab === 'stocks' ? <StockDashboard db={db} user={user} /> : activeTab === 'cash' ? <CashDashboard db={db} user={user} /> : activeTab === 'import' ? <ImportPreviewDashboard db={db} user={user} /> : renderTrades()}
       </main>
 
       {isFormOpen && (

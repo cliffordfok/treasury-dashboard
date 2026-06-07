@@ -1,57 +1,58 @@
 # Stock Quotes
 
-股票報價功能目前已停用，日後再處理。
+Stock quotes are enabled for the Stock Ledger through Twelve Data.
 
-## Current Status
+## Current Design
 
-The Portfolio Dashboard is temporarily focused on ledger-based data:
-
-- Stock Ledger positions
-- Remaining cost
-- Realized P&L
-- Stock trade cash impact
-- Cash Ledger balance
-- Reconciliation snapshots
-- Treasury metrics
-
-The UI no longer shows stock quote controls, automatic quote refresh, current price, stock market value, stock unrealized P&L, missing quote counts, proxy setup warnings, or static quote cache warnings.
-
-## Preserved Data
-
-Existing Firestore data under:
+- The user enters a Twelve Data API key in the Stock Ledger page.
+- The key is stored only in the current browser `localStorage`.
+- The key is not written to Firestore and is not included in JSON backups.
+- The app sends active holding symbols to Twelve Data from the browser.
+- Successful quotes are saved to:
 
 ```text
 users/{uid}/stockPrices/{symbol}
 ```
 
-is intentionally preserved. No migration or deletion is required.
+The quote data is used only for:
 
-## Disabled Paths
+- Current Price
+- Market Value
+- Unrealized P&L
+- Priced Symbols / Quote Status
 
-These paths are not used by the active UI:
+Ledger calculations remain based on recorded trades:
 
-- automatic quote refresh
-- Yahoo Finance quote proxy
-- static quote cache
-- manual price entry
-- quote-derived market value
-- quote-derived unrealized P&L
+- Average cost
+- Remaining cost
+- Realized P&L
+- Stock trade cash impact
+- Cash balance
+- Treasury calculations
+- CSV import
 
-The old serverless endpoint and quote cache modules can remain in the repository for future reference, but they are not called by the app while quote features are disabled.
+## API Key
 
-The public static cache files are intentionally empty/disabled:
+In the Stock Ledger page:
 
-- `public/stock-quotes/latest.json`
-- `public/stock-quotes/symbols.json`
+1. Open `API Key`.
+2. Paste the Twelve Data API key.
+3. Save.
+4. Click `更新持倉報價`.
 
-They should not be treated as active quote data in the current app.
+The key can be cleared from the same panel.
 
-## Re-enabling Later
+## Manual Price Fallback
 
-If quote features are revisited later, prefer doing it behind an explicit feature flag, for example:
+The manual price form is still available. Manual prices write to the same `stockPrices` path with:
 
 ```text
-VITE_ENABLE_STOCK_QUOTES=true
+source: manual
+quoteType: manual
 ```
 
-The default should remain disabled unless the quote provider and deployment path are settled.
+## Portfolio Overview and AI
+
+Portfolio Overview asset allocation remains book-value / cost-basis based. It does not use stock quotes.
+
+AI analysis also does not use stock quotes. AI reports remain based on cost, holdings, cash flow, realized P&L, and Treasury data.

@@ -40,8 +40,9 @@ const positionsCsv = [
 ].join('\n');
 preview = buildImportPreviewFromCsvText(positionsCsv);
 equal(preview.csvType, 'positions', 'positions csv type');
-equal(preview.rows[0].targetDraft, 'Reconciliation Holding', 'position target');
-equal(preview.rows[0].draft.symbol, 'SGOV', 'position draft symbol');
+equal(preview.rows[0].targetDraft, 'Position Row', 'position target');
+equal(preview.rows[0].status, PREVIEW_STATUS.IGNORED, 'position rows are ignored');
+equal(preview.rows[0].draft, null, 'position rows do not create import drafts');
 
 const unknownCsv = ['Foo,Bar', 'abc,123'].join('\n');
 preview = buildImportPreviewFromCsvText(unknownCsv);

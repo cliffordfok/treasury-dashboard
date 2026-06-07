@@ -62,7 +62,12 @@ const portfolioSnapshot = buildPortfolioAiSnapshot({
   stockTrades,
   stockPrices,
   cashMovements,
-  treasuryData: { trades: [{ cusip: '91282C', status: 'active', type: 't-note', side: 'buy', maturityDate: '2030-05-31', faceValue: 1000, cleanPrice: 99, couponRate: 4 }] },
+  treasuryData: {
+    trades: [
+      { cusip: '91282C', status: 'active', type: 't-note', side: 'buy', maturityDate: '2030-05-31', faceValue: 1000, cleanPrice: 99, couponRate: 4 },
+      { cusip: '91225OLD', status: 'active', type: 't-bill', side: 'buy', maturityDate: '2025-12-31', faceValue: 500, cleanPrice: 99.5, couponRate: 0 },
+    ],
+  },
   treasurySummary: { totalFullMarketValue: 990, totalMarketValue: 990, totalUnrealizedPnL: 0, totalFace: 1000, totalWeightYTM: 4, monthlyAvgIncome: 3.33 },
   asOf: '2026-06-07T00:00:00.000Z',
 });
@@ -72,6 +77,10 @@ near(portfolioSnapshot.totals.stockMarketValue, 6870, 'portfolio totals include 
 near(portfolioSnapshot.totals.stockUnrealizedPnl, 1527.42, 'portfolio totals include stock unrealized pnl');
 near(portfolioSnapshot.totals.totalMarketAwareValueApproximation, 17293.5, 'portfolio totals include market aware approximation');
 equal(removedSnapshotKey in portfolioSnapshot, false, 'portfolio AI snapshot excludes removed snapshot data');
+equal(portfolioSnapshot.treasuries.holdingCount, 1, 'matured active treasury is excluded from AI holdings');
+equal(portfolioSnapshot.treasuries.maturedExcludedCount, 1, 'matured active treasury exclusion count');
+equal('2025' in portfolioSnapshot.treasuries.maturityDistributionByYear, false, 'matured treasury year is excluded from maturity distribution');
+equal(portfolioSnapshot.treasuries.missingDataWarnings.some((warning) => warning.includes('已到期')), true, 'matured treasury exclusion warning is included');
 assert.equal(portfolioSnapshot.dataLimitations.some((warning) => warning.includes('缺少有效報價')), true, 'portfolio data limitation includes missing quote warning');
 
 const singlePortfolioSnapshot = buildPortfolioAiSnapshot({ mode: 'stock_single', selectedSymbol: 'NVDA', stockTrades, stockPrices, asOf: '2026-06-07T00:00:00.000Z' });

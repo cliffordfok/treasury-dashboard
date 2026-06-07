@@ -10,6 +10,12 @@ import CashDashboard from './features/cash/CashDashboard';
 import ReconciliationDashboard from './features/reconciliation/ReconciliationDashboard';
 import PortfolioOverview from './features/portfolio/PortfolioOverview';
 import ImportPreviewDashboard from './features/import/ImportPreviewDashboard';
+import { subscribeStockTrades } from './features/stocks/stockFirestore';
+import { calculateStockPositions } from './features/stocks/stockCalculations';
+import { subscribeCashMovements } from './features/cash/cashFirestore';
+import { subscribeReconciliationSnapshots } from './features/reconciliation/reconciliationFirestore';
+import { buildPortfolioAiSnapshot } from './features/ai/portfolioAiSnapshot';
+import { AI_MODE_LABELS, buildPortfolioAiMessages } from './features/ai/portfolioAiPrompts';
 
 // --- 真實環境 Firebase 設定 (使用環境變數) ---
 const firebaseConfig = {
@@ -213,14 +219,18 @@ const callDeepSeekDirect = async ({ messages, userApiKey, temperature = 0.2, res
   return text;
 };
 
-const generateText = async (prompt, userApiKey = '') => {
+const generateText = async (promptOrMessages, userApiKey = '') => {
+  const messages = Array.isArray(promptOrMessages)
+    ? promptOrMessages
+    : [
+      { role: 'system', content: 'You are a concise fixed-income portfolio analyst.' },
+      { role: 'user', content: String(promptOrMessages || '') },
+    ];
+  const prompt = messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join('\n\n');
   if (!aiProxyUrl && String(userApiKey || '').trim()) {
     return callDeepSeekDirect({
       userApiKey,
-      messages: [
-        { role: 'system', content: 'You are a concise fixed-income portfolio analyst.' },
-        { role: 'user', content: String(prompt || '') },
-      ],
+      messages,
       temperature: 0.3,
     });
   }
@@ -519,6 +529,11 @@ export default function App() {
   const [aiInsights, setAiInsights] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [insightError, setInsightError] = useState('');
+  const [aiAnalysisMode, setAiAnalysisMode] = useState('total_assets');
+  const [aiSelectedSymbol, setAiSelectedSymbol] = useState('');
+  const [aiStockTrades, setAiStockTrades] = useState([]);
+  const [aiCashMovements, setAiCashMovements] = useState([]);
+  const [aiReconciliationSnapshots, setAiReconciliationSnapshots] = useState([]);
   const [rawTradeText, setRawTradeText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
   const [userDeepSeekApiKey, setUserDeepSeekApiKey] = useState(() => {
@@ -632,6 +647,46 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
+
+  useEffect(() => {
+    if (!user) {
+      setAiStockTrades([]);
+      return undefined;
+    }
+    return subscribeStockTrades(
+      db,
+      user.uid,
+      setAiStockTrades,
+      (error) => console.error('AI stock snapshot subscription failed:', error),
+    );
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setAiCashMovements([]);
+      return undefined;
+    }
+    return subscribeCashMovements(
+      db,
+      user.uid,
+      setAiCashMovements,
+      (error) => console.error('AI cash snapshot subscription failed:', error),
+    );
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setAiReconciliationSnapshots([]);
+      return undefined;
+    }
+    return subscribeReconciliationSnapshots(
+      db,
+      user.uid,
+      setAiReconciliationSnapshots,
+      (error) => console.error('AI reconciliation snapshot subscription failed:', error),
+    );
+  }, [user]);
+
   // --- Google 登入/登出 Function ---
   const handleGoogleLogin = async () => {
     try {
@@ -650,6 +705,18 @@ export default function App() {
   const activeTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && !isMatured(t.maturityDate)), [trades]);
   const maturedTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && isMatured(t.maturityDate)), [trades]);
   const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
+  const aiStockSymbols = useMemo(
+    () => calculateStockPositions(aiStockTrades)
+      .filter((position) => Math.abs(Number(position.quantity || 0)) > 0.000001 || Math.abs(Number(position.remainingCost || 0)) > 0.01)
+      .map((position) => position.symbol),
+    [aiStockTrades],
+  );
+
+  useEffect(() => {
+    if (aiAnalysisMode === 'stock_single' && !aiSelectedSymbol && aiStockSymbols.length > 0) {
+      setAiSelectedSymbol(aiStockSymbols[0]);
+    }
+  }, [aiAnalysisMode, aiSelectedSymbol, aiStockSymbols]);
 
   const allCoupons = useMemo(() => trades.flatMap(generateAllCoupons), [trades]);
   // Dashboard valuation date is fixed at page load; reload the app to refresh it.
@@ -900,16 +967,21 @@ export default function App() {
   };
 
   const handleAnalyzePortfolio = async () => {
-    if (activeTrades.length === 0) return;
     if (!hasAiTransport) { setInsightError('請先設定 AI proxy 或按 API Key 輸入 DeepSeek key。'); return; }
     setIsAnalyzing(true); setInsightError('');
     try {
-      const weightedYtmText = portfolioMetrics.totalWeightYTM == null ? 'Unavailable' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`;
-      const prompt = `Here is a summary of a user's ACTIVE US Treasury bond portfolio:
-        Total Market Value: $${portfolioMetrics.totalMarketValue.toFixed(2)}, Total Unrealized PnL: $${portfolioMetrics.totalUnrealizedPnL.toFixed(2)}, Weighted Average YTM: ${weightedYtmText}
-        Detailed holdings: ${activeTrades.map(t => `- ${t.side.toUpperCase()} ${t.type.toUpperCase()}, Face Value: $${t.faceValue}, Matures: ${t.maturityDate}`).join('\n')}
-        Provide a short analysis on interest rate risk, reinvestment risk, and strategic recommendation. Keep it under 3 paragraphs with bullet points. Respond in Traditional Chinese (HK).`;
-      const response = await generateText(prompt, userDeepSeekApiKey);
+      const snapshot = buildPortfolioAiSnapshot({
+        mode: aiAnalysisMode,
+        selectedSymbol: aiSelectedSymbol,
+        stockTrades: aiStockTrades,
+        cashMovements: aiCashMovements,
+        reconciliationSnapshots: aiReconciliationSnapshots,
+        treasuryData: { trades },
+        treasurySummary: portfolioMetrics,
+        asOf: new Date().toISOString(),
+      });
+      const messages = buildPortfolioAiMessages({ snapshot, mode: aiAnalysisMode });
+      const response = await generateText(messages, userDeepSeekApiKey);
       setAiInsights(response);
     } catch (err) { setInsightError('分析時發生錯誤。請確保已設定 API Key。'); } finally { setIsAnalyzing(false); }
   };
@@ -1249,12 +1321,42 @@ export default function App() {
             <div className="p-1.5 bg-white/70 rounded-lg shadow-sm"><Bot size={20} /></div>
             <h3 className="text-base sm:text-lg font-bold">AI 投資組合分析</h3>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={aiAnalysisMode}
+              onChange={(event) => {
+                setAiAnalysisMode(event.target.value);
+                setAiInsights(null);
+                setInsightError('');
+              }}
+              className="bg-white/80 border border-indigo-200 text-indigo-800 rounded-lg px-2.5 py-2 text-xs sm:text-sm font-semibold shadow-sm"
+            >
+              {Object.entries(AI_MODE_LABELS).map(([mode, label]) => (
+                <option key={mode} value={mode}>{label}</option>
+              ))}
+            </select>
+            {aiAnalysisMode === 'stock_single' && (
+              <select
+                value={aiSelectedSymbol}
+                onChange={(event) => {
+                  setAiSelectedSymbol(event.target.value);
+                  setAiInsights(null);
+                  setInsightError('');
+                }}
+                className="bg-white/80 border border-indigo-200 text-indigo-800 rounded-lg px-2.5 py-2 text-xs sm:text-sm font-semibold shadow-sm"
+              >
+                {aiStockSymbols.length === 0 ? (
+                  <option value="">未有股票</option>
+                ) : aiStockSymbols.map((symbol) => (
+                  <option key={symbol} value={symbol}>{symbol}</option>
+                ))}
+              </select>
+            )}
             <span className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm">DeepSeek-V4-Pro</span>
             <button type="button" onClick={openApiKeySettings} className={`border px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm ${hasUserDeepSeekApiKey ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-white/80 border-indigo-200 text-indigo-700 hover:bg-white'}`} title="Set personal DeepSeek API key">
               <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人 Key' : 'API Key'}
             </button>
-            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || activeTrades.length === 0 || !hasAiTransport} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
+            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || !hasAiTransport} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm">
               {isAnalyzing ? <Loader2 size={15} className="animate-spin mr-1.5" /> : <Sparkles size={15} className="mr-1.5" />} 智能分析
             </button>
           </div>
@@ -1278,7 +1380,7 @@ export default function App() {
           </div>
         )}
         {insightError && <p className="text-sm text-red-600 flex items-center mt-2 mb-2"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
-        {aiInsights ? <div className="bg-white/90 p-4 rounded-lg text-sm text-slate-700 leading-relaxed whitespace-pre-wrap border border-white shadow-inner">{aiInsights}</div> : <p className="text-sm text-indigo-400/90 italic">點擊按鈕，讓 AI 為你分析現時債券梯的久期風險及資金流動性建議。</p>}
+        {aiInsights ? <div className="bg-white/90 p-4 rounded-lg text-sm text-slate-700 leading-relaxed whitespace-pre-wrap border border-white shadow-inner">{aiInsights}</div> : <p className="text-sm text-indigo-400/90 italic">選擇分析範圍，讓 AI 根據帳本 snapshot 分析資料摘要、集中度、現金流及對帳問題。股票報價功能已停用，不會包含即時市值或未實現盈虧。</p>}
       </div>
     </div>
   );
@@ -1584,4 +1686,3 @@ export default function App() {
     </div>
   );
 }
-

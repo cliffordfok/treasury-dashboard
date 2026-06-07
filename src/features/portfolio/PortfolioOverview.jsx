@@ -1,5 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Briefcase, ClipboardCheck, DollarSign, Landmark, Loader2, Receipt, TrendingUp, Wallet } from 'lucide-react';
+import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { subscribeCashMovements } from '../cash/cashFirestore.js';
 import { subscribeReconciliationSnapshots } from '../reconciliation/reconciliationFirestore.js';
 import { subscribeStockTrades } from '../stocks/stockFirestore.js';
@@ -19,6 +20,12 @@ const signedMoney = (value, currency = 'USD') => {
 
 const valueClass = (value) => (Number(value) >= 0 ? 'text-emerald-600' : 'text-red-600');
 
+const ASSET_COLORS = {
+  cash: '#10b981',
+  stocks: '#f59e0b',
+  treasuries: '#2563eb',
+};
+
 const SummaryCard = ({ icon, label, value, subtext, tone = 'slate' }) => {
   const toneClasses = {
     slate: 'bg-slate-100 text-slate-600',
@@ -36,6 +43,17 @@ const SummaryCard = ({ icon, label, value, subtext, tone = 'slate' }) => {
         <p className="text-base sm:text-xl font-bold text-slate-800 truncate">{value}</p>
         {subtext && <p className="text-[10px] text-slate-400 mt-1 truncate">{subtext}</p>}
       </div>
+    </div>
+  );
+};
+
+const AllocationTooltip = ({ active, payload }) => {
+  if (!active || !payload?.length) return null;
+  const row = payload[0].payload;
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm text-xs">
+      <p className="font-semibold text-slate-800">{row.label}</p>
+      <p className="text-slate-600">{money(row.amount)} · {row.percent.toFixed(2)}%</p>
     </div>
   );
 };
@@ -169,6 +187,77 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
           subtext={`非交易費用 ${money(overview.cash.fees)}`}
           tone="slate"
         />
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="p-4 sm:p-5 border-b border-slate-100">
+          <h3 className="text-xl font-semibold text-slate-900">資產比例</h3>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">以帳面值 / 成本基準計算，不包含即時市值。</p>
+        </div>
+        <div className="p-4 sm:p-5">
+          {overview.assetAllocation.isEmpty ? (
+            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+              暫無可顯示的資產比例
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)] gap-4 sm:gap-6 items-center">
+              <div className="h-64 sm:h-72 min-w-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={overview.assetAllocation.rows}
+                      dataKey="amount"
+                      nameKey="label"
+                      innerRadius="52%"
+                      outerRadius="82%"
+                      paddingAngle={2}
+                    >
+                      {overview.assetAllocation.rows.map((row) => (
+                        <Cell key={row.key} fill={ASSET_COLORS[row.key] || '#64748b'} />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<AllocationTooltip />} />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="min-w-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="text-xs text-slate-500 border-b border-slate-100">
+                      <tr>
+                        <th className="py-2 text-left font-medium">類別</th>
+                        <th className="py-2 text-right font-medium">金額</th>
+                        <th className="py-2 text-right font-medium">比例</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {overview.assetAllocation.rows.map((row) => (
+                        <tr key={row.key}>
+                          <td className="py-3">
+                            <span className="inline-flex items-center gap-2 font-semibold text-slate-800">
+                              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: ASSET_COLORS[row.key] || '#64748b' }} />
+                              {row.label}
+                            </span>
+                          </td>
+                          <td className="py-3 text-right font-medium text-slate-700">{money(row.amount)}</td>
+                          <td className="py-3 text-right font-bold text-slate-900">{row.percent.toFixed(2)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {overview.assetAllocation.warnings.length > 0 && (
+                  <div className="mt-3 space-y-1">
+                    {overview.assetAllocation.warnings.map((warning) => (
+                      <p key={warning} className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">{warning}</p>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-slate-500 mt-3">此圖以系統帳本資料計算，股票報價功能目前已停用，因此不代表即時市場市值。</p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">

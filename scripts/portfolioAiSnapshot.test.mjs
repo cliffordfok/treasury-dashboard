@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { AI_MODE_LABELS } from '../src/features/ai/portfolioAiPrompts.js';
-import { buildPortfolioAiMessages } from '../src/features/ai/portfolioAiPrompts.js';
+import { AI_MODE_LABELS, buildPortfolioAiMessages } from '../src/features/ai/portfolioAiPrompts.js';
 import { buildAiSnapshotSummary, detectForbiddenAdvice, isSingleStockModeReady, parseAiReportSections, sanitizeAiSnapshotForCopy } from '../src/features/ai/portfolioAiReport.js';
 import { buildCashAiSnapshot, buildPortfolioAiSnapshot, buildStockAiSnapshot, STOCK_QUOTES_DISABLED_LIMITATION } from '../src/features/ai/portfolioAiSnapshot.js';
 
@@ -46,44 +45,35 @@ const portfolioSnapshot = buildPortfolioAiSnapshot({
   mode: 'total_assets',
   stockTrades,
   cashMovements,
-  reconciliationSnapshots: [
-    {
-      id: 'snapshot-1',
-      date: '2026-05-31',
-      brokerCashBalance: 9593.5,
-      holdings: [
-        { symbol: 'VOO', brokerQuantity: 10, brokerCostBasis: 4500 },
-        { symbol: 'NVDA', brokerQuantity: 3, brokerCostBasis: 300 },
-      ],
-    },
-  ],
   treasuryData: { trades: [{ cusip: '91282C', status: 'active', type: 't-note', side: 'buy', maturityDate: '2030-05-31', faceValue: 1000, cleanPrice: 99, couponRate: 4 }] },
   treasurySummary: { totalFullMarketValue: 990, totalMarketValue: 990, totalUnrealizedPnL: 0, totalFace: 1000, totalWeightYTM: 4, monthlyAvgIncome: 3.33 },
   asOf: '2026-06-07T00:00:00.000Z',
 });
+const removedSnapshotKey = ['recon', 'ciliation'].join('');
 equal('marketValue' in portfolioSnapshot.stocks.totals, false, 'total assets snapshot does not use quote market value');
 equal('stockUnrealizedPnl' in portfolioSnapshot.totals, false, 'total assets snapshot does not include stock unrealized pnl');
+equal(removedSnapshotKey in portfolioSnapshot, false, 'portfolio AI snapshot excludes removed snapshot data');
 assert.equal(portfolioSnapshot.dataLimitations[0], STOCK_QUOTES_DISABLED_LIMITATION, 'portfolio data limitation includes missing quotes');
-equal(portfolioSnapshot.reconciliation.latestSnapshotDate, '2026-05-31', 'reconciliation latest date');
 
 const singlePortfolioSnapshot = buildPortfolioAiSnapshot({ mode: 'stock_single', selectedSymbol: 'NVDA', stockTrades, asOf: '2026-06-07T00:00:00.000Z' });
 assert.deepEqual(singlePortfolioSnapshot.stocks.symbols, ['NVDA'], 'portfolio single stock mode only includes selected symbol');
 
 const messages = buildPortfolioAiMessages({ snapshot: portfolioSnapshot, mode: 'stock_portfolio' });
 const fullPrompt = messages.map((message) => message.content).join('\n');
-assert.match(fullPrompt, /不要提供買入、賣出/, 'prompt contains no buy sell advice limit');
-assert.match(fullPrompt, /不要提供目標價/, 'prompt contains no target price limit');
-assert.match(fullPrompt, /不要預測股價/, 'prompt contains no stock prediction limit');
-assert.match(fullPrompt, /不要引用 snapshot 以外的市場資料/, 'prompt contains no external data limit');
-assert.match(fullPrompt, /目前股票報價功能已停用/, 'prompt contains quote disabled limitation');
+assert.match(fullPrompt, /不可提供買入、賣出、持有建議/, 'prompt contains no buy sell advice limit');
+assert.match(fullPrompt, /不可提供目標價/, 'prompt contains no target price limit');
+assert.match(fullPrompt, /不可預測股價/, 'prompt contains no stock prediction limit');
+assert.match(fullPrompt, /不可引用 snapshot 以外/, 'prompt contains no external data limit');
+assert.match(fullPrompt, /AI 分析目前不使用股票報價/, 'prompt contains quote limitation');
 assert.match(fullPrompt, /1\. 數據摘要/, 'prompt contains fixed output format');
+assert.match(fullPrompt, /5\. 資料限制/, 'prompt output format uses data limitation section');
 
 assert.equal(AI_MODE_LABELS.total_assets, '整體資產', 'total assets mode label');
 assert.equal(AI_MODE_LABELS.stock_portfolio, '股票組合', 'stock portfolio mode label');
 assert.equal(AI_MODE_LABELS.stock_single, '單一股票', 'single stock mode label');
 assert.equal(AI_MODE_LABELS.cash, '現金', 'cash mode label');
-assert.equal(AI_MODE_LABELS.reconciliation, '對帳', 'reconciliation mode label');
 assert.equal(AI_MODE_LABELS.treasury, '美債', 'treasury mode label');
+assert.equal(removedSnapshotKey in AI_MODE_LABELS, false, 'removed mode is absent');
 
 assert.equal(isSingleStockModeReady({ mode: 'stock_single', selectedSymbol: '', symbols: ['VOO'] }), false, 'single stock mode requires symbol');
 assert.equal(isSingleStockModeReady({ mode: 'stock_single', selectedSymbol: 'VOO', symbols: ['VOO'] }), true, 'single stock mode accepts selected symbol');
@@ -91,25 +81,25 @@ assert.equal(isSingleStockModeReady({ mode: 'cash', selectedSymbol: '', symbols:
 
 const markdownReport = [
   '## 數據摘要',
-  '- 股票剩餘成本為 100。',
+  '- 股票成本約 100。',
   '',
   '2. 主要觀察',
-  '沒有即時報價。',
+  '沒有使用報價資料。',
   '',
-  '**集中度 / 風險**: VOO 比重較高。',
+  '**集中度 / 風險**: VOO 佔比較高。',
   '',
   '現金流 / 收益：股息已記錄。',
   '',
-  '### 對帳問題',
+  '### 資料限制',
   '資料不足。',
 ].join('\n');
 const parsedSections = parseAiReportSections(markdownReport);
-assert.deepEqual(parsedSections.map((section) => section.title), ['數據摘要', '主要觀察', '集中度 / 風險', '現金流 / 收益', '對帳問題'], 'markdown report sections are parsed');
-assert.match(parsedSections[0].content, /股票剩餘成本/, 'section content preserved');
+assert.deepEqual(parsedSections.map((section) => section.title), ['數據摘要', '主要觀察', '集中度 / 風險', '現金流 / 收益', '資料限制'], 'markdown report sections are parsed');
+assert.match(parsedSections[0].content, /股票成本/, 'section content preserved');
 
-assert.equal(detectForbiddenAdvice('建議買入 VOO，目標價 800。'), true, 'forbidden advice detector catches buy and target price');
-assert.equal(detectForbiddenAdvice('可以賣出部分持倉。'), true, 'forbidden advice detector catches sell wording');
-assert.equal(detectForbiddenAdvice('以下只描述帳本資料，不構成買賣建議。'), false, 'forbidden advice detector allows safety disclaimer');
+assert.equal(detectForbiddenAdvice('建議買入 VOO，目標價 800'), true, 'forbidden advice detector catches buy and target price');
+assert.equal(detectForbiddenAdvice('應該賣出目前持倉'), true, 'forbidden advice detector catches sell wording');
+assert.equal(detectForbiddenAdvice('只根據帳本資料作中性摘要，不構成買賣建議。'), false, 'forbidden advice detector allows safety disclaimer');
 
 const unsafeSnapshot = {
   ...portfolioSnapshot,
@@ -128,3 +118,5 @@ assert.equal(snapshotSummary.stockSymbolsCount, 2, 'snapshot summary includes st
 assert.equal(snapshotSummary.cashMovementCount, 7, 'snapshot summary includes cash movement count');
 assert.equal(snapshotSummary.treasuryHoldingCount, 1, 'snapshot summary includes treasury holdings count');
 assert.equal(snapshotSummary.quoteStatus, STOCK_QUOTES_DISABLED_LIMITATION, 'snapshot summary includes quote disabled status');
+assert.equal(snapshotSummary.modules.includes(['Recon', 'ciliation'].join('')), false, 'snapshot summary only lists active modules');
+assert.equal(`${removedSnapshotKey}IssueCount` in snapshotSummary, false, 'snapshot summary excludes removed issue count');

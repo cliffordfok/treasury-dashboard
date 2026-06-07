@@ -1,32 +1,33 @@
 # Firstrade CSV Mapping
 
-## Phase 3A Scope
+## Scope
 
-Phase 3A builds the pure mapping and validation layer for future Firstrade CSV import work.
+The CSV import layer maps Firstrade rows into previewable, validated drafts before any write step.
 
-It does not import rows into Firestore. It does not add upload UI, CSV parser integration, stock quote APIs, AI analysis, reconciliation automation, or Treasury calculation changes.
+It supports writing only:
 
-The mapping helpers live in:
+- `stockTrades`
+- `cashMovements`
+
+It does not add stock quote APIs, AI analysis, or Treasury calculation changes.
+
+## Mapping Helpers
 
 - `src/features/import/firstradeMapping.js`
 - `src/features/import/firstradeMapping.test.mjs`
 
-## Design
+## Supported Draft Targets
 
-Firstrade CSV rows are converted into normalized intermediate objects first. Those intermediate rows can then be validated and previewed before any future write step.
+- Stock trade draft for `stockTrades`
+- Cash movement draft for `cashMovements`
+- Position rows as preview-only informational rows
 
-Supported draft targets:
-
-- Stock trade draft for future `stockTrades`
-- Cash movement draft for future `cashMovements`
-- Reconciliation holding draft for future snapshot holdings
-
-Each draft may include:
+Importable drafts may include:
 
 - `source: "firstrade_csv"`
 - `importFingerprint`
 
-These fields are intended for preview and duplicate detection. Phase 3A does not write them to Firestore.
+These fields are used for preview, duplicate detection, and import auditability.
 
 ## Supported CSV Types
 
@@ -37,7 +38,7 @@ These fields are intended for preview and duplicate detection. Phase 3A does not
 - `positions`
 - `unknown`
 
-Unknown files should be shown for manual review in a future preview UI instead of being silently imported.
+`positions` rows are intentionally ignored by confirm import. They can be shown in preview for user awareness, but they are not written to Firestore.
 
 ## Header Aliases
 
@@ -81,6 +82,7 @@ Supported activity classes:
 
 - `stock_trade_buy`
 - `stock_trade_sell`
+- `dividend_reinvestment`
 - `dividend`
 - `withholding_tax`
 - `interest`
@@ -88,9 +90,10 @@ Supported activity classes:
 - `deposit`
 - `withdrawal`
 - `adjustment`
+- `ignored`
 - `unknown`
 
-Withholding tax is checked before dividend so descriptions such as `foreign tax withheld` do not become dividend rows.
+Internal transfers such as `TFR from Type`, `TFR to Type`, `XFER CASH TO MARGIN`, and `XFER MARGIN TO CASH` are ignored.
 
 ## Parsers
 
@@ -150,20 +153,11 @@ Supported:
 - `source: "firstrade_csv"`
 - `importFingerprint`
 
-Withholding tax and fee drafts store positive `amount` values because existing Cash Ledger impact logic applies the negative sign based on `type`.
+Withholding tax and fee drafts store positive `amount` values because Cash Ledger impact logic applies the negative sign based on `type`.
 
-### Reconciliation Holding Draft
+### Position Rows
 
-`toReconciliationHoldingDraft(mappedRow)` returns:
-
-- `symbol`
-- `brokerQuantity`
-- `brokerCostBasis`
-- `brokerMarketValue`
-- `notes`
-- `accountId: "firstrade"`
-- `source: "firstrade_csv"`
-- `importFingerprint`
+Position CSV rows are preview-only. They are shown as `Position Row`, marked ignored, and are not importable.
 
 ## Validation
 
@@ -213,25 +207,20 @@ Cash movement fingerprint fields:
 - `withholdingTax`
 - `notes`
 
-Position fingerprint fields:
+Position rows do not create import fingerprints because they are not importable.
 
-- `accountId`
-- `date`
-- `symbol`
-- `brokerQuantity`
-- `brokerCostBasis`
-- `brokerMarketValue`
+## Confirm Import
 
-## Phase 3B Recommendation
+Confirm import writes only `OK + NEW` rows whose target is:
 
-Phase 3B should add a preview UI and import confirmation flow:
+- `Stock Trade`
+- `Cash Movement`
 
-1. Upload CSV file.
-2. Parse rows in-browser.
-3. Detect CSV type.
-4. Show mapped drafts with validation status.
-5. Detect duplicates by comparing `importFingerprint`.
-6. Let the user confirm selected rows.
-7. Only then write to `stockTrades`, `cashMovements`, or a reconciliation snapshot.
+The following rows remain preview-only and are skipped:
 
-Phase 3B should still avoid stock quote APIs and AI analysis unless requested separately.
+- Position rows
+- Ignored rows
+- Duplicate rows
+- Warning rows
+- Error rows
+- Rows before the configured tracking start date

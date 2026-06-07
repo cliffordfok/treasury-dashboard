@@ -287,22 +287,6 @@ export const toCashMovementDraft = (mappedRow = {}) => {
   return draft;
 };
 
-export const toReconciliationHoldingDraft = (mappedRow = {}) => {
-  const draft = {
-    symbol: normalizeSymbol(mappedRow.symbol),
-    brokerQuantity: absoluteOrZero(mappedRow.quantity),
-    brokerCostBasis: optionalAbsNumber(mappedRow.costBasis),
-    brokerMarketValue: optionalAbsNumber(mappedRow.marketValue),
-    notes: makeNotes(mappedRow),
-    accountId: 'firstrade',
-    date: mappedRow.date || '',
-    source: 'firstrade_csv',
-  };
-
-  draft.importFingerprint = buildImportFingerprint(draft);
-  return draft;
-};
-
 const isIsoDate = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ''));
 
 const hasNumber = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
@@ -325,11 +309,6 @@ const validateCashDraft = (draft, errors) => {
   }
 };
 
-const validateHoldingDraft = (draft, errors) => {
-  if (!draft.symbol || draft.symbol !== draft.symbol.toUpperCase()) errors.push('symbol is required and must be uppercase.');
-  if (!hasNumber(draft.brokerQuantity) || Number(draft.brokerQuantity) < 0) errors.push('brokerQuantity must be 0 or greater.');
-};
-
 export const validateImportedDraft = (draft = {}) => {
   const errors = [];
   const warnings = [];
@@ -343,7 +322,6 @@ export const validateImportedDraft = (draft = {}) => {
   }
 
   if (Object.prototype.hasOwnProperty.call(draft, 'side')) validateStockDraft(draft, errors);
-  else if (Object.prototype.hasOwnProperty.call(draft, 'brokerQuantity')) validateHoldingDraft(draft, errors);
   else validateCashDraft(draft, errors);
 
   if (!draft.importFingerprint) warnings.push('Missing importFingerprint; duplicate detection will be weaker.');
@@ -371,18 +349,6 @@ export const buildImportFingerprint = (draft = {}) => {
       fingerprintValue(draft.price),
       fingerprintValue(draft.commission),
       fingerprintValue(draft.fees),
-    ].join('|');
-  }
-
-  if (Object.prototype.hasOwnProperty.call(draft, 'brokerQuantity')) {
-    return [
-      'position',
-      accountId,
-      fingerprintValue(draft.date),
-      fingerprintValue(draft.symbol),
-      fingerprintValue(draft.brokerQuantity),
-      fingerprintValue(draft.brokerCostBasis),
-      fingerprintValue(draft.brokerMarketValue),
     ].join('|');
   }
 

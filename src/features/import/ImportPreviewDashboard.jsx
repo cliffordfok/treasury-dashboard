@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, FileText, Loader2, RefreshCw, Search, Trash2, Upload, XCircle } from 'lucide-react';
 import { subscribeCashMovements } from '../cash/cashFirestore.js';
-import { subscribeReconciliationSnapshots } from '../reconciliation/reconciliationFirestore.js';
 import { subscribeStockTrades } from '../stocks/stockFirestore.js';
 import { buildConfirmImportPlan } from './importConfirmCalculations.js';
 import { commitFirstradeImport } from './importFirestore.js';
@@ -25,7 +24,7 @@ const duplicateLabel = {
 const targetLabel = {
   'Stock Trade': 'Stock Trade',
   'Cash Movement': 'Cash Movement',
-  'Reconciliation Holding': 'Reconciliation Holding',
+  'Position Row': 'Position Row',
   Unknown: 'Unknown',
 };
 
@@ -64,7 +63,6 @@ const JsonBlock = ({ title, value }) => (
 export default function ImportPreviewDashboard({ db, user }) {
   const [stockTrades, setStockTrades] = useState([]);
   const [cashMovements, setCashMovements] = useState([]);
-  const [reconciliationSnapshots, setReconciliationSnapshots] = useState([]);
   const [fileName, setFileName] = useState('');
   const [csvText, setCsvText] = useState('');
   const [trackingStartDate, setTrackingStartDate] = useState('');
@@ -89,24 +87,18 @@ export default function ImportPreviewDashboard({ db, user }) {
     return subscribeCashMovements(db, user.uid, setCashMovements, (err) => setDataError(err.message || '未能載入現有現金流水作重複檢查。'));
   }, [db, user?.uid]);
 
-  useEffect(() => {
-    if (!db || !user?.uid) return undefined;
-    return subscribeReconciliationSnapshots(db, user.uid, setReconciliationSnapshots, (err) => setDataError(err.message || '未能載入現有對帳快照作重複檢查。'));
-  }, [db, user?.uid]);
-
   const preview = useMemo(() => {
     if (!csvText) return null;
     try {
       return buildImportPreviewFromCsvText(csvText, {
         existingStockTrades: stockTrades,
         existingCashMovements: cashMovements,
-        existingReconciliationSnapshots: reconciliationSnapshots,
         trackingStartDate,
       });
     } catch (error) {
       return { error: error.message || 'CSV 解析失敗。' };
     }
-  }, [cashMovements, csvText, reconciliationSnapshots, stockTrades, trackingStartDate]);
+  }, [cashMovements, csvText, stockTrades, trackingStartDate]);
 
   const confirmPlan = useMemo(() => {
     if (!preview?.rows) return null;

@@ -8,7 +8,6 @@ import {
   parseFirstradeDate,
   parseFirstradeNumber,
   toCashMovementDraft,
-  toReconciliationHoldingDraft,
   toStockTradeDraft,
   validateImportedDraft,
 } from './firstradeMapping.js';
@@ -106,19 +105,6 @@ near(feeDraft.amount, 2.18, 'fee amount positive');
 const interestDraft = toCashMovementDraft(mapFirstradeRow({ Date: '2026-05-31', Type: 'Interest', Amount: '$4.50' }, 'cash_activity'));
 equal(interestDraft.type, 'interest', 'interest cash type');
 near(interestDraft.amount, 4.5, 'interest amount');
-
-const holdingDraft = toReconciliationHoldingDraft(
-  mapFirstradeRow(
-    { Date: '05/31/2026', Symbol: 'sgov', Quantity: '10', 'Cost Basis': '$1,000.00', 'Market Value': '$1,001.25', Description: 'SGOV position' },
-    'positions',
-  ),
-);
-equal(holdingDraft.symbol, 'SGOV', 'holding symbol uppercase');
-equal(holdingDraft.date, '2026-05-31', 'holding date');
-near(holdingDraft.brokerQuantity, 10, 'holding quantity');
-near(holdingDraft.brokerCostBasis, 1000, 'holding cost basis');
-near(holdingDraft.brokerMarketValue, 1001.25, 'holding market value');
-equal(validateImportedDraft(holdingDraft).ok, true, 'holding draft validates');
 
 const firstFingerprint = buildImportFingerprint(buyDraft);
 const secondFingerprint = buildImportFingerprint({ ...buyDraft });

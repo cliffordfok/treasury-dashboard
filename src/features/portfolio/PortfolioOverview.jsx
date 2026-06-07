@@ -1,8 +1,7 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Briefcase, ClipboardCheck, DollarSign, Landmark, Loader2, Receipt, TrendingUp, Wallet } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { AlertCircle, Briefcase, DollarSign, Landmark, Loader2, Receipt, TrendingUp, Wallet } from 'lucide-react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { subscribeCashMovements } from '../cash/cashFirestore.js';
-import { subscribeReconciliationSnapshots } from '../reconciliation/reconciliationFirestore.js';
 import { subscribeStockTrades } from '../stocks/stockFirestore.js';
 import { buildPortfolioOverview } from './portfolioCalculations.js';
 
@@ -61,7 +60,6 @@ const AllocationTooltip = ({ active, payload }) => {
 export default function PortfolioOverview({ db, user, treasuryMetrics }) {
   const [stockTrades, setStockTrades] = useState([]);
   const [cashMovements, setCashMovements] = useState([]);
-  const [reconciliationSnapshots, setReconciliationSnapshots] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -92,29 +90,10 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
     );
   }, [db, user?.uid]);
 
-
-
-  useEffect(() => {
-    if (!db || !user?.uid) return undefined;
-    return subscribeReconciliationSnapshots(
-      db,
-      user.uid,
-      setReconciliationSnapshots,
-      (err) => setError(err.message || '未能載入對帳快照。'),
-    );
-  }, [db, user?.uid]);
-
   const overview = useMemo(
-    () => buildPortfolioOverview({ treasuryMetrics, stockTrades, cashMovements, reconciliationSnapshots }),
-    [treasuryMetrics, stockTrades, cashMovements, reconciliationSnapshots],
+    () => buildPortfolioOverview({ treasuryMetrics, stockTrades, cashMovements }),
+    [treasuryMetrics, stockTrades, cashMovements],
   );
-
-  const reconciliationValue = overview.reconciliation.hasSnapshot
-    ? `${overview.reconciliation.issueCount} 個差異`
-    : '尚未建立';
-  const reconciliationSubtext = overview.reconciliation.hasSnapshot
-    ? `最近對帳：${overview.reconciliation.latestDate}`
-    : '尚未建立對帳快照';
 
   return (
     <section className="space-y-4">
@@ -127,7 +106,7 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
       </div>
       {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3 flex items-center gap-2"><AlertCircle size={16} />{error}</p>}
 
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
         <SummaryCard
           icon={<Wallet size={20} />}
           label="總現金"
@@ -148,13 +127,6 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
           value={money(overview.stocks.remainingCost)}
           subtext={`${overview.stocks.symbolCount} 個持倉股票代號`}
           tone="amber"
-        />
-        <SummaryCard
-          icon={<ClipboardCheck size={20} />}
-          label="最近對帳狀態"
-          value={reconciliationValue}
-          subtext={reconciliationSubtext}
-          tone={overview.reconciliation.issueCount === 0 ? 'emerald' : overview.reconciliation.hasSnapshot ? 'red' : 'slate'}
         />
       </div>
 
@@ -253,14 +225,14 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
                     ))}
                   </div>
                 )}
-                <p className="text-xs text-slate-500 mt-3">此圖以系統帳本資料計算，股票報價功能目前已停用，因此不代表即時市場市值。</p>
+                <p className="text-xs text-slate-500 mt-3">此圖以系統帳本成本資料計算，不使用股票報價，因此不代表即時市場市值。</p>
               </div>
             </div>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
           <p className="text-xs text-slate-500 font-semibold">美債摘要</p>
           <p className="mt-2 text-sm text-slate-600">每月平均利息：<span className="font-bold text-emerald-600">{money(overview.treasury.monthlyAvgIncome)}</span></p>
@@ -269,20 +241,7 @@ export default function PortfolioOverview({ db, user, treasuryMetrics }) {
           <p className="text-xs text-slate-500 font-semibold">現金摘要</p>
           <p className="mt-2 text-sm text-slate-600">股票交易現金影響：<span className={`font-bold ${valueClass(overview.cash.stockTradeCashImpact)}`}>{signedMoney(overview.cash.stockTradeCashImpact)}</span></p>
         </div>
-        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-          <p className="text-xs text-slate-500 font-semibold">對帳摘要</p>
-          {overview.reconciliation.hasSnapshot ? (
-            <p className="mt-2 text-sm text-slate-600">
-              現金差額：<span className={`font-bold ${valueClass(overview.reconciliation.cashDifference)}`}>{signedMoney(overview.reconciliation.cashDifference)}</span>
-              <span className="mx-2 text-slate-300">/</span>
-              持倉差異 {overview.reconciliation.holdingsDifferenceCount}
-            </p>
-          ) : (
-            <p className="mt-2 text-sm text-slate-500">尚未建立對帳快照</p>
-          )}
-        </div>
       </div>
     </section>
   );
 }
-

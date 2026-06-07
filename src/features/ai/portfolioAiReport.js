@@ -6,7 +6,6 @@ export const AI_REPORT_SECTIONS = [
   '主要觀察',
   '集中度 / 風險',
   '現金流 / 收益',
-  '對帳問題',
   '資料限制',
   '待確認事項',
 ];
@@ -18,7 +17,6 @@ const SECTION_ALIASES = new Map([
   ['集中度 / 風險', '集中度 / 風險'],
   ['現金流/收益', '現金流 / 收益'],
   ['現金流 / 收益', '現金流 / 收益'],
-  ['對帳問題', '對帳問題'],
   ['資料限制', '資料限制'],
   ['待確認事項', '待確認事項'],
 ]);
@@ -80,12 +78,12 @@ export const parseAiReportSections = (text = '') => {
 export const detectForbiddenAdvice = (text = '') => {
   const value = String(text || '');
   const patterns = [
-    /(?:建議|應該|可以|可考慮|值得)\s*(?:買入|賣出|持有|加倉|減倉)/,
-    /(?:買入|賣出|持有|加倉|減倉)\s*(?:建議|訊號|時機)/,
+    /(?:建議|應該|可以|適合|值得)\s*(?:買入|賣出|持有|加倉|減倉)/,
+    /(?:買入|賣出|持有|加倉|減倉)\s*(?:建議|策略|時機)/,
     /目標價|target\s*price/i,
     /股價預測|預測股價|price\s*forecast/i,
     /利率預測|預測利率|rate\s*forecast/i,
-    /止蝕|止賺|take\s*profit|stop\s*loss/i,
+    /止賺|止盈|止蝕|止損|take\s*profit|stop\s*loss/i,
   ];
   return patterns.some((pattern) => pattern.test(value));
 };
@@ -126,11 +124,9 @@ export const buildAiSnapshotSummary = (snapshot = {}) => ({
     snapshot.stocks ? 'Stocks' : null,
     snapshot.cash ? 'Cash' : null,
     snapshot.treasuries ? 'Treasuries' : null,
-    snapshot.reconciliation ? 'Reconciliation' : null,
   ].filter(Boolean),
   quoteStatus: STOCK_QUOTES_DISABLED_LIMITATION,
   stockSymbolsCount: snapshot.allStocks?.holdingCount ?? snapshot.stocks?.holdingCount ?? 0,
   cashMovementCount: snapshot.cash?.movementCount ?? 0,
   treasuryHoldingCount: snapshot.treasuries?.holdingCount ?? 0,
-  reconciliationIssueCount: snapshot.reconciliation?.unresolvedIssuesCount ?? null,
 });

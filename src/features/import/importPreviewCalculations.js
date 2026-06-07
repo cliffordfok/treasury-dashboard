@@ -7,7 +7,6 @@ import {
   detectFirstradeCsvType,
   mapFirstradeRow,
   toCashMovementDraft,
-  toReconciliationHoldingDraft,
   toStockTradeDraft,
   validateImportedDraft,
 } from './firstradeMapping.js';
@@ -40,20 +39,18 @@ const CASH_ACTIVITY_TYPES = new Set([
 const getDraftTarget = (draft) => {
   if (!draft) return 'Unknown';
   if (Object.prototype.hasOwnProperty.call(draft, 'side')) return 'Stock Trade';
-  if (Object.prototype.hasOwnProperty.call(draft, 'brokerQuantity')) return 'Reconciliation Holding';
   return 'Cash Movement';
 };
 
 const getDraftAmountOrQuantity = (draft) => {
   if (!draft) return '';
   if (Object.prototype.hasOwnProperty.call(draft, 'side')) return draft.quantity;
-  if (Object.prototype.hasOwnProperty.call(draft, 'brokerQuantity')) return draft.brokerQuantity;
   return draft.amount;
 };
 
 export const createDraftFromMappedRow = (mappedRow, csvType) => {
   if (csvType === CSV_TYPES.UNKNOWN) return null;
-  if (csvType === CSV_TYPES.POSITIONS) return toReconciliationHoldingDraft(mappedRow);
+  if (csvType === CSV_TYPES.POSITIONS) return null;
 
   const activityType = mappedRow.activityType || classifyFirstradeActivity(mappedRow);
   if ([ACTIVITY_TYPES.STOCK_TRADE_BUY, ACTIVITY_TYPES.STOCK_TRADE_SELL, ACTIVITY_TYPES.DIVIDEND_REINVESTMENT].includes(activityType)) {
@@ -69,27 +66,13 @@ const existingStockFingerprints = (stockTrades = []) =>
 const existingCashFingerprints = (cashMovements = []) =>
   cashMovements.map((movement) => movement.importFingerprint || buildImportFingerprint({ ...movement, accountId: movement.accountId || 'firstrade' }));
 
-const existingPositionFingerprints = (reconciliationSnapshots = []) =>
-  reconciliationSnapshots.flatMap((snapshot) =>
-    (snapshot.holdings || []).map((holding) =>
-      holding.importFingerprint ||
-      buildImportFingerprint({
-        ...holding,
-        accountId: snapshot.accountId || holding.accountId || 'firstrade',
-        date: snapshot.date || holding.date || '',
-      }),
-    ),
-  );
-
 export const buildExistingImportFingerprintSet = ({
   stockTrades = [],
   cashMovements = [],
-  reconciliationSnapshots = [],
 } = {}) =>
   new Set([
     ...existingStockFingerprints(stockTrades),
     ...existingCashFingerprints(cashMovements),
-    ...existingPositionFingerprints(reconciliationSnapshots),
   ]);
 
 const getDuplicateStatus = (fingerprint, seenFingerprints, existingFingerprints) => {
@@ -107,8 +90,8 @@ export const isBeforeTrackingStartDate = (rowDate, trackingStartDate = '') => {
   return rowDate < trackingStartDate;
 };
 
-const getStatus = ({ activityType, errors, warnings, duplicateStatus, outOfScope }) => {
-  if (activityType === ACTIVITY_TYPES.IGNORED) return PREVIEW_STATUS.IGNORED;
+const getStatus = ({ activityType, errors, warnings, duplicateStatus, outOfScope, isIgnored }) => {
+  if (activityType === ACTIVITY_TYPES.IGNORED || isIgnored) return PREVIEW_STATUS.IGNORED;
   if (errors.length > 0) return PREVIEW_STATUS.ERROR;
   if (outOfScope) return PREVIEW_STATUS.OUT_OF_SCOPE;
   if (duplicateStatus !== DUPLICATE_STATUS.NEW) return PREVIEW_STATUS.DUPLICATE;
@@ -121,14 +104,12 @@ export const buildImportPreview = ({
   rows = [],
   existingStockTrades = [],
   existingCashMovements = [],
-  existingReconciliationSnapshots = [],
   trackingStartDate = '',
 } = {}) => {
   const csvType = detectFirstradeCsvType(headers);
   const existingFingerprints = buildExistingImportFingerprintSet({
     stockTrades: existingStockTrades,
     cashMovements: existingCashMovements,
-    reconciliationSnapshots: existingReconciliationSnapshots,
   });
   const seenFingerprints = new Set();
 
@@ -136,12 +117,14 @@ export const buildImportPreview = ({
     const mappedRow = mapFirstradeRow(rawRow, csvType);
     const draft = createDraftFromMappedRow(mappedRow, csvType);
     const activityType = mappedRow.activityType || ACTIVITY_TYPES.UNKNOWN;
-    const isIgnored = activityType === ACTIVITY_TYPES.IGNORED;
+    const isPositionRow = csvType === CSV_TYPES.POSITIONS;
+    const isIgnored = activityType === ACTIVITY_TYPES.IGNORED || isPositionRow;
     const validation = draft ? validateImportedDraft(draft) : { ok: false, errors: [], warnings: [] };
     const errors = [...validation.errors];
     const warnings = [...validation.warnings];
 
     if (csvType === CSV_TYPES.UNKNOWN) errors.push('Unknown CSV type.');
+    if (isPositionRow) warnings.push('Position rows are informational only and will not be imported.');
     if (!draft && !isIgnored && csvType !== CSV_TYPES.UNKNOWN) {
       errors.push('Unable to map row to a supported import draft.');
       if (activityType === ACTIVITY_TYPES.UNKNOWN) warnings.push('Unknown activity type.');
@@ -154,16 +137,16 @@ export const buildImportPreview = ({
       ? DUPLICATE_STATUS.NEW
       : getDuplicateStatus(fingerprint, seenFingerprints, existingFingerprints);
     if (fingerprint && errors.length === 0 && !isIgnored && !outOfScope) seenFingerprints.add(fingerprint);
-    const status = getStatus({ activityType, errors, warnings, duplicateStatus, outOfScope });
+    const status = getStatus({ activityType, errors, warnings, duplicateStatus, outOfScope, isIgnored });
 
     return {
       rowNumber: index + 2,
       csvType,
       activityType,
-      targetDraft: getDraftTarget(draft),
+      targetDraft: isPositionRow ? 'Position Row' : getDraftTarget(draft),
       symbol: draft?.symbol || mappedRow.symbol || '',
       date: rowDate,
-      amountOrQuantity: getDraftAmountOrQuantity(draft),
+      amountOrQuantity: isPositionRow ? mappedRow.quantity : getDraftAmountOrQuantity(draft),
       status,
       duplicateStatus,
       errors,

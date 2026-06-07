@@ -25,6 +25,14 @@ const round = (value, digits = 2) => {
 
 const nonZero = (value) => Math.abs(toNumber(value)) > 0.000001;
 
+const toDateOnlyTime = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+};
+
 const topByAbsAmount = (items = [], getAmount, limit = 5) =>
   [...items]
     .sort((a, b) => Math.abs(getAmount(b)) - Math.abs(getAmount(a)))
@@ -246,9 +254,17 @@ export const buildCashAiSnapshot = (cashMovements = [], cashSummary = null) => {
   };
 };
 
-export const buildTreasuryAiSnapshot = (treasuryData = {}, treasurySummary = {}) => {
+export const buildTreasuryAiSnapshot = (treasuryData = {}, treasurySummary = {}, asOf = new Date().toISOString()) => {
   const trades = treasuryData.trades || [];
-  const activeTrades = trades.filter((trade) => (trade.status || 'active') === 'active');
+  const asOfTime = toDateOnlyTime(asOf) ?? toDateOnlyTime(new Date().toISOString());
+  const activeStatusTrades = trades.filter((trade) => (trade.status || 'active') === 'active');
+  const activeTrades = activeStatusTrades.filter((trade) => {
+    const maturityTime = toDateOnlyTime(trade.maturityDate);
+    if (maturityTime == null) return true;
+    return maturityTime > asOfTime;
+  });
+  const maturedExcludedCount = activeStatusTrades.length - activeTrades.length;
+  const invalidMaturityCount = activeTrades.filter((trade) => toDateOnlyTime(trade.maturityDate) == null).length;
   const maturityBuckets = activeTrades.reduce((buckets, trade) => {
     const maturityYear = String(trade.maturityDate || '').slice(0, 4) || 'unknown';
     buckets[maturityYear] = (buckets[maturityYear] || 0) + toNumber(trade.faceValue);
@@ -263,6 +279,8 @@ export const buildTreasuryAiSnapshot = (treasuryData = {}, treasurySummary = {})
     unrealizedPnl: round(treasurySummary.totalUnrealizedPnL),
     weightedAvgYtm: Number.isFinite(treasurySummary.totalWeightYTM) ? round(treasurySummary.totalWeightYTM, 4) : null,
     monthlyAverageInterest: round(treasurySummary.monthlyAvgIncome),
+    maturedExcludedCount,
+    invalidMaturityCount,
     maturityDistributionByYear: maturityBuckets,
     holdings: activeTrades.slice(0, 20).map((trade) => ({
       cusip: trade.cusip || '',
@@ -273,7 +291,11 @@ export const buildTreasuryAiSnapshot = (treasuryData = {}, treasurySummary = {})
       cleanPrice: round(trade.cleanPrice, 4),
       couponRate: round(trade.couponRate, 4),
     })),
-    missingDataWarnings: activeTrades.length === 0 ? ['沒有美債持倉資料。'] : [],
+    missingDataWarnings: [
+      activeTrades.length === 0 ? '沒有未到期美債持倉資料。' : '',
+      maturedExcludedCount > 0 ? `${maturedExcludedCount} 筆已到期但未標記 closed 的美債已從 AI 持倉分析排除。` : '',
+      invalidMaturityCount > 0 ? `${invalidMaturityCount} 筆美債缺少有效到期日。` : '',
+    ].filter(Boolean),
   };
 };
 
@@ -294,7 +316,7 @@ export const buildPortfolioAiSnapshot = ({
   });
   const allStocks = buildStockAiSnapshot(stockTrades, null, { stockPrices });
   const cash = buildCashAiSnapshot(cashMovements, cashSummary);
-  const treasuries = buildTreasuryAiSnapshot(treasuryData, treasurySummary);
+  const treasuries = buildTreasuryAiSnapshot(treasuryData, treasurySummary, asOf);
   const dataLimitations = [
     ...stocks.missingDataWarnings,
     ...cash.missingDataWarnings,

@@ -37,7 +37,14 @@ These paths are not used by the active UI:
 - quote-derived market value
 - quote-derived unrealized P&L
 
-The old serverless endpoint can remain in the repository for future reference, but it is not called by the app while quote features are disabled.
+The old serverless endpoint and quote cache modules can remain in the repository for future reference, but they are not called by the app while quote features are disabled.
+
+The public static cache files are intentionally empty/disabled:
+
+- `public/stock-quotes/latest.json`
+- `public/stock-quotes/symbols.json`
+
+They should not be treated as active quote data in the current app.
 
 ## Re-enabling Later
 

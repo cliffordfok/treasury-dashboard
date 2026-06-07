@@ -1,65 +1,11 @@
 {
-  "provider": "yahoo_finance2",
+  "provider": "disabled",
   "quoteType": "delayed_or_regular_market",
-  "updatedAt": "2026-06-06T13:43:19.304Z",
-  "symbolsSource": "static_symbols_json",
-  "quotes": [
-    {
-      "symbol": "VOO",
-      "price": 678,
-      "currency": "USD",
-      "asOf": "2026-06-05T20:00:00.000Z",
-      "previousClose": 696.06,
-      "change": -18.06,
-      "changePercent": -2.5946,
-      "source": "yahoo_finance2_quote_cache",
-      "quoteType": "delayed_or_regular_market"
-    },
-    {
-      "symbol": "GOOGL",
-      "price": 368.53,
-      "currency": "USD",
-      "asOf": "2026-06-05T20:00:01.000Z",
-      "previousClose": 372.19,
-      "change": -3.66,
-      "changePercent": -0.98337,
-      "source": "yahoo_finance2_quote_cache",
-      "quoteType": "delayed_or_regular_market"
-    },
-    {
-      "symbol": "MU",
-      "price": 864.01,
-      "currency": "USD",
-      "asOf": "2026-06-05T20:00:01.000Z",
-      "previousClose": 996,
-      "change": -131.99,
-      "changePercent": -13.252,
-      "source": "yahoo_finance2_quote_cache",
-      "quoteType": "delayed_or_regular_market"
-    },
-    {
-      "symbol": "NVDA",
-      "price": 205.1,
-      "currency": "USD",
-      "asOf": "2026-06-05T20:00:00.000Z",
-      "previousClose": 218.66,
-      "change": -13.56,
-      "changePercent": -6.20141,
-      "source": "yahoo_finance2_quote_cache",
-      "quoteType": "delayed_or_regular_market"
-    },
-    {
-      "symbol": "GLDM",
-      "price": 85.42,
-      "currency": "USD",
-      "asOf": "2026-06-05T20:00:00.000Z",
-      "previousClose": 88.67,
-      "change": -3.25,
-      "changePercent": -3.66528,
-      "source": "yahoo_finance2_quote_cache",
-      "quoteType": "delayed_or_regular_market"
-    }
+  "updatedAt": null,
+  "symbolsSource": "disabled",
+  "quotes": [],
+  "warnings": [
+    "Stock quote features are temporarily disabled. This cache is retained only for possible future use."
   ],
-  "warnings": [],
   "errors": []
 }

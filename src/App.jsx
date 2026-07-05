@@ -1,20 +1,10 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, PieChart, Sparkles, Bot, Loader2, CheckCircle2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound, Briefcase, Banknote, Copy, FileJson, ShieldAlert, XCircle } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Bot, Loader2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
 // --- 更新咗呢度：引入 Google 登入相關功能 ---
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
-import StockDashboard from './features/stocks/StockDashboard';
-import CashDashboard from './features/cash/CashDashboard';
-import PortfolioOverview from './features/portfolio/PortfolioOverview';
-import ImportPreviewDashboard from './features/import/ImportPreviewDashboard';
-import { subscribeStockTrades } from './features/stocks/stockFirestore';
-import { calculateStockPositions, normalizeSymbol } from './features/stocks/stockCalculations';
-import { subscribeCashMovements } from './features/cash/cashFirestore';
-import { buildPortfolioAiSnapshot } from './features/ai/portfolioAiSnapshot';
-import { AI_MODE_LABELS, buildPortfolioAiMessages } from './features/ai/portfolioAiPrompts';
-import { buildAiSnapshotSummary, detectForbiddenAdvice, isSingleStockModeReady, parseAiReportSections, sanitizeAiSnapshotForCopy } from './features/ai/portfolioAiReport';
 
 // --- 真實環境 Firebase 設定 (使用環境變數) ---
 const firebaseConfig = {
@@ -216,32 +206,6 @@ const callDeepSeekDirect = async ({ messages, userApiKey, temperature = 0.2, res
   const text = result?.choices?.[0]?.message?.content;
   if (!text) throw new Error('DeepSeek response was empty');
   return text;
-};
-
-const generateText = async (promptOrMessages, userApiKey = '') => {
-  const messages = Array.isArray(promptOrMessages)
-    ? promptOrMessages
-    : [
-      { role: 'system', content: 'You are a concise fixed-income portfolio analyst.' },
-      { role: 'user', content: String(promptOrMessages || '') },
-    ];
-  const prompt = messages.map((message) => `${message.role.toUpperCase()}:\n${message.content}`).join('\n\n');
-  if (!aiProxyUrl && String(userApiKey || '').trim()) {
-    return callDeepSeekDirect({
-      userApiKey,
-      messages,
-      temperature: 0.3,
-    });
-  }
-  if (aiProxyUrl) {
-    const result = await fetchWithRetry(aiProxyUrl, {
-      method: 'POST',
-      headers: getAiRequestHeaders(userApiKey),
-      body: JSON.stringify({ task: 'generateText', prompt, model: AI_ANALYSIS_MODEL }),
-    });
-    return result.text || result.response || "無法獲取 AI 回應。";
-  }
-  throw new Error('未設定 AI proxy');
 };
 
 const extractTradeData = async (rawText, userApiKey = '') => {
@@ -512,7 +476,7 @@ export default function App() {
   const [trades, setTrades] = useState([]);
   const [isDbReady, setIsDbReady] = useState(false);
 
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('trades');
   const [ledgerSubTab, setLedgerSubTab] = useState('active'); 
   
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -525,16 +489,6 @@ export default function App() {
   const [editingPriceId, setEditingPriceId] = useState(null);
   const [newPrice, setNewPrice] = useState('');
 
-  const [aiInsights, setAiInsights] = useState(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [insightError, setInsightError] = useState('');
-  const [aiAnalysisMode, setAiAnalysisMode] = useState('total_assets');
-  const [aiSelectedSymbol, setAiSelectedSymbol] = useState('');
-  const [aiStockTrades, setAiStockTrades] = useState([]);
-  const [aiCashMovements, setAiCashMovements] = useState([]);
-  const [aiLastSnapshot, setAiLastSnapshot] = useState(null);
-  const [aiCopyStatus, setAiCopyStatus] = useState('');
-  const [isAiSnapshotOpen, setIsAiSnapshotOpen] = useState(false);
   const [rawTradeText, setRawTradeText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
   const [userDeepSeekApiKey, setUserDeepSeekApiKey] = useState(() => {
@@ -649,32 +603,6 @@ export default function App() {
   }, [user]);
 
 
-  useEffect(() => {
-    if (!user) {
-      setAiStockTrades([]);
-      return undefined;
-    }
-    return subscribeStockTrades(
-      db,
-      user.uid,
-      setAiStockTrades,
-      (error) => console.error('AI stock snapshot subscription failed:', error),
-    );
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) {
-      setAiCashMovements([]);
-      return undefined;
-    }
-    return subscribeCashMovements(
-      db,
-      user.uid,
-      setAiCashMovements,
-      (error) => console.error('AI cash snapshot subscription failed:', error),
-    );
-  }, [user]);
-
   // --- Google 登入/登出 Function ---
   const handleGoogleLogin = async () => {
     try {
@@ -693,23 +621,6 @@ export default function App() {
   const activeTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && !isMatured(t.maturityDate)), [trades]);
   const maturedTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && isMatured(t.maturityDate)), [trades]);
   const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
-  const aiStockSymbols = useMemo(
-    () => {
-      const positionSymbols = calculateStockPositions(aiStockTrades)
-        .filter((position) => Math.abs(Number(position.quantity || 0)) > 0.000001 || Math.abs(Number(position.remainingCost || 0)) > 0.01)
-        .map((position) => position.symbol);
-      const tradeSymbols = aiStockTrades.map((trade) => normalizeSymbol(trade.symbol)).filter(Boolean);
-      return [...new Set([...positionSymbols, ...tradeSymbols])].sort();
-    },
-    [aiStockTrades],
-  );
-
-  useEffect(() => {
-    if (aiAnalysisMode === 'stock_single' && !aiSelectedSymbol && aiStockSymbols.length > 0) {
-      setAiSelectedSymbol(aiStockSymbols[0]);
-    }
-  }, [aiAnalysisMode, aiSelectedSymbol, aiStockSymbols]);
-
   const allCoupons = useMemo(() => trades.flatMap(generateAllCoupons), [trades]);
   // Dashboard valuation date is fixed at page load; reload the app to refresh it.
   const todayObj = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
@@ -757,34 +668,6 @@ export default function App() {
     totalWeightYTM = totalYtmMarketValue > 0 ? totalWeightYTM / totalYtmMarketValue : null;
     return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalAccruedInterest, totalFullMarketValue, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
   }, [activeTrades, maturedTrades, closedTrades, receivedCoupons, todayObj]);
-
-  const buildCurrentAiSnapshot = (asOf = new Date().toISOString()) => buildPortfolioAiSnapshot({
-    mode: aiAnalysisMode,
-    selectedSymbol: aiSelectedSymbol,
-    stockTrades: aiStockTrades,
-    cashMovements: aiCashMovements,
-    treasuryData: { trades },
-    treasurySummary: portfolioMetrics,
-    asOf,
-  });
-
-  const aiPreviewSnapshot = useMemo(
-    () => buildCurrentAiSnapshot(),
-    [aiAnalysisMode, aiSelectedSymbol, aiStockTrades, aiCashMovements, trades, portfolioMetrics],
-  );
-  const aiSnapshotForDisplay = aiLastSnapshot || aiPreviewSnapshot;
-  const aiSnapshotSummary = useMemo(() => buildAiSnapshotSummary(aiSnapshotForDisplay), [aiSnapshotForDisplay]);
-  const aiReportSections = useMemo(() => parseAiReportSections(aiInsights || ''), [aiInsights]);
-  const aiHasForbiddenAdvice = useMemo(() => detectForbiddenAdvice(aiInsights || ''), [aiInsights]);
-  const aiSnapshotCopyJson = useMemo(
-    () => JSON.stringify(sanitizeAiSnapshotForCopy(aiSnapshotForDisplay), null, 2),
-    [aiSnapshotForDisplay],
-  );
-  const isSingleStockReady = isSingleStockModeReady({
-    mode: aiAnalysisMode,
-    selectedSymbol: aiSelectedSymbol,
-    symbols: aiStockSymbols,
-  });
 
   // --- Chart Data ---
   const yieldCurveChartData = useMemo(() => {
@@ -882,10 +765,10 @@ export default function App() {
     await setDoc(tradeRef, tradeData);
   };
 
-  const handleAddYtmToPortfolio = async () => {
+  const handleAddYtmToLedger = async () => {
     if (!ytmQuote.isValid) return;
     if (!user) {
-      alert('未能加入 Portfolio，請先確認已登入。');
+      alert('未能加入債券帳本，請先確認已登入。');
       return;
     }
     const tradeData = normalizeTradeForStorage({
@@ -986,39 +869,6 @@ export default function App() {
     } catch (err) { alert("無法解析文字，請檢查格式。"); } finally { setIsParsing(false); }
   };
 
-  const handleAnalyzePortfolio = async () => {
-    if (!hasAiTransport) { setInsightError('請先設定 AI proxy 或按 API Key 輸入 DeepSeek key。'); return; }
-    if (!isSingleStockReady) { setInsightError('單一股票模式需要先選擇股票代號。'); return; }
-    setIsAnalyzing(true); setInsightError(''); setAiCopyStatus('');
-    try {
-      const snapshot = buildCurrentAiSnapshot(new Date().toISOString());
-      const messages = buildPortfolioAiMessages({ snapshot, mode: aiAnalysisMode });
-      const response = await generateText(messages, userDeepSeekApiKey);
-      setAiLastSnapshot(snapshot);
-      setAiInsights(response);
-      setIsAiSnapshotOpen(false);
-    } catch (err) { setInsightError('分析時發生錯誤，請稍後再試，或檢查 DeepSeek API Key / AI proxy 設定。'); } finally { setIsAnalyzing(false); }
-  };
-
-  const copyToClipboard = async (text, successMessage) => {
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setAiCopyStatus(successMessage);
-      window.setTimeout(() => setAiCopyStatus(''), 1800);
-    } catch (err) {
-      setAiCopyStatus('複製失敗，請檢查瀏覽器權限。');
-    }
-  };
-
-  const handleClearAiResult = () => {
-    setAiInsights(null);
-    setInsightError('');
-    setAiLastSnapshot(null);
-    setAiCopyStatus('');
-    setIsAiSnapshotOpen(false);
-  };
-
   // --- 匯出 / 匯入 ---
   const handleExport = () => {
     if (trades.length === 0) return;
@@ -1105,8 +955,8 @@ export default function App() {
           <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg">
             <Landmark size={32} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">Portfolio Dashboard</h1>
-          <p className="text-slate-500 mb-8 text-sm">請登入以管理你的專屬美債投資組合，數據將安全同步至雲端，隨時隨地查閱。</p>
+          <h1 className="text-2xl font-bold text-slate-800 mb-2">Bond Ledger</h1>
+          <p className="text-slate-500 mb-8 text-sm">請登入以管理你的專屬債券帳本，數據將安全同步至雲端，隨時隨地查閱。</p>
           <button onClick={handleGoogleLogin} className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium py-3 px-4 rounded-xl flex items-center justify-center transition-all shadow-sm">
             <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -1126,7 +976,6 @@ export default function App() {
 
   const renderDashboard = () => (
     <div className="space-y-4 sm:space-y-6">
-      <PortfolioOverview db={db} user={user} treasuryMetrics={portfolioMetrics} />
       <div className="bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-700 rounded-2xl shadow-lg p-5 sm:p-6 text-white relative overflow-hidden">
         <div className="absolute -top-2 -right-2 opacity-15 pointer-events-none"><Landmark size={140} /></div>
         <p className="text-emerald-100 text-xs sm:text-sm font-medium mb-1.5">美債累計已實現利潤</p>
@@ -1348,148 +1197,6 @@ export default function App() {
           );
         })()}
       </div>
-      <div className="bg-white rounded-xl shadow-sm border border-indigo-100 overflow-hidden">
-        <div className="p-4 sm:p-5 border-b border-indigo-100 bg-gradient-to-br from-indigo-50 via-blue-50 to-white">
-          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-indigo-700">
-                <div className="p-1.5 bg-white/80 rounded-lg shadow-sm"><Bot size={20} /></div>
-                <h3 className="text-lg sm:text-xl font-semibold text-slate-900">AI 投資組合分析</h3>
-              </div>
-              <p className="text-xs sm:text-sm text-indigo-700/80 mt-2 max-w-3xl">以系統帳本 snapshot 生成報告，聚焦成本、持倉、現金流及美債資料。</p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs sm:text-sm border border-indigo-200 bg-white/80 text-indigo-800 rounded-lg px-2.5 py-2 font-semibold shadow-sm">DeepSeek-V4-Pro</span>
-              <button type="button" onClick={openApiKeySettings} className={`border px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm ${hasUserDeepSeekApiKey ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100' : 'bg-white/80 border-indigo-200 text-indigo-700 hover:bg-white'}`} title="Set personal DeepSeek API key">
-                <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人 Key' : 'API Key'}
-              </button>
-            </div>
-          </div>
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-end">
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">分析模式</label>
-              <select
-                value={aiAnalysisMode}
-                onChange={(event) => {
-                  setAiAnalysisMode(event.target.value);
-                  setAiInsights(null);
-                  setAiLastSnapshot(null);
-                  setInsightError('');
-                  setIsAiSnapshotOpen(false);
-                }}
-                className="w-full bg-white border border-indigo-200 text-slate-800 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm"
-              >
-                {Object.entries(AI_MODE_LABELS).map(([mode, label]) => (
-                  <option key={mode} value={mode}>{label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">股票代號</label>
-              {aiAnalysisMode === 'stock_single' ? (
-                <select
-                  value={aiSelectedSymbol}
-                  onChange={(event) => {
-                    setAiSelectedSymbol(event.target.value);
-                    setAiInsights(null);
-                    setAiLastSnapshot(null);
-                    setInsightError('');
-                    setIsAiSnapshotOpen(false);
-                  }}
-                  className="w-full bg-white border border-indigo-200 text-slate-800 rounded-lg px-3 py-2 text-sm font-semibold shadow-sm"
-                >
-                  {aiStockSymbols.length === 0 ? (
-                    <option value="">未有股票代號</option>
-                  ) : aiStockSymbols.map((symbol) => (
-                    <option key={symbol} value={symbol}>{symbol}</option>
-                  ))}
-                </select>
-              ) : (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">只適用於單一股票模式</div>
-              )}
-              {aiAnalysisMode === 'stock_single' && aiStockSymbols.length === 0 && <p className="text-xs text-amber-600 mt-1">目前沒有股票交易或持倉可供選擇。</p>}
-            </div>
-            <button onClick={handleAnalyzePortfolio} disabled={isAnalyzing || !hasAiTransport || !isSingleStockReady} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center shadow-sm min-h-[40px]">
-              {isAnalyzing ? <Loader2 size={16} className="animate-spin mr-1.5" /> : <Sparkles size={16} className="mr-1.5" />} {isAnalyzing ? '分析中' : '產生分析'}
-            </button>
-          </div>
-        </div>
-        {isApiKeyOpen && (
-          <div className="m-4 sm:m-5 bg-white border border-indigo-100 rounded-lg p-3 shadow-inner">
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="password"
-                value={apiKeyDraft}
-                onChange={(e) => setApiKeyDraft(e.target.value)}
-                placeholder="Paste your DeepSeek API key"
-                className="flex-1 min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                autoComplete="off"
-              />
-              <button type="button" onClick={handleSaveApiKey} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-sm font-semibold">儲存</button>
-              {hasUserDeepSeekApiKey && <button type="button" onClick={handleClearApiKey} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-semibold">清除</button>}
-              <button type="button" onClick={() => setIsApiKeyOpen(false)} className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-lg text-sm font-semibold">取消</button>
-            </div>
-            <p className="text-[11px] text-slate-500 mt-2">Key 只會儲存在呢部機嘅瀏覽器 localStorage，不會寫入 Firestore 或備份檔。無 AI proxy 時會嘗試直接呼叫 DeepSeek；如瀏覽器封鎖請改用 proxy。</p>
-          </div>
-        )}
-        <div className="p-4 sm:p-5 space-y-4">
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs sm:text-sm text-amber-900">
-            本 AI 分析只根據系統內已記錄資料生成，不包含未記錄交易、即時股價、市場新聞或外部研究資料。不構成買賣建議。
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <h4 className="text-sm font-semibold text-slate-800">本次分析資料</h4>
-              <span className="text-xs text-slate-500">{aiLastSnapshot ? '已生成報告 snapshot' : '預覽目前選擇範圍'}</span>
-            </div>
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-              <div><p className="text-xs text-slate-500">Data as-of</p><p className="font-semibold text-slate-800 break-words">{aiSnapshotSummary.asOf ? new Date(aiSnapshotSummary.asOf).toLocaleString('zh-HK', { hour12: false }) : '--'}</p></div>
-              <div><p className="text-xs text-slate-500">分析模式</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.modeLabel}</p></div>
-              <div><p className="text-xs text-slate-500">股票代號</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.stockSymbolsCount}</p></div>
-              <div><p className="text-xs text-slate-500">現金流水</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.cashMovementCount}</p></div>
-              <div><p className="text-xs text-slate-500">美債持倉</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.treasuryHoldingCount}</p></div>
-              <div className="col-span-2"><p className="text-xs text-slate-500">資料模組</p><p className="font-semibold text-slate-800">{aiSnapshotSummary.modules.join(' · ')}</p></div>
-            </div>
-            <p className="text-xs text-slate-500 mt-3">{aiSnapshotSummary.quoteStatus}</p>
-          </div>
-          {insightError && <p className="text-sm text-red-600 flex items-center"><AlertCircle size={16} className="mr-1"/>{insightError}</p>}
-          {aiCopyStatus && <p className="text-sm text-emerald-700 flex items-center"><CheckCircle2 size={16} className="mr-1"/>{aiCopyStatus}</p>}
-          {aiHasForbiddenAdvice && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 flex gap-2">
-              <ShieldAlert size={17} className="mt-0.5 flex-shrink-0" />
-              <span>AI 回應可能包含不應提供的建議，請忽略並重新分析。</span>
-            </div>
-          )}
-          {aiInsights ? (
-            <div className="space-y-4">
-              <div className="flex flex-wrap gap-2">
-                <button type="button" onClick={() => copyToClipboard(aiInsights, '已複製分析')} className="bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><Copy size={14} className="mr-1.5" />複製分析</button>
-                <button type="button" onClick={() => copyToClipboard(aiSnapshotCopyJson, '已複製分析資料 JSON')} className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><FileJson size={14} className="mr-1.5" />複製分析資料 JSON</button>
-                <button type="button" onClick={handleAnalyzePortfolio} disabled={isAnalyzing || !hasAiTransport || !isSingleStockReady} className="bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 text-indigo-700 border border-indigo-100 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><RefreshCw size={14} className="mr-1.5" />重新分析</button>
-                <button type="button" onClick={handleClearAiResult} className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><XCircle size={14} className="mr-1.5" />清除結果</button>
-              </div>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                {aiReportSections.map((section, index) => (
-                  <div key={`${section.title}-${index}`} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                    <h4 className="text-sm font-semibold text-slate-900 mb-2">{section.title}</h4>
-                    <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap break-words">{section.content || '資料不足'}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
-                <button type="button" onClick={() => setIsAiSnapshotOpen(prev => !prev)} className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-slate-700">
-                  <span className="flex items-center"><FileJson size={15} className="mr-1.5" />分析資料 JSON</span>
-                  <span className="text-xs text-slate-500">{isAiSnapshotOpen ? '收起' : '展開'}</span>
-                </button>
-                {isAiSnapshotOpen && <pre className="max-h-80 overflow-auto border-t border-slate-200 p-4 text-xs text-slate-600 whitespace-pre-wrap break-words">{aiSnapshotCopyJson}</pre>}
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 p-4 text-sm text-indigo-500">
-              選擇分析範圍後按「產生分析」。系統會把帳本摘要傳給 AI，不會傳送 API key，也不會包含即時股價或市場新聞。
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 
@@ -1637,10 +1344,10 @@ export default function App() {
 
                   <button
                     type="button"
-                    onClick={handleAddYtmToPortfolio}
+                    onClick={handleAddYtmToLedger}
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
                   >
-                    <Plus size={16} /> 加入 Portfolio
+                    <Plus size={16} /> 加入債券帳本
                   </button>
                 </>
               )}
@@ -1659,7 +1366,7 @@ export default function App() {
     return (
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white">
-          <h3 className="text-base sm:text-lg font-bold text-slate-800">美債交易總帳</h3>
+          <h3 className="text-base sm:text-lg font-bold text-slate-800">債券交易總帳</h3>
           <button onClick={() => { setFormData(defaultForm); setIsFormOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm"><Plus size={15} className="mr-1" /> 新增交易</button>
         </div>
         <div className="flex gap-1 sm:gap-6 px-2 sm:px-4 pt-2 bg-slate-50 border-b border-slate-200 overflow-x-auto">
@@ -1712,8 +1419,8 @@ export default function App() {
       <nav className="bg-slate-900 text-white px-4 py-2.5 sm:py-3 sticky top-0 z-20 shadow-md">
         <div className="max-w-7xl mx-auto flex justify-between items-center gap-3">
           <div className="flex items-center space-x-2.5 min-w-0">
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center font-bold text-sm shadow-sm flex-shrink-0">US</div>
-            <h1 className="text-base sm:text-xl font-bold tracking-tight truncate">Portfolio Dashboard</h1>
+            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center font-bold text-sm shadow-sm flex-shrink-0">BL</div>
+            <h1 className="text-base sm:text-xl font-bold tracking-tight truncate">Bond Ledger</h1>
           </div>
           {user && (
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
@@ -1734,36 +1441,54 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
         <div className="-mx-4 sm:mx-0 mb-5 overflow-x-auto px-4 sm:px-0">
         <div className="flex w-max min-w-full sm:min-w-0 gap-1 bg-slate-200/70 p-1 rounded-xl shadow-inner">
-          <button onClick={() => setActiveTab('dashboard')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
-            <PieChart size={15}/> 總覽
+          <button onClick={() => setActiveTab('trades')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+            <History size={15}/> 債券帳本
           </button>
           <button onClick={() => setActiveTab('ytm')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'ytm' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <Calculator size={15}/> YTM 試算
           </button>
-          <button onClick={() => setActiveTab('trades')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
-            <History size={15}/> 美債
-          </button>
-          <button onClick={() => setActiveTab('stocks')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'stocks' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
-            <Briefcase size={15}/> 美股 / ETF
-          </button>
-          <button onClick={() => setActiveTab('cash')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'cash' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
-            <Banknote size={15}/> 現金
-          </button>
-          <button onClick={() => setActiveTab('import')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'import' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
-            <Upload size={15}/> 匯入預覽
+          <button onClick={() => setActiveTab('dashboard')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+            <TrendingUp size={15}/> 債券分析
           </button>
         </div>
         </div>
-        {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : activeTab === 'stocks' ? <StockDashboard db={db} user={user} /> : activeTab === 'cash' ? <CashDashboard db={db} user={user} /> : activeTab === 'import' ? <ImportPreviewDashboard db={db} user={user} /> : renderTrades()}
+        {activeTab === 'dashboard' ? renderDashboard() : activeTab === 'ytm' ? renderYtmCalculator() : renderTrades()}
       </main>
 
       {isFormOpen && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 bg-slate-50 border-b flex justify-between items-center"><h2 className="text-lg font-bold">{editingTradeId ? '編輯交易' : '新增美債交易'}</h2><button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button></div>
+            <div className="p-5 bg-slate-50 border-b flex justify-between items-center"><h2 className="text-lg font-bold">{editingTradeId ? '編輯交易' : '新增債券交易'}</h2><button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button></div>
             {!editingTradeId && (<div className="px-5 pt-4"><div className="flex bg-slate-100 p-1 rounded-lg"><button type="button" onClick={() => setSmartInputMode(false)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${!smartInputMode ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>手動輸入</button><button type="button" onClick={() => setSmartInputMode(true)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${smartInputMode ? 'bg-indigo-500 text-white shadow' : 'text-slate-500'}`}>✨ 智能貼上</button></div></div>)}
             <div className="p-5 overflow-y-auto max-h-[60vh]">
-              {smartInputMode && !editingTradeId ? (<div className="space-y-4"><textarea value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" /><button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !hasAiTransport} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button></div>) : (<>
+              {smartInputMode && !editingTradeId ? (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">AI 交易單據解析</p>
+                        <p className="text-xs text-slate-500 mt-0.5">只用於把債券交易文字轉成目前債券表單格式。</p>
+                      </div>
+                      <button type="button" onClick={openApiKeySettings} className={`border px-3 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center ${hasUserDeepSeekApiKey ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-indigo-200 text-indigo-700'}`}>
+                        <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人 Key 已設定' : '設定 API Key'}
+                      </button>
+                    </div>
+                    {isApiKeyOpen && (
+                      <div className="mt-3 space-y-2">
+                        <input type="password" value={apiKeyDraft} onChange={(e) => setApiKeyDraft(e.target.value)} placeholder="Paste your DeepSeek API key" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" autoComplete="off" />
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" onClick={handleSaveApiKey} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-xs font-semibold">儲存</button>
+                          {hasUserDeepSeekApiKey && <button type="button" onClick={handleClearApiKey} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-xs font-semibold">清除</button>}
+                          <button type="button" onClick={() => setIsApiKeyOpen(false)} className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-lg text-xs font-semibold">取消</button>
+                        </div>
+                        <p className="text-[11px] text-slate-500">Key 只會儲存在呢部機嘅瀏覽器 localStorage，不會寫入 Firestore 或備份檔。</p>
+                      </div>
+                    )}
+                  </div>
+                  <textarea value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上債券交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" />
+                  <button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !hasAiTransport} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button>
+                </div>
+              ) : (<>
                 <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">CUSIP / 名稱</label><input required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label><select required name="type" value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, couponRate: e.target.value==='t-bill'?0:formData.couponRate})} className="w-full p-2 border rounded-lg text-sm"><option value="t-bill">T-Bill</option><option value="t-note">T-Note</option><option value="t-bond">T-Bond</option><option value="tips">TIPS</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Action</label><select required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">BUY (買入)</option><option value="sell">SELL (沽空)</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label><input required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label><input required type="date" name="maturityDate" value={formData.maturityDate} onChange={(e)=>setFormData({...formData, maturityDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Face Value ($)</label><input required type="number" name="faceValue" value={formData.faceValue} onChange={(e)=>setFormData({...formData, faceValue: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label><input required type="number" step="0.001" name="cleanPrice" value={formData.cleanPrice} onChange={(e)=>setFormData({...formData, cleanPrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Commission ($)</label><input type="number" step="0.01" name="commission" value={formData.commission} onChange={(e)=>setFormData({...formData, commission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>{formData.type !== 't-bill' && (<><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate (%)</label><input required type="number" step="0.125" name="couponRate" value={formData.couponRate} onChange={(e)=>setFormData({...formData, couponRate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label><select name="couponFrequency" value={formData.couponFrequency} onChange={(e)=>setFormData({...formData, couponFrequency: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="12">Monthly</option><option value="4">Quarterly</option><option value="2">Semi-Annually</option><option value="1">Annually</option></select></div></>)}</div></form>
                 {isCouponTreasury(formData) && (
                   <div className="mt-4">

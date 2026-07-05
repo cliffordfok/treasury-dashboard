@@ -6,14 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test:stocks": "node scripts/stockCalculations.test.mjs",
-    "test:cash": "node scripts/cashCalculations.test.mjs",
-    "test:portfolio": "node scripts/portfolioCalculations.test.mjs",
-    "test:import": "node src/features/import/firstradeMapping.test.mjs",
-    "test:import-preview": "node src/features/import/importPreviewCalculations.test.mjs",
-    "test:import-confirm": "node src/features/import/importConfirmCalculations.test.mjs",
-    "test:prices": "node scripts/stockPriceCalculations.test.mjs",
-    "test:ai": "node scripts/portfolioAiSnapshot.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

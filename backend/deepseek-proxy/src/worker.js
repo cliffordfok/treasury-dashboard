@@ -1,10 +1,5 @@
 const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
-const YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v7/finance/quote";
 const DEFAULT_MODEL = "deepseek-v4-pro";
-const STOCK_QUOTE_PROVIDER = "yahoo_finance_unofficial";
-const STOCK_QUOTE_TYPE = "delayed_or_regular_market";
-const STOCK_SYMBOL_PATTERN = /^[A-Z0-9.-]+$/;
-const MAX_STOCK_SYMBOLS = 25;
 
 const jsonResponse = (body, status = 200, corsHeaders = {}) =>
   new Response(JSON.stringify(body), {
@@ -52,93 +47,6 @@ const parseJsonObject = (text) => {
     if (!match) throw new Error("AI response did not contain JSON");
     return JSON.parse(match[0]);
   }
-};
-
-const normalizeStockSymbols = (symbols = []) => {
-  if (!Array.isArray(symbols)) throw new Error("symbols must be an array");
-  const normalized = [...new Set(symbols.map((symbol) => String(symbol || "").trim().toUpperCase()).filter(Boolean))];
-  if (normalized.length === 0) throw new Error("At least one symbol is required");
-  if (normalized.length > MAX_STOCK_SYMBOLS) throw new Error(`Maximum ${MAX_STOCK_SYMBOLS} symbols per request`);
-  const invalid = normalized.find((symbol) => !STOCK_SYMBOL_PATTERN.test(symbol));
-  if (invalid) throw new Error(`Invalid symbol: ${invalid}`);
-  return normalized;
-};
-
-const toIsoDate = (value) => {
-  if (value === undefined || value === null || value === "") return "";
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const millis = value > 100000000000 ? value : value * 1000;
-    const date = new Date(millis);
-    return Number.isNaN(date.getTime()) ? "" : date.toISOString();
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
-};
-
-const toNumberOrNull = (value) => {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
-};
-
-const parseYahooQuoteResponse = (payload = {}, requestedSymbols = []) => {
-  const rows = Array.isArray(payload?.quoteResponse?.result) ? payload.quoteResponse.result : [];
-  const requested = requestedSymbols.map((symbol) => String(symbol || "").trim().toUpperCase()).filter(Boolean);
-  const quotes = [];
-  const errors = [];
-  const seen = new Set();
-
-  rows.forEach((row) => {
-    const symbol = String(row?.symbol || "").trim().toUpperCase();
-    if (!symbol) return;
-    seen.add(symbol);
-    const price = toNumberOrNull(row.regularMarketPrice);
-    if (!price || price <= 0) {
-      errors.push({ symbol, error: "No quote returned" });
-      return;
-    }
-    quotes.push({
-      symbol,
-      price,
-      currency: String(row.currency || "USD").trim().toUpperCase() || "USD",
-      asOf: toIsoDate(row.regularMarketTime) || new Date().toISOString(),
-      previousClose: toNumberOrNull(row.regularMarketPreviousClose),
-      change: toNumberOrNull(row.regularMarketChange),
-      changePercent: toNumberOrNull(row.regularMarketChangePercent),
-      source: STOCK_QUOTE_PROVIDER,
-      quoteType: STOCK_QUOTE_TYPE,
-    });
-  });
-
-  requested.forEach((symbol) => {
-    if (!seen.has(symbol)) errors.push({ symbol, error: "No quote returned" });
-  });
-
-  return {
-    provider: STOCK_QUOTE_PROVIDER,
-    quoteType: STOCK_QUOTE_TYPE,
-    quotes,
-    errors,
-  };
-};
-
-const fetchStockQuotes = async (symbols) => {
-  const normalizedSymbols = normalizeStockSymbols(symbols);
-  const upstream = await fetch(`${YAHOO_QUOTE_URL}?symbols=${encodeURIComponent(normalizedSymbols.join(","))}`, {
-    headers: {
-      "Accept": "application/json",
-      "User-Agent": "Mozilla/5.0 treasury-dashboard-stock-quote-proxy",
-    },
-  });
-  if (!upstream.ok) {
-    return {
-      provider: STOCK_QUOTE_PROVIDER,
-      quoteType: STOCK_QUOTE_TYPE,
-      quotes: [],
-      errors: normalizedSymbols.map((symbol) => ({ symbol, error: `Yahoo Finance HTTP ${upstream.status}` })),
-    };
-  }
-  return parseYahooQuoteResponse(await upstream.json(), normalizedSymbols);
 };
 
 const callDeepSeek = async ({ apiKey, env, messages, model, temperature = 0.2, responseFormat }) => {
@@ -220,24 +128,6 @@ export default {
     try {
       const body = await request.json();
       const userApiKey = request.headers.get("X-DeepSeek-API-Key") || "";
-
-      if (Array.isArray(body.symbols) || body.task === "fetchStockQuotes") {
-        return jsonResponse(await fetchStockQuotes(body.symbols), 200, corsHeaders);
-      }
-
-      if (body.task === "generateText") {
-        const text = await callDeepSeek({
-          apiKey: userApiKey,
-          env,
-          model: body.model,
-          messages: [
-            { role: "system", content: "You are a concise fixed-income portfolio analyst." },
-            { role: "user", content: String(body.prompt || "") },
-          ],
-          temperature: 0.3,
-        });
-        return jsonResponse({ text }, 200, corsHeaders);
-      }
 
       if (body.task === "extractTradeData") {
         const text = await callDeepSeek({

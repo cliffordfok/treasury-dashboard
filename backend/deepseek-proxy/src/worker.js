@@ -10,21 +10,30 @@ const jsonResponse = (body, status = 200, corsHeaders = {}) =>
     },
   });
 
+const getAllowedOrigins = (env) => String(env.ALLOWED_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const isOriginAllowed = (request, env) => {
+  const requestOrigin = request.headers.get("Origin");
+  if (!requestOrigin) return true;
+  const allowedOrigins = getAllowedOrigins(env);
+  return allowedOrigins.includes("*") || allowedOrigins.includes(requestOrigin);
+};
+
 const buildCorsHeaders = (request, env) => {
-  const allowedOrigins = String(env.ALLOWED_ORIGIN || "*")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const allowedOrigins = getAllowedOrigins(env);
   const requestOrigin = request.headers.get("Origin") || "";
   const allowAll = allowedOrigins.includes("*");
   const allowOrigin = allowAll
     ? requestOrigin || "*"
     : allowedOrigins.includes(requestOrigin)
       ? requestOrigin
-      : allowedOrigins[0] || "";
+      : "";
 
   return {
-    "Access-Control-Allow-Origin": allowOrigin,
+    ...(allowOrigin ? { "Access-Control-Allow-Origin": allowOrigin } : {}),
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, X-DeepSeek-API-Key",
     "Vary": "Origin",
@@ -50,9 +59,9 @@ const parseJsonObject = (text) => {
 };
 
 const callDeepSeek = async ({ apiKey, env, messages, model, temperature = 0.2, responseFormat }) => {
-  const deepSeekApiKey = String(apiKey || env.DEEPSEEK_API_KEY || "").trim();
+  const deepSeekApiKey = String(apiKey || "").trim();
   if (!deepSeekApiKey) {
-    throw new Error("DEEPSEEK_API_KEY is not configured");
+    throw new Error("A user-provided DeepSeek API key is required");
   }
 
   const payload = {
@@ -90,7 +99,7 @@ const buildTradeExtractionPrompt = (rawText) => `Extract one US Treasury trade f
 Return only valid JSON with these fields:
 {
   "cusip": string,
-  "type": "t-bill" | "t-note" | "t-bond" | "tips",
+  "type": "t-bill" | "t-note" | "t-bond",
   "side": "buy" | "sell",
   "tradeDate": "YYYY-MM-DD",
   "maturityDate": "YYYY-MM-DD",
@@ -117,6 +126,10 @@ export default {
   async fetch(request, env) {
     const corsHeaders = buildCorsHeaders(request, env);
 
+    if (!isOriginAllowed(request, env)) {
+      return jsonResponse({ error: "Origin not allowed" }, 403, corsHeaders);
+    }
+
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders });
     }
@@ -125,17 +138,45 @@ export default {
       return jsonResponse({ error: "Method not allowed" }, 405, corsHeaders);
     }
 
-    try {
-      const body = await request.json();
-      const userApiKey = request.headers.get("X-DeepSeek-API-Key") || "";
+    const userApiKey = request.headers.get("X-DeepSeek-API-Key") || "";
+    if (!userApiKey.trim()) {
+      return jsonResponse({ error: "DeepSeek API key is required" }, 401, corsHeaders);
+    }
 
+    const contentLength = Number(request.headers.get("Content-Length") || 0);
+    if (Number.isFinite(contentLength) && contentLength > 50000) {
+      return jsonResponse({ error: "Request body is too large" }, 413, corsHeaders);
+    }
+
+    let rawBody;
+    try {
+      rawBody = await request.text();
+    } catch {
+      return jsonResponse({ error: "Unable to read request body" }, 400, corsHeaders);
+    }
+    if (rawBody.length > 50000) {
+      return jsonResponse({ error: "Request body is too large" }, 413, corsHeaders);
+    }
+
+    let body;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return jsonResponse({ error: "Request body must be valid JSON" }, 400, corsHeaders);
+    }
+
+    try {
       if (body.task === "extractTradeData") {
+        const rawText = String(body.rawText || "").trim();
+        if (!rawText || rawText.length > 20000) {
+          return jsonResponse({ error: "rawText must contain between 1 and 20000 characters" }, 400, corsHeaders);
+        }
         const text = await callDeepSeek({
           apiKey: userApiKey,
           env,
           messages: [
             { role: "system", content: "Extract structured Treasury trade data. Return JSON only." },
-            { role: "user", content: buildTradeExtractionPrompt(String(body.rawText || "")) },
+            { role: "user", content: buildTradeExtractionPrompt(rawText) },
           ],
           temperature: 0,
           responseFormat: { type: "json_object" },

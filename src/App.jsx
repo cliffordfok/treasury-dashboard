@@ -1,10 +1,34 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Bot, Loader2, AlertCircle, BellRing, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound } from 'lucide-react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Bot, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
-// --- 更新咗呢度：引入 Google 登入相關功能 ---
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import {
+  calculateAccruedInterestPer100,
+  calculateActiveUnrealizedPnl,
+  calculateClosedTradePricePnl,
+  calculateDaysBetween,
+  calculateForwardDaysBetween,
+  calculateMaturedTradePricePnl,
+  calculateTradePricePnl,
+  formatDateOnly,
+  generateAllCoupons,
+  getDirtyPrice,
+  getMarketYTMFromCurve,
+  getQuotedAccruedInterestPer100,
+  getTradeYTM,
+  isCouponTreasury,
+  isMatured,
+  isSupportedTreasuryType,
+  isValidISODate,
+  makeTradeId,
+  normalizeTradeForStorage,
+  solveYTMFromPrice,
+  toDateAtMidnight,
+  toFiniteNumber,
+  yieldToPrice,
+} from './lib/treasuryMath.js';
 
 // --- 真實環境 Firebase 設定 (使用環境變數) ---
 const firebaseConfig = {
@@ -19,113 +43,42 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const googleProvider = new GoogleAuthProvider(); // 初始化 Google 登入
+const googleProvider = new GoogleAuthProvider();
 
 // --- AI Proxy Configuration ---
-// Production builds must call a backend/proxy so provider keys never ship to browsers.
+// The key is supplied by the signed-in user and kept in memory for this page session only.
 const aiProxyUrl = import.meta.env.VITE_AI_PROXY_URL || import.meta.env.VITE_GEMINI_PROXY_URL || "";
-const isAiConfigured = Boolean(aiProxyUrl);
 const AI_ANALYSIS_MODEL = 'deepseek-v4-pro';
-const AI_USER_KEY_STORAGE_KEY = 'treasuryDashboard.deepseekApiKey';
 const DEEPSEEK_CHAT_API_URL = 'https://api.deepseek.com/chat/completions';
 
-// --- FRED API Configuration ---
-const fredApiKey = import.meta.env.VITE_FRED_API_KEY || "";
-
-// FRED Treasury constant-maturity series. years = 到期年期對應的 curve point。
-const FRED_YIELD_SERIES = [
-  { id: 'DGS1MO', years: 1 / 12 },
-  { id: 'DGS3MO', years: 3 / 12 },
-  { id: 'DGS6MO', years: 6 / 12 },
-  { id: 'DGS1',   years: 1 },
-  { id: 'DGS2',   years: 2 },
-  { id: 'DGS3',   years: 3 },
-  { id: 'DGS5',   years: 5 },
-  { id: 'DGS7',   years: 7 },
-  { id: 'DGS10',  years: 10 },
-  { id: 'DGS20',  years: 20 },
-  { id: 'DGS30',  years: 30 },
-];
-
-// Dev: Vite proxy 即時拉 FRED
-// Prod: 讀 GitHub Actions 預生成嘅 static JSON（完全無 CORS 問題）
-const fetchYieldCurveFromFRED = async () => {
-  if (!fredApiKey) throw new Error('未設定 VITE_FRED_API_KEY');
-  const FRED_BASE = '/fred-proxy/fred';
-  const attempts = await Promise.all(FRED_YIELD_SERIES.map(async ({ id, years }) => {
-    const url = `${FRED_BASE}/series/observations?series_id=${id}&api_key=${fredApiKey}&file_type=json&sort_order=desc&limit=1`;
-    try {
-      const res = await fetch(url);
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        return { ok: false, id, error: `HTTP ${res.status} ${text.slice(0, 80)}` };
-      }
-      const data = await res.json();
-      const obs = data.observations?.[0];
-      const v = Number(obs?.value);
-      if (!Number.isFinite(v)) return { ok: false, id, error: 'no observation value' };
-      return { ok: true, id, years, yield: v, date: obs.date };
-    } catch (e) {
-      return { ok: false, id, error: e.message || String(e) };
-    }
-  }));
-  const points = attempts.filter(a => a.ok).sort((a, b) => a.years - b.years);
-  const failures = attempts.filter(a => !a.ok);
-  if (failures.length) console.warn('[FRED] failures:', failures);
-  if (points.length === 0) {
-    const reason = failures[0]?.error || 'unknown';
-    throw new Error(`FRED 無回傳資料 (${reason})`);
-  }
-  return { points, updatedAt: points[0].date };
-};
-
-const fetchYieldCurveFromStatic = async () => {
+const fetchYieldCurve = async ({ bypassCache = false } = {}) => {
   const base = import.meta.env.BASE_URL || '/';
-  const res = await fetch(`${base}yield-curve.json`);
+  const suffix = bypassCache ? `?refresh=${Date.now()}` : '';
+  const res = await fetch(`${base}yield-curve.json${suffix}`, { cache: bypassCache ? 'no-store' : 'default' });
   if (!res.ok) throw new Error(`yield-curve.json HTTP ${res.status}`);
   const data = await res.json();
   if (!data.points || data.points.length === 0) throw new Error('yield-curve.json 無資料');
   return data;
 };
 
-const fetchYieldCurve = async () => {
-  if (import.meta.env.DEV && fredApiKey) {
-    return fetchYieldCurveFromFRED();
-  }
-  return fetchYieldCurveFromStatic();
-};
-
-// 依據 maturity 年期用 linear interpolation 在 yield curve 查出對應市場 YTM。
-// 超出最短/最長期則夾在端點（flat extrapolation）。
-const getMarketYTMFromCurve = (curve, years) => {
-  if (!curve || !curve.points || curve.points.length === 0) return null;
-  if (!Number.isFinite(years) || years <= 0) return null;
-  const pts = curve.points;
-  if (years <= pts[0].years) return pts[0].yield;
-  if (years >= pts[pts.length - 1].years) return pts[pts.length - 1].yield;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i], b = pts[i + 1];
-    if (years >= a.years && years <= b.years) {
-      const t = (years - a.years) / (b.years - a.years);
-      return a.yield + t * (b.yield - a.yield);
-    }
-  }
-  return null;
-};
-
-const fetchWithRetry = async (url, options, retries = 5) => {
-  const delays = [1000, 2000, 4000, 8000, 16000];
+const fetchWithRetry = async (url, options, retries = 3, timeoutMs = 15000) => {
+  const delays = [1000, 2000, 4000];
   for (let i = 0; i < retries; i++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(url, { ...options, signal: controller.signal });
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const error = new Error(`HTTP error! status: ${response.status}`);
+        error.retryable = response.status === 429 || response.status >= 500;
+        throw error;
       }
       return await response.json();
     } catch (e) {
-      if (i === retries - 1) throw e;
+      if (i === retries - 1 || e.retryable === false) throw e;
       await new Promise(res => setTimeout(res, delays[i]));
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 };
@@ -160,7 +113,7 @@ const buildTradeExtractionPrompt = (rawText) => `Extract one US Treasury trade f
 Return only valid JSON with these fields:
 {
   "cusip": string,
-  "type": "t-bill" | "t-note" | "t-bond" | "tips",
+  "type": "t-bill" | "t-note" | "t-bond",
   "side": "buy" | "sell",
   "tradeDate": "YYYY-MM-DD",
   "maturityDate": "YYYY-MM-DD",
@@ -229,252 +182,17 @@ const extractTradeData = async (rawText, userApiKey = '') => {
     });
     return result.trade || result.data || result;
   }
-  throw new Error('未設定 AI proxy');
+  throw new Error('未提供 DeepSeek API Key');
 };
 
-// --- Math & Date Engine ---
-const isMatured = (maturityDateStr) => {
-  const today = new Date(); today.setHours(0, 0, 0, 0); return new Date(maturityDateStr) < today;
-};
-const MS_PER_DAY = 1000 * 60 * 60 * 24;
-const toDateAtMidnight = (value) => {
-  const date = value instanceof Date ? new Date(value) : new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  date.setHours(0, 0, 0, 0);
-  return date;
-};
-const calculateDaysBetween = (date1, date2) => Math.ceil(Math.abs(new Date(date2) - new Date(date1)) / MS_PER_DAY);
-const calculateForwardDaysBetween = (date1, date2) => {
-  const start = toDateAtMidnight(date1);
-  const end = toDateAtMidnight(date2);
-  if (!start || !end) return null;
-  return Math.ceil((end - start) / MS_PER_DAY);
-};
-
-const getTBillInvestmentYield = (price, days) => {
-  if (!Number.isFinite(price) || price <= 0 || !days || days <= 0) return null;
-  // Investment yield, not bank discount yield.
-  return ((100 - price) / price) * (365 / days) * 100;
-};
 const roundMarketPriceForStorage = (price) => Math.round(price * 1000) / 1000;
-const isCouponTreasury = (trade) => trade?.type === 't-note' || trade?.type === 't-bond';
-const addMonths = (date, months) => {
-  const d = new Date(date);
-  d.setMonth(d.getMonth() + months);
-  return d;
-};
-const isSameDate = (a, b) => a && b && a.getTime() === b.getTime();
-
-const getCouponDates = (trade) => {
-  if (!isCouponTreasury(trade)) return [];
-  const maturityDate = toDateAtMidnight(trade.maturityDate);
-  const frequency = Number(trade.couponFrequency);
-  if (!maturityDate || !Number.isFinite(frequency) || frequency <= 0) return [];
-  const intervalMonths = 12 / frequency;
-  const dates = [];
-  let d = new Date(maturityDate);
-  for (let i = 0; i < frequency * 50; i++) {
-    dates.push(new Date(d));
-    d = addMonths(d, -intervalMonths);
-  }
-  return dates.sort((a, b) => a - b);
-};
-
-const getPreviousNextCouponDates = (trade, settlementDate) => {
-  if (!isCouponTreasury(trade)) return null;
-  const settlement = toDateAtMidnight(settlementDate);
-  const maturityDate = toDateAtMidnight(trade.maturityDate);
-  const frequency = Number(trade.couponFrequency);
-  if (!settlement || !maturityDate || settlement >= maturityDate || !Number.isFinite(frequency) || frequency <= 0) return null;
-  const intervalMonths = 12 / frequency;
-  let next = new Date(maturityDate);
-  for (let i = 0; i < frequency * 50; i++) {
-    const previous = addMonths(next, -intervalMonths);
-    if (previous <= settlement && settlement < next) return { previous, next };
-    if (isSameDate(previous, settlement)) return { previous, next };
-    next = previous;
-  }
-  return null;
-};
-
-const calculateAccruedInterestPer100 = (trade, settlementDate) => {
-  if (!isCouponTreasury(trade)) return 0;
-  const couponRate = Number(trade.couponRate);
-  const frequency = Number(trade.couponFrequency);
-  if (!Number.isFinite(couponRate) || couponRate <= 0 || !Number.isFinite(frequency) || frequency <= 0) return 0;
-  const couponWindow = getPreviousNextCouponDates(trade, settlementDate);
-  if (!couponWindow) return 0;
-  const daysAccrued = calculateForwardDaysBetween(couponWindow.previous, settlementDate);
-  const daysInPeriod = calculateForwardDaysBetween(couponWindow.previous, couponWindow.next);
-  if (!daysAccrued || daysAccrued <= 0 || !daysInPeriod || daysInPeriod <= 0) return 0;
-  const accruedFraction = daysAccrued / daysInPeriod;
-  return (couponRate / frequency) * accruedFraction;
-};
-
-const getDirtyPrice = (cleanPrice, accruedInterestPer100) => {
-  const clean = Number(cleanPrice);
-  const accrued = Number(accruedInterestPer100);
-  if (!Number.isFinite(clean) || clean <= 0) return null;
-  return clean + (Number.isFinite(accrued) ? accrued : 0);
-};
-
-const getAccruedInterestPer100 = (trade, settlementDate) => {
-  if (!isCouponTreasury(trade)) return 0;
-  const manual = trade.accruedInterestPer100;
-  if (manual !== undefined && manual !== null && String(manual).trim() !== '') {
-    const manualNumber = Number(manual);
-    return Number.isFinite(manualNumber) && manualNumber >= 0 ? manualNumber : 0;
-  }
-  return calculateAccruedInterestPer100(trade, settlementDate);
-};
-
-const yieldToPrice = (trade, marketYieldPercent, valuationDate) => {
-  if (!Number.isFinite(marketYieldPercent)) return null;
-  const matDate = toDateAtMidnight(trade.maturityDate);
-  const valuation = toDateAtMidnight(valuationDate);
-  const daysToMaturity = calculateForwardDaysBetween(valuation, matDate);
-  if (!matDate || !valuation || !daysToMaturity || daysToMaturity <= 0) return null;
-  const y = marketYieldPercent / 100;
-  if (trade.type === 't-bill') {
-    return 100 / (1 + y * (daysToMaturity / 365));
-  }
-  const freq = Number(trade.couponFrequency) || 2;
-  const couponPerPeriod = (Number(trade.couponRate) || 0) / freq;
-  const yPerPeriod = y / freq;
-  if (yPerPeriod <= -1) return null;
-  const intervalMonths = 12 / freq;
-  const periods = [];
-  let d = new Date(matDate);
-  while (d > valuation) {
-    periods.push(Math.ceil((d - valuation) / MS_PER_DAY));
-    d = new Date(d); d.setMonth(d.getMonth() - intervalMonths);
-  }
-  if (periods.length === 0) return null;
-  periods.sort((a, b) => a - b);
-  const daysPerPeriod = 365.25 / freq;
-  let price = 0;
-  for (const dc of periods) {
-    price += couponPerPeriod / Math.pow(1 + yPerPeriod, dc / daysPerPeriod);
-  }
-  price += 100 / Math.pow(1 + yPerPeriod, periods[periods.length - 1] / daysPerPeriod);
-  return price;
-};
-
-const solveYTMFromPrice = (trade, targetPrice, valuationDate) => {
-  if (!Number.isFinite(targetPrice) || targetPrice <= 0) return null;
-  const daysToMaturity = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
-  if (!daysToMaturity || daysToMaturity <= 0) return null;
-  if (trade.type === 't-bill') {
-    return getTBillInvestmentYield(targetPrice, daysToMaturity);
-  }
-
-  let low = -50;
-  let high = 100;
-  let lowPrice = yieldToPrice(trade, low, valuationDate);
-  let highPrice = yieldToPrice(trade, high, valuationDate);
-  if (lowPrice == null || highPrice == null) return null;
-
-  while (lowPrice < targetPrice && low > -95) {
-    low -= 25;
-    lowPrice = yieldToPrice(trade, low, valuationDate);
-    if (lowPrice == null) return null;
-  }
-  while (highPrice > targetPrice && high < 500) {
-    high += 100;
-    highPrice = yieldToPrice(trade, high, valuationDate);
-    if (highPrice == null) return null;
-  }
-  if (targetPrice > lowPrice || targetPrice < highPrice) return null;
-
-  for (let i = 0; i < 80; i++) {
-    const mid = (low + high) / 2;
-    const price = yieldToPrice(trade, mid, valuationDate);
-    if (price == null) return null;
-    if (price > targetPrice) low = mid;
-    else high = mid;
-  }
-  return (low + high) / 2;
-};
-
-const getTradeYTM = (trade, valuationDate) => {
-  const cleanPrice = Number(trade.currentMarketPrice);
-  const daysToMaturity = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
-  if (!Number.isFinite(cleanPrice) || cleanPrice <= 0 || !daysToMaturity || daysToMaturity <= 0) return null;
-  if (trade.type === 't-bill') return getTBillInvestmentYield(cleanPrice, daysToMaturity);
-  if (trade.type === 't-note' || trade.type === 't-bond') {
-    const accruedInterestPer100 = getAccruedInterestPer100(trade, valuationDate);
-    const dirtyPrice = getDirtyPrice(cleanPrice, accruedInterestPer100);
-    return solveYTMFromPrice(trade, dirtyPrice, valuationDate);
-  }
-  return null;
-};
-
-const generateAllCoupons = (trade) => {
-  if (trade.type === 't-bill' || !trade.couponFrequency || !trade.couponRate) return [];
-  const coupons = [];
-  const matDate = new Date(trade.maturityDate);
-  const tradeDate = new Date(trade.tradeDate);
-  const endDate = trade.status === 'closed' ? new Date(trade.closeDate) : matDate;
-  const intervalMonths = 12 / trade.couponFrequency;
-  let d = new Date(matDate);
-
-  while (d > tradeDate) {
-    if (d <= endDate) {
-      const amt = ((trade.faceValue * (trade.couponRate / 100)) / trade.couponFrequency) * (trade.side === 'sell' ? -1 : 1);
-      coupons.push({ id: `${trade.id}-${d.getTime()}`, tradeId: trade.id, cusip: trade.cusip || trade.type.toUpperCase(), date: new Date(d), dateStr: d.toISOString().split('T')[0], amount: amt, isShort: trade.side === 'sell' });
-    }
-    d = new Date(d); d.setMonth(d.getMonth() - intervalMonths);
-  }
-  return coupons.sort((a, b) => a.date - b.date);
-};
-
-const makeTradeId = () => {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-};
-
-const toFiniteNumber = (value, fallback = 0) => {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-};
-
-const normalizeTradeForStorage = (trade) => {
-  const cleanPrice = toFiniteNumber(trade.cleanPrice);
-  const status = trade.status === 'closed' ? 'closed' : 'active';
-  const normalized = {
-    ...trade,
-    id: String(trade.id || makeTradeId()),
-    cusip: String(trade.cusip || '').trim(),
-    type: trade.type,
-    side: trade.side,
-    tradeDate: trade.tradeDate,
-    maturityDate: trade.maturityDate,
-    faceValue: toFiniteNumber(trade.faceValue),
-    cleanPrice,
-    couponRate: toFiniteNumber(trade.couponRate),
-    commission: toFiniteNumber(trade.commission),
-    couponFrequency: toFiniteNumber(trade.couponFrequency, trade.type === 't-bill' ? 0 : 2),
-    currentMarketPrice: toFiniteNumber(trade.currentMarketPrice, cleanPrice),
-    status,
-  };
-  if (isCouponTreasury(normalized) && trade.accruedInterestPer100 !== undefined && trade.accruedInterestPer100 !== null && String(trade.accruedInterestPer100).trim() !== '') {
-    normalized.accruedInterestPer100 = Math.max(0, toFiniteNumber(trade.accruedInterestPer100));
-  } else {
-    delete normalized.accruedInterestPer100;
-  }
-  if (status === 'closed') {
-    normalized.closeDate = trade.closeDate || trade.maturityDate;
-    normalized.closePrice = toFiniteNumber(trade.closePrice, normalized.currentMarketPrice);
-    normalized.closeCommission = toFiniteNumber(trade.closeCommission);
-  }
-  return normalized;
-};
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [trades, setTrades] = useState([]);
   const [isDbReady, setIsDbReady] = useState(false);
+  const [dbError, setDbError] = useState('');
 
   const [activeTab, setActiveTab] = useState('trades');
   const [ledgerSubTab, setLedgerSubTab] = useState('active'); 
@@ -491,41 +209,48 @@ export default function App() {
 
   const [rawTradeText, setRawTradeText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
-  const [userDeepSeekApiKey, setUserDeepSeekApiKey] = useState(() => {
-    if (typeof window === 'undefined') return '';
-    return window.localStorage.getItem(AI_USER_KEY_STORAGE_KEY) || '';
-  });
+  const [userDeepSeekApiKey, setUserDeepSeekApiKey] = useState('');
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [isApiKeyOpen, setIsApiKeyOpen] = useState(false);
 
   // --- FRED Yield Curve ---
   const [yieldCurve, setYieldCurve] = useState(null);
   const [yieldCurveError, setYieldCurveError] = useState('');
-  const [isFetchingCurve, setIsFetchingCurve] = useState(false);
+  const [isFetchingCurve, setIsFetchingCurve] = useState(true);
 
-  const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2, accruedInterestPer100: '' };
-  const defaultYtmForm = { type: 't-note', tradeDate: new Date().toISOString().split('T')[0], maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0, accruedInterestPer100: '' };
+  const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: formatDateOnly(new Date()), maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2, accruedInterestPer100: '' };
+  const defaultYtmForm = { type: 't-note', tradeDate: formatDateOnly(new Date()), maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0, accruedInterestPer100: '' };
   const [formData, setFormData] = useState(defaultForm);
   const [ytmForm, setYtmForm] = useState(defaultYtmForm);
-  const [closeData, setCloseData] = useState({ closeDate: new Date().toISOString().split('T')[0], closePrice: '', closeCommission: 0 });
+  const [closeData, setCloseData] = useState({ closeDate: formatDateOnly(new Date()), closePrice: '', closeCommission: 0, closeAccruedInterestPer100: '' });
   const [selectedBenchmark, setSelectedBenchmark] = useState('UST10Y');
   const [importAuditLog, setImportAuditLog] = useState([]);
   const hasUserDeepSeekApiKey = Boolean(userDeepSeekApiKey.trim());
-  const hasAiTransport = isAiConfigured || hasUserDeepSeekApiKey;
+  const hasAiTransport = hasUserDeepSeekApiKey;
+
+  const saveTradeToDB = useCallback(async (tradeData) => {
+    if (!user) return;
+    const tradeRef = doc(db, 'users', user.uid, 'trades', tradeData.id);
+    await setDoc(tradeRef, tradeData);
+  }, [user]);
 
   // --- Firebase Auth 監聽 (改為 Google 登入) ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
+      if (!currentUser) {
+        setTrades([]);
+        setIsDbReady(false);
+        setDbError('');
+      }
       setAuthLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  // --- FRED Yield Curve fetch（掛載時拉一次；prod 讀 static JSON） ---
+  // FRED data is generated server-side by GitHub Actions and served as static JSON.
   useEffect(() => {
     let cancelled = false;
-    setIsFetchingCurve(true);
     fetchYieldCurve()
       .then(curve => { if (!cancelled) { setYieldCurve(curve); setYieldCurveError(''); } })
       .catch(err => { if (!cancelled) setYieldCurveError(err.message || '無法獲取市場收益率'); })
@@ -534,49 +259,47 @@ export default function App() {
   }, []);
 
   // --- 當 yield curve 載入後，自動用市場 yield 計算理論價格更新所有活躍持倉 ---
-  const priceUpdateRef = useRef(null);
+  const priceUpdatesInFlightRef = useRef(new Set());
   useEffect(() => {
     if (!yieldCurve?.points?.length || !user || !isDbReady) return;
     const curveDate = yieldCurve.updatedAt;
-    if (!curveDate || priceUpdateRef.current === curveDate || priceUpdateRef.current === `updating:${curveDate}`) return;
+    if (!curveDate) return;
     const toUpdate = trades.filter(t =>
-      t.status !== 'closed' && !isMatured(t.maturityDate) && t.priceUpdatedAt !== curveDate
+      isSupportedTreasuryType(t)
+      && t.status !== 'closed'
+      && !isMatured(t.maturityDate)
+      && t.priceUpdatedAt !== curveDate
+      && !priceUpdatesInFlightRef.current.has(t.id)
     );
-    if (toUpdate.length === 0) { priceUpdateRef.current = curveDate; return; }
-    priceUpdateRef.current = `updating:${curveDate}`;
-    let cancelled = false;
-    (async () => {
-      let failed = false;
-      for (const trade of toUpdate) {
+    for (const trade of toUpdate) {
+      priceUpdatesInFlightRef.current.add(trade.id);
+      (async () => {
         try {
-          const valuationDate = new Date();
-          valuationDate.setHours(0, 0, 0, 0);
+          const valuationDate = toDateAtMidnight(new Date());
           const days = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
-          if (!days || days <= 0) continue;
+          if (!days || days <= 0) return;
           const remainingYears = days / 365.25;
           const marketYield = getMarketYTMFromCurve(yieldCurve, remainingYears);
-          if (marketYield == null) continue;
+          if (marketYield == null) return;
           const newMktPrice = yieldToPrice(trade, marketYield, valuationDate);
-          if (newMktPrice == null || !Number.isFinite(newMktPrice) || newMktPrice <= 0) continue;
-          const accruedInterestPer100 = getAccruedInterestPer100(trade, valuationDate);
+          if (newMktPrice == null || !Number.isFinite(newMktPrice) || newMktPrice <= 0) return;
+          const accruedInterestPer100 = calculateAccruedInterestPer100(trade, valuationDate);
           const cleanMarketPrice = isCouponTreasury(trade) ? newMktPrice - accruedInterestPer100 : newMktPrice;
-          if (!Number.isFinite(cleanMarketPrice) || cleanMarketPrice <= 0) continue;
+          if (!Number.isFinite(cleanMarketPrice) || cleanMarketPrice <= 0) return;
           await saveTradeToDB({ ...trade, currentMarketPrice: roundMarketPriceForStorage(cleanMarketPrice), priceUpdatedAt: curveDate });
         } catch (err) {
-          failed = true;
           console.error('Market price update failed:', trade.id, err);
+        } finally {
+          priceUpdatesInFlightRef.current.delete(trade.id);
         }
-      }
-      if (!cancelled) priceUpdateRef.current = failed ? null : curveDate;
-    })();
-    return () => { cancelled = true; };
-  }, [yieldCurve, trades, user, isDbReady]);
+      })();
+    }
+  }, [yieldCurve, trades, user, isDbReady, saveTradeToDB]);
 
   const handleRefreshCurve = async () => {
     setIsFetchingCurve(true);
-    priceUpdateRef.current = null;
     try {
-      const curve = await fetchYieldCurve();
+      const curve = await fetchYieldCurve({ bypassCache: true });
       setYieldCurve(curve);
       setYieldCurveError('');
     } catch (err) {
@@ -587,18 +310,19 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!user) {
-      setTrades([]); // 登出時清空畫面資料
-      setIsDbReady(false);
-      return;
-    }
+    if (!user) return;
     // 使用 user.uid 作為個人專屬路徑 (每個 Google 帳號有獨立空間)
     const tradesRef = collection(db, 'users', user.uid, 'trades');
     const unsubscribe = onSnapshot(tradesRef, (snapshot) => {
       const fetchedTrades = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setTrades(fetchedTrades);
       setIsDbReady(true);
-    }, (error) => console.error("Firestore error:", error));
+      setDbError('');
+    }, (error) => {
+      console.error("Firestore error:", error);
+      setDbError('無法同步 Firestore。請檢查網絡、Firebase 設定及安全規則後重試。');
+      setIsDbReady(true);
+    });
     return () => unsubscribe();
   }, [user]);
 
@@ -621,7 +345,11 @@ export default function App() {
   const activeTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && !isMatured(t.maturityDate)), [trades]);
   const maturedTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && isMatured(t.maturityDate)), [trades]);
   const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
-  const allCoupons = useMemo(() => trades.flatMap(generateAllCoupons), [trades]);
+  const unsupportedTips = useMemo(() => trades.filter(t => t.type === 'tips'), [trades]);
+  const supportedActiveTrades = useMemo(() => activeTrades.filter(isSupportedTreasuryType), [activeTrades]);
+  const supportedMaturedTrades = useMemo(() => maturedTrades.filter(isSupportedTreasuryType), [maturedTrades]);
+  const supportedClosedTrades = useMemo(() => closedTrades.filter(isSupportedTreasuryType), [closedTrades]);
+  const allCoupons = useMemo(() => trades.filter(isSupportedTreasuryType).flatMap(generateAllCoupons), [trades]);
   // Dashboard valuation date is fixed at page load; reload the app to refresh it.
   const todayObj = useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
   const receivedCoupons = useMemo(() => allCoupons.filter(c => c.date <= todayObj), [allCoupons, todayObj]);
@@ -629,33 +357,32 @@ export default function App() {
 
   // --- PnL Calculations ---
   const portfolioMetrics = useMemo(() => {
-    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let totalAccruedInterest = 0; let totalFullMarketValue = 0; let totalYtmMarketValue = 0; let totalRealizedPnL = 0; let annualCouponIncome = 0;
+    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let totalAccruedInterest = 0; let totalYtmMarketValue = 0; let totalRealizedPnL = 0; let annualCouponIncome = 0;
     receivedCoupons.forEach(c => totalRealizedPnL += c.amount);
-    closedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; const cp = Number(t.closePrice) || 0; const bp = Number(t.cleanPrice) || 0; const fv = Number(t.faceValue) || 0; totalRealizedPnL += (((cp - bp) * fv) / 100) * mult - (Number(t.commission)||0) - (Number(t.closeCommission)||0); });
-    maturedTrades.forEach(t => { const mult = t.side === 'sell' ? -1 : 1; const bp = Number(t.cleanPrice) || 0; const fv = Number(t.faceValue) || 0; totalRealizedPnL += (((100 - bp) * fv) / 100) * mult - (Number(t.commission)||0); });
-    activeTrades.forEach(trade => {
+    supportedClosedTrades.forEach(t => { totalRealizedPnL += calculateClosedTradePricePnl(t) ?? 0; });
+    supportedMaturedTrades.forEach(t => { totalRealizedPnL += calculateMaturedTradePricePnl(t) ?? 0; });
+    supportedActiveTrades.forEach(trade => {
       const price = Number(trade.currentMarketPrice);
       if (!Number.isFinite(price) || price <= 0) return;
       const faceValue = Number(trade.faceValue) || 0;
-      const cleanPrice = Number(trade.cleanPrice) || 0;
       const mult = trade.side === 'sell' ? -1 : 1;
       const marketVal = ((price * faceValue) / 100) * mult;
-      const accruedInterestPer100 = getAccruedInterestPer100(trade, todayObj);
+      const accruedInterestPer100 = calculateAccruedInterestPer100(trade, todayObj);
       const accruedValue = ((accruedInterestPer100 * faceValue) / 100) * mult;
       totalMarketValue += marketVal;
       totalAccruedInterest += accruedValue;
-      totalUnrealizedPnL += ((((price - cleanPrice) * faceValue) / 100) * mult) - (trade.commission||0);
+      totalUnrealizedPnL += calculateActiveUnrealizedPnl(trade, todayObj) ?? 0;
       totalFace += faceValue * mult;
-      if (trade.type !== 't-bill' && trade.couponRate) {
+      if (isCouponTreasury(trade) && trade.couponRate) {
         annualCouponIncome += (faceValue * (Number(trade.couponRate) / 100)) * mult;
       }
     });
-    totalFullMarketValue = totalMarketValue + totalAccruedInterest;
-    activeTrades.forEach(trade => {
+    const totalFullMarketValue = totalMarketValue + totalAccruedInterest;
+    supportedActiveTrades.forEach(trade => {
       const cleanPrice = Number(trade.currentMarketPrice);
       if (!Number.isFinite(cleanPrice) || cleanPrice <= 0) return;
       const mult = trade.side === 'sell' ? -1 : 1;
-      const accruedInterestPer100 = getAccruedInterestPer100(trade, todayObj);
+      const accruedInterestPer100 = calculateAccruedInterestPer100(trade, todayObj);
       const dirtyPrice = isCouponTreasury(trade) ? getDirtyPrice(cleanPrice, accruedInterestPer100) : cleanPrice;
       if (!Number.isFinite(dirtyPrice) || dirtyPrice <= 0) return;
       const marketVal = ((dirtyPrice * (Number(trade.faceValue) || 0)) / 100) * mult;
@@ -667,13 +394,13 @@ export default function App() {
     });
     totalWeightYTM = totalYtmMarketValue > 0 ? totalWeightYTM / totalYtmMarketValue : null;
     return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalAccruedInterest, totalFullMarketValue, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
-  }, [activeTrades, maturedTrades, closedTrades, receivedCoupons, todayObj]);
+  }, [supportedActiveTrades, supportedMaturedTrades, supportedClosedTrades, receivedCoupons, todayObj]);
 
   // --- Chart Data ---
   const yieldCurveChartData = useMemo(() => {
     if (!yieldCurve?.points?.length) return null;
     const curvePoints = yieldCurve.points.map(p => ({ years: p.years, yield: p.yield }));
-    const bondDots = activeTrades.map(t => {
+    const bondDots = supportedActiveTrades.map(t => {
       const days = calculateForwardDaysBetween(todayObj, t.maturityDate);
       if (!days || days <= 0) return null;
       const remainingYears = days / 365.25;
@@ -681,14 +408,14 @@ export default function App() {
       return { cusip: t.cusip || t.type.toUpperCase(), x: remainingYears, y: marketYtm, side: t.side };
     }).filter(d => d?.y != null);
     return { curvePoints, bondDots };
-  }, [yieldCurve, activeTrades, todayObj]);
+  }, [yieldCurve, supportedActiveTrades, todayObj]);
 
   const couponCalendar = useMemo(() => {
     const year = todayObj.getFullYear();
     const byMonth = Array.from({ length: 12 }, () => 0);
     allCoupons.filter(c => c.date.getFullYear() === year).forEach(c => { byMonth[c.date.getMonth()] += c.amount; });
     return byMonth;
-  }, [allCoupons]);
+  }, [allCoupons, todayObj]);
 
   const benchmarkMetrics = useMemo(() => {
     const benchmarkYearsMap = { SGOV: 0.25, SHY: 2, IEF: 7, TLT: 20, UST10Y: 10 };
@@ -708,19 +435,19 @@ export default function App() {
     const tradeDate = toDateAtMidnight(ytmForm.tradeDate);
     const maturityDate = toDateAtMidnight(ytmForm.maturityDate);
 
-    if (!ytmForm.tradeDate || !ytmForm.maturityDate || !tradeDate || !maturityDate || maturityDate <= tradeDate || faceValue <= 0 || cleanPrice <= 0) {
+    if (!isSupportedTreasuryType(ytmForm) || !ytmForm.tradeDate || !ytmForm.maturityDate || !tradeDate || !maturityDate || maturityDate <= tradeDate || faceValue <= 0 || cleanPrice <= 0) {
       return { isValid: false };
     }
 
     const days = calculateForwardDaysBetween(tradeDate, maturityDate);
     if (!days || days <= 0) return { isValid: false };
     const years = days / 365.25;
-    const trade = { type: ytmForm.type, couponRate, couponFrequency, maturityDate: ytmForm.maturityDate, accruedInterestPer100: ytmForm.accruedInterestPer100 };
-    const accruedInterestPer100 = getAccruedInterestPer100(trade, tradeDate);
+    const trade = { type: ytmForm.type, tradeDate: ytmForm.tradeDate, couponRate, couponFrequency, maturityDate: ytmForm.maturityDate, accruedInterestPer100: ytmForm.accruedInterestPer100 };
+    const accruedInterestPer100 = getQuotedAccruedInterestPer100(trade, tradeDate);
     const dirtyPrice = getDirtyPrice(cleanPrice, accruedInterestPer100);
     if (dirtyPrice == null) return { isValid: false };
     const priceWithCommission = dirtyPrice + ((commission / faceValue) * 100);
-    const grossYtm = solveYTMFromPrice(trade, cleanPrice, tradeDate);
+    const grossYtm = solveYTMFromPrice(trade, dirtyPrice, tradeDate);
     const netYtm = solveYTMFromPrice(trade, priceWithCommission, tradeDate);
     const cleanPrincipalCost = (cleanPrice * faceValue) / 100;
     const accruedInterestValue = (accruedInterestPer100 * faceValue) / 100;
@@ -756,15 +483,6 @@ export default function App() {
       spreadToCurve: marketYield == null || netYtm == null ? null : netYtm - marketYield,
     };
   }, [ytmForm, yieldCurve]);
-
-
-  // --- Database Actions ---
-  const saveTradeToDB = async (tradeData) => {
-    if (!user) return;
-    const tradeRef = doc(db, 'users', user.uid, 'trades', tradeData.id);
-    await setDoc(tradeRef, tradeData);
-  };
-
   const handleAddYtmToLedger = async () => {
     if (!ytmQuote.isValid) return;
     if (!user) {
@@ -799,6 +517,27 @@ export default function App() {
 
   const handleSaveTrade = async (e) => {
     e.preventDefault();
+    if (!isSupportedTreasuryType(formData)) {
+      alert('TIPS 暫未支援，請選擇 T-Bill、T-Note 或 T-Bond。');
+      return;
+    }
+    if (!isValidISODate(formData.tradeDate) || !isValidISODate(formData.maturityDate) || toDateAtMidnight(formData.maturityDate) <= toDateAtMidnight(formData.tradeDate)) {
+      alert('請輸入有效交易日及較後的到期日。');
+      return;
+    }
+    const faceValue = Number(formData.faceValue);
+    const cleanPrice = Number(formData.cleanPrice);
+    const commission = Number(formData.commission || 0);
+    const couponRate = Number(formData.couponRate || 0);
+    const couponFrequency = Number(formData.couponFrequency);
+    if (!Number.isFinite(faceValue) || faceValue <= 0 || !Number.isFinite(cleanPrice) || cleanPrice <= 0 || !Number.isFinite(commission) || commission < 0) {
+      alert('面值及價格必須大於 0，手續費不可為負數。');
+      return;
+    }
+    if (isCouponTreasury(formData) && (!Number.isFinite(couponRate) || couponRate < 0 || ![1, 2, 4, 12].includes(couponFrequency))) {
+      alert('請輸入有效 coupon rate 及派息頻率。');
+      return;
+    }
     const existingTrade = editingTradeId ? trades.find(t => t.id === editingTradeId) : null;
     const tradeData = normalizeTradeForStorage({
       ...existingTrade,
@@ -820,7 +559,26 @@ export default function App() {
     e.preventDefault();
     const trade = trades.find(t => t.id === closingTradeId);
     if (!trade) return;
-    const updatedTrade = normalizeTradeForStorage({ ...trade, status: 'closed', closeDate: closeData.closeDate, closePrice: closeData.closePrice, closeCommission: closeData.closeCommission, currentMarketPrice: closeData.closePrice });
+    if (!isValidISODate(closeData.closeDate) || toDateAtMidnight(closeData.closeDate) < toDateAtMidnight(trade.tradeDate) || toDateAtMidnight(closeData.closeDate) > toDateAtMidnight(trade.maturityDate)) {
+      alert('平倉日期必須介乎交易日與到期日之間。');
+      return;
+    }
+    const closePrice = Number(closeData.closePrice);
+    const closeCommission = Number(closeData.closeCommission || 0);
+    const closeAccruedInterest = closeData.closeAccruedInterestPer100 === '' ? null : Number(closeData.closeAccruedInterestPer100);
+    if (!Number.isFinite(closePrice) || closePrice <= 0 || !Number.isFinite(closeCommission) || closeCommission < 0 || (closeAccruedInterest != null && (!Number.isFinite(closeAccruedInterest) || closeAccruedInterest < 0))) {
+      alert('平倉價格必須大於 0，手續費及 accrued interest 不可為負數。');
+      return;
+    }
+    const updatedTrade = normalizeTradeForStorage({
+      ...trade,
+      status: 'closed',
+      closeDate: closeData.closeDate,
+      closePrice: closeData.closePrice,
+      closeCommission: closeData.closeCommission,
+      closeAccruedInterestPer100: closeData.closeAccruedInterestPer100,
+      currentMarketPrice: closeData.closePrice,
+    });
     await saveTradeToDB(updatedTrade);
     setIsCloseModalOpen(false);
   };
@@ -843,16 +601,11 @@ export default function App() {
 
   const handleSaveApiKey = () => {
     const key = apiKeyDraft.trim();
-    if (typeof window !== 'undefined') {
-      if (key) window.localStorage.setItem(AI_USER_KEY_STORAGE_KEY, key);
-      else window.localStorage.removeItem(AI_USER_KEY_STORAGE_KEY);
-    }
     setUserDeepSeekApiKey(key);
     setIsApiKeyOpen(false);
   };
 
   const handleClearApiKey = () => {
-    if (typeof window !== 'undefined') window.localStorage.removeItem(AI_USER_KEY_STORAGE_KEY);
     setUserDeepSeekApiKey('');
     setApiKeyDraft('');
     setIsApiKeyOpen(false);
@@ -860,13 +613,14 @@ export default function App() {
 
   const handleSmartParse = async () => {
     if (!rawTradeText.trim()) return;
-    if (!hasAiTransport) { alert("請先設定 AI proxy 或按 API Key 輸入 DeepSeek key。"); return; }
+    if (!hasAiTransport) { alert("請先按 API Key 輸入 DeepSeek key。"); return; }
     setIsParsing(true);
     try {
       const parsedData = await extractTradeData(rawTradeText, userDeepSeekApiKey);
+      if (!isSupportedTreasuryType(parsedData)) throw new Error('TIPS is not supported');
       setFormData({ ...defaultForm, ...parsedData });
       setSmartInputMode(false); setRawTradeText('');
-    } catch (err) { alert("無法解析文字，請檢查格式。"); } finally { setIsParsing(false); }
+    } catch { alert("無法解析文字，請檢查格式。"); } finally { setIsParsing(false); }
   };
 
   // --- 匯出 / 匯入 ---
@@ -877,7 +631,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `treasury-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `treasury-backup-${formatDateOnly(new Date())}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -895,38 +649,45 @@ export default function App() {
         if (!Array.isArray(imported)) { alert('檔案格式錯誤：需要為交易陣列。'); return; }
         const existingIds = new Set(trades.map(t => t.id));
         const existingFingerprints = new Set(trades.map(t => `${t.cusip || ''}|${t.tradeDate || ''}|${Number(t.faceValue) || 0}`));
-        const validTypes = new Set(['t-bill', 't-note', 't-bond', 'tips']);
+        const validTypes = new Set(['t-bill', 't-note', 't-bond']);
         const validSides = new Set(['buy', 'sell']);
         const validFreq = new Set([1, 2, 4, 12]);
         const validStatus = new Set(['active', 'closed', undefined, null, '']);
         const errors = [];
         let added = 0;
 
-        const isISODate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
-
         for (let i = 0; i < imported.length; i++) {
-          const trade = normalizeTradeForStorage(imported[i] || {});
           const prefix = `第 ${i + 1} 筆`;
-          if (!trade || typeof trade !== 'object') { errors.push(`${prefix}: 格式不是物件`); continue; }
+          const rawTrade = imported[i];
+          if (!rawTrade || typeof rawTrade !== 'object' || Array.isArray(rawTrade)) { errors.push(`${prefix}: 格式不是物件`); continue; }
+          const trade = normalizeTradeForStorage(rawTrade);
           if (existingIds.has(trade.id)) { errors.push(`${prefix}: 重複 id`); continue; }
+          if (trade.type === 'tips') { errors.push(`${prefix}: TIPS 暫未支援，資料未匯入`); continue; }
           if (!validTypes.has(trade.type)) { errors.push(`${prefix}: type 無效`); continue; }
           if (!validSides.has(trade.side)) { errors.push(`${prefix}: side 無效`); continue; }
           if (!validStatus.has(imported[i]?.status)) { errors.push(`${prefix}: status 無效`); continue; }
-          if (!isISODate(trade.tradeDate) || !isISODate(trade.maturityDate)) { errors.push(`${prefix}: 日期格式需為 YYYY-MM-DD`); continue; }
-          if (new Date(trade.maturityDate) <= new Date(trade.tradeDate)) { errors.push(`${prefix}: maturityDate 必須晚於 tradeDate`); continue; }
+          if (!isValidISODate(trade.tradeDate) || !isValidISODate(trade.maturityDate)) { errors.push(`${prefix}: 日期格式或日期值無效`); continue; }
+          if (toDateAtMidnight(trade.maturityDate) <= toDateAtMidnight(trade.tradeDate)) { errors.push(`${prefix}: maturityDate 必須晚於 tradeDate`); continue; }
           if (!Number.isFinite(trade.faceValue) || trade.faceValue <= 0) { errors.push(`${prefix}: faceValue 無效`); continue; }
           if (!Number.isFinite(trade.cleanPrice) || trade.cleanPrice <= 0) { errors.push(`${prefix}: cleanPrice 無效`); continue; }
           if (!Number.isFinite(trade.currentMarketPrice) || trade.currentMarketPrice <= 0) { errors.push(`${prefix}: currentMarketPrice 無效`); continue; }
-          if (trade.type !== 't-bill' && !validFreq.has(trade.couponFrequency || 2)) { errors.push(`${prefix}: couponFrequency 無效`); continue; }
-          if (trade.status === 'closed' && (!isISODate(trade.closeDate) || !Number.isFinite(trade.closePrice) || trade.closePrice <= 0)) { errors.push(`${prefix}: closed trade 缺少有效 closeDate/closePrice`); continue; }
+          if (!Number.isFinite(trade.commission) || trade.commission < 0) { errors.push(`${prefix}: commission 無效`); continue; }
+          if (trade.type !== 't-bill' && (!Number.isFinite(trade.couponRate) || trade.couponRate < 0)) { errors.push(`${prefix}: couponRate 無效`); continue; }
+          if (trade.type !== 't-bill' && !validFreq.has(trade.couponFrequency)) { errors.push(`${prefix}: couponFrequency 無效`); continue; }
+          if (trade.status === 'closed' && (!isValidISODate(trade.closeDate) || toDateAtMidnight(trade.closeDate) < toDateAtMidnight(trade.tradeDate) || toDateAtMidnight(trade.closeDate) > toDateAtMidnight(trade.maturityDate) || !Number.isFinite(trade.closePrice) || trade.closePrice <= 0 || trade.closeCommission < 0)) { errors.push(`${prefix}: closed trade 缺少有效 closeDate/closePrice`); continue; }
 
           const fp = `${trade.cusip || ''}|${trade.tradeDate || ''}|${trade.faceValue || 0}`;
           if (existingFingerprints.has(fp)) { errors.push(`${prefix}: 疑似重複交易 (CUSIP+TradeDate+FaceValue)`); continue; }
 
-          await saveTradeToDB(trade);
-          existingIds.add(trade.id);
-          existingFingerprints.add(fp);
-          added++;
+          try {
+            await saveTradeToDB(trade);
+            existingIds.add(trade.id);
+            existingFingerprints.add(fp);
+            added++;
+          } catch (error) {
+            console.error('Import write failed:', trade.id, error);
+            errors.push(`${prefix}: Firestore 寫入失敗`);
+          }
         }
 
         const skipped = imported.length - added;
@@ -940,7 +701,7 @@ export default function App() {
         }, ...prev].slice(0, 10));
 
         alert(`匯入完成：新增 ${added} 筆交易，略過 ${skipped} 筆。`);
-      } catch (err) { alert('匯入失敗：無法讀取或解析檔案。'); }
+      } catch { alert('匯入失敗：無法讀取或解析檔案。'); }
     };
     input.click();
   };
@@ -1105,13 +866,13 @@ export default function App() {
           <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-500">
             {yieldCurve?.updatedAt && <span className="bg-slate-100 px-2 py-0.5 rounded-md">FRED · {yieldCurve.updatedAt}</span>}
             {yieldCurveError && <span className="text-red-500 flex items-center max-w-[180px] truncate" title={yieldCurveError}><AlertCircle size={11} className="mr-1 flex-shrink-0"/>{yieldCurveError}</span>}
-            <button onClick={handleRefreshCurve} disabled={isFetchingCurve || !fredApiKey} title={fredApiKey ? '刷新市場收益率' : '未設定 FRED API key'} className="p-1.5 hover:bg-slate-100 rounded-md disabled:opacity-40 transition-colors">
+            <button onClick={handleRefreshCurve} disabled={isFetchingCurve} title="重新讀取市場收益率" aria-label="重新讀取市場收益率" className="p-1.5 hover:bg-slate-100 rounded-md disabled:opacity-40 transition-colors">
               {isFetchingCurve ? <Loader2 size={14} className="animate-spin"/> : <RefreshCw size={14}/>}
             </button>
           </div>
         </div>
         {activeTrades.length === 0 ? <p className="text-sm text-slate-500 py-4 text-center bg-slate-50 rounded">暫無活躍持倉。</p> : (() => {
-          const sorted = [...activeTrades].sort((a, b) => new Date(a.maturityDate) - new Date(b.maturityDate));
+          const sorted = [...activeTrades].sort((a, b) => String(a.maturityDate).localeCompare(String(b.maturityDate)));
           const maxDays = Math.max(...sorted.map(t => calculateDaysBetween(todayObj, t.maturityDate)), 1);
           const formatCountdown = (d) => {
             if (d < 30) return `${d} 天`;
@@ -1224,7 +985,7 @@ export default function App() {
                   <option value="t-bill">T-Bill</option>
                   <option value="t-note">T-Note</option>
                   <option value="t-bond">T-Bond</option>
-                  <option value="tips">TIPS</option>
+                  <option value="tips" disabled>TIPS（暫未支援）</option>
                 </select>
               </div>
               <div>
@@ -1361,7 +1122,7 @@ export default function App() {
   const renderTrades = () => {
     let displayedTrades = [];
     if (ledgerSubTab === 'active') displayedTrades = activeTrades;
-    else if (ledgerSubTab === 'closed') displayedTrades = [...maturedTrades, ...closedTrades].sort((a,b) => new Date(b.tradeDate) - new Date(a.tradeDate));
+    else if (ledgerSubTab === 'closed') displayedTrades = [...maturedTrades, ...closedTrades].sort((a,b) => String(b.tradeDate).localeCompare(String(a.tradeDate)));
 
     return (
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
@@ -1376,7 +1137,7 @@ export default function App() {
         </div>
         <div className="overflow-x-auto">
           {ledgerSubTab === 'coupons' ? (
-             <table className="w-full text-left text-sm whitespace-nowrap"><thead className="bg-emerald-50 text-emerald-800 font-medium"><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP / Type</th><th className="p-4 text-right">派息金額 (USD)</th></tr></thead><tbody className="divide-y divide-slate-100">{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : receivedCoupons.sort((a,b) => b.date - a.date).map(c => (<tr key={c.id} className="hover:bg-slate-50"><td className="p-4 font-medium text-slate-700">{c.dateStr}</td><td className="p-4 text-slate-600">{c.cusip}</td><td className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</td></tr>))}</tbody></table>
+             <table className="w-full text-left text-sm whitespace-nowrap"><thead className="bg-emerald-50 text-emerald-800 font-medium"><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP / Type</th><th className="p-4 text-right">派息金額 (USD)</th></tr></thead><tbody className="divide-y divide-slate-100">{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id} className="hover:bg-slate-50"><td className="p-4 font-medium text-slate-700">{c.dateStr}</td><td className="p-4 text-slate-600">{c.cusip}</td><td className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</td></tr>))}</tbody></table>
           ) : (
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-white text-slate-600 font-medium border-b border-slate-200">
@@ -1384,25 +1145,26 @@ export default function App() {
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {displayedTrades.length === 0 ? <tr><td colSpan="8" className="p-8 text-center text-slate-400">無紀錄。</td></tr> : displayedTrades.map(trade => {
-                  const mult = trade.side === 'sell' ? -1 : 1; const isMaturedBond = isMatured(trade.maturityDate) && trade.status !== 'closed'; let pnl = 0;
+                  const isMaturedBond = isMatured(trade.maturityDate) && trade.status !== 'closed';
+                  const isUnsupported = !isSupportedTreasuryType(trade);
+                  const pnl = calculateTradePricePnl(trade, todayObj);
                   const faceValue = toFiniteNumber(trade.faceValue);
                   const cleanPrice = toFiniteNumber(trade.cleanPrice);
                   const marketPrice = toFiniteNumber(trade.currentMarketPrice, cleanPrice);
-                  const accruedInterestPer100 = getAccruedInterestPer100(trade, todayObj);
+                  const accruedInterestPer100 = calculateAccruedInterestPer100(trade, todayObj);
                   const dirtyPrice = getDirtyPrice(marketPrice, accruedInterestPer100) || marketPrice;
                   const closePrice = toFiniteNumber(trade.closePrice, marketPrice);
-                  if (trade.status === 'closed') pnl = (((closePrice - cleanPrice) * faceValue) / 100) * mult - (toFiniteNumber(trade.commission)) - (toFiniteNumber(trade.closeCommission)); else if (isMaturedBond) pnl = (((100 - cleanPrice) * faceValue) / 100) * mult - (toFiniteNumber(trade.commission)); else pnl = ((((marketPrice - cleanPrice) * faceValue) / 100) * mult) - (toFiniteNumber(trade.commission));
                   return (
                     <tr key={trade.id} className="hover:bg-slate-50 transition-colors">
                       <td className="p-4 font-medium">{trade.cusip || '--'}<div className="text-[10px] text-slate-400">Mat: {trade.maturityDate}</div></td>
-                      <td className="p-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-sm ${trade.side === 'sell' ? 'bg-red-500' : 'bg-emerald-500'} mr-1`}>{trade.side.toUpperCase()}</span><span className="px-2 py-0.5 rounded text-[10px] uppercase font-bold bg-slate-200 text-slate-700">{trade.type}</span>{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉 ({trade.closeDate})</div>}</td>
+                      <td className="p-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-sm ${trade.side === 'sell' ? 'bg-red-500' : 'bg-emerald-500'} mr-1`}>{trade.side.toUpperCase()}</span><span className="px-2 py-0.5 rounded text-[10px] uppercase font-bold bg-slate-200 text-slate-700">{trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉 ({trade.closeDate})</div>}</td>
                       <td className="p-4 text-right">${faceValue.toLocaleString()}</td><td className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
                       {ledgerSubTab === 'active' ? (
-                        <><td className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">Save</button></div>) : (<div className="text-right"><span className="cursor-pointer text-blue-600 font-medium flex items-center justify-end" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></span>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">Accrued {accruedInterestPer100.toFixed(3)} · Dirty {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td className={`p-4 text-right font-bold ${pnl>=0?'text-green-600':'text-red-600'}`}>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</td></>
+                        <><td className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">Save</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">Accrued {accruedInterestPer100.toFixed(3)} · Dirty {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       ) : (
-                        <><td className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000 (Par)'}</td><td className={`p-4 text-right font-bold ${pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</td></>
+                        <><td className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000 (Par)'}</td><td className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       )}
-                      <td className="p-4 text-center"><div className="flex items-center justify-center space-x-2"><button onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button onClick={()=>{setClosingTradeId(trade.id); setCloseData({ ...closeData, closePrice: trade.currentMarketPrice }); setIsCloseModalOpen(true);}} className="text-orange-500 hover:bg-orange-50 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button onClick={() => deleteTradeFromDB(trade.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={16} /></button></div></td>
+                      <td className="p-4 text-center"><div className="flex items-center justify-center space-x-2"><button aria-label="編輯交易" title="編輯交易" onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button aria-label="平倉" onClick={()=>{setClosingTradeId(trade.id); setCloseData({ closeDate: formatDateOnly(new Date()), closePrice: trade.currentMarketPrice, closeCommission: 0, closeAccruedInterestPer100: '' }); setIsCloseModalOpen(true);}} className="text-orange-500 hover:bg-orange-50 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button aria-label="刪除交易" title="刪除交易" onClick={() => deleteTradeFromDB(trade.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={16} /></button></div></td>
                     </tr>
                   );
                 })}
@@ -1439,6 +1201,18 @@ export default function App() {
         </div>
       </nav>
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+        {dbError && (
+          <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex items-start gap-2">
+            <AlertCircle size={17} className="mt-0.5 flex-shrink-0" />
+            <span>{dbError}</span>
+          </div>
+        )}
+        {unsupportedTips.length > 0 && (
+          <div role="status" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-2">
+            <AlertCircle size={17} className="mt-0.5 flex-shrink-0" />
+            <span>偵測到 {unsupportedTips.length} 筆既有 TIPS。資料仍保留在帳本，但在加入 CPI index ratio 模型前不會計入估值、YTM、利息或 P&amp;L。</span>
+          </div>
+        )}
         <div className="-mx-4 sm:mx-0 mb-5 overflow-x-auto px-4 sm:px-0">
         <div className="flex w-max min-w-full sm:min-w-0 gap-1 bg-slate-200/70 p-1 rounded-xl shadow-inner">
           <button onClick={() => setActiveTab('trades')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
@@ -1481,7 +1255,7 @@ export default function App() {
                           {hasUserDeepSeekApiKey && <button type="button" onClick={handleClearApiKey} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-xs font-semibold">清除</button>}
                           <button type="button" onClick={() => setIsApiKeyOpen(false)} className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-lg text-xs font-semibold">取消</button>
                         </div>
-                        <p className="text-[11px] text-slate-500">Key 只會儲存在呢部機嘅瀏覽器 localStorage，不會寫入 Firestore 或備份檔。</p>
+                        <p className="text-[11px] text-slate-500">Key 只保留在目前頁面的記憶體；重新載入或關閉頁面後會自動清除，不會寫入 Firestore 或備份檔。</p>
                       </div>
                     )}
                   </div>
@@ -1489,7 +1263,7 @@ export default function App() {
                   <button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !hasAiTransport} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button>
                 </div>
               ) : (<>
-                <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">CUSIP / 名稱</label><input required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label><select required name="type" value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, couponRate: e.target.value==='t-bill'?0:formData.couponRate})} className="w-full p-2 border rounded-lg text-sm"><option value="t-bill">T-Bill</option><option value="t-note">T-Note</option><option value="t-bond">T-Bond</option><option value="tips">TIPS</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Action</label><select required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">BUY (買入)</option><option value="sell">SELL (沽空)</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label><input required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label><input required type="date" name="maturityDate" value={formData.maturityDate} onChange={(e)=>setFormData({...formData, maturityDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Face Value ($)</label><input required type="number" name="faceValue" value={formData.faceValue} onChange={(e)=>setFormData({...formData, faceValue: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label><input required type="number" step="0.001" name="cleanPrice" value={formData.cleanPrice} onChange={(e)=>setFormData({...formData, cleanPrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Commission ($)</label><input type="number" step="0.01" name="commission" value={formData.commission} onChange={(e)=>setFormData({...formData, commission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>{formData.type !== 't-bill' && (<><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate (%)</label><input required type="number" step="0.125" name="couponRate" value={formData.couponRate} onChange={(e)=>setFormData({...formData, couponRate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label><select name="couponFrequency" value={formData.couponFrequency} onChange={(e)=>setFormData({...formData, couponFrequency: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="12">Monthly</option><option value="4">Quarterly</option><option value="2">Semi-Annually</option><option value="1">Annually</option></select></div></>)}</div></form>
+                <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">CUSIP / 名稱</label><input required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label><select required name="type" value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, couponRate: e.target.value==='t-bill'?0:formData.couponRate})} className="w-full p-2 border rounded-lg text-sm"><option value="t-bill">T-Bill</option><option value="t-note">T-Note</option><option value="t-bond">T-Bond</option><option value="tips" disabled>TIPS（暫未支援）</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Action</label><select required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">BUY (買入)</option><option value="sell">SELL (沽空)</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label><input required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label><input required type="date" name="maturityDate" value={formData.maturityDate} onChange={(e)=>setFormData({...formData, maturityDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Face Value ($)</label><input required type="number" name="faceValue" value={formData.faceValue} onChange={(e)=>setFormData({...formData, faceValue: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label><input required type="number" step="0.001" name="cleanPrice" value={formData.cleanPrice} onChange={(e)=>setFormData({...formData, cleanPrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Commission ($)</label><input type="number" step="0.01" name="commission" value={formData.commission} onChange={(e)=>setFormData({...formData, commission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>{formData.type !== 't-bill' && (<><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate (%)</label><input required type="number" step="0.125" name="couponRate" value={formData.couponRate} onChange={(e)=>setFormData({...formData, couponRate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label><select name="couponFrequency" value={formData.couponFrequency} onChange={(e)=>setFormData({...formData, couponFrequency: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="12">Monthly</option><option value="4">Quarterly</option><option value="2">Semi-Annually</option><option value="1">Annually</option></select></div></>)}</div></form>
                 {isCouponTreasury(formData) && (
                   <div className="mt-4">
                     <label className="block text-xs font-medium text-slate-500 mb-1">Accrued Interest / 100 (optional)</label>
@@ -1508,7 +1282,13 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
             <div className="p-5 bg-orange-50 border-b border-orange-100 flex justify-between items-center"><h2 className="text-lg font-bold text-orange-800 flex items-center"><LogOut size={20} className="mr-2"/> 平倉結算</h2></div>
-            <form id="closeForm" onSubmit={handleClosePosition} className="p-5 space-y-4"><p className="text-sm text-slate-600 mb-4">平倉後，該筆債券會移入「已結算區」，利潤將被鎖定。</p><div><label className="block text-xs font-medium text-slate-500 mb-1">賣出/平倉日期</label><input required type="date" value={closeData.closeDate} onChange={(e)=>setCloseData({...closeData, closeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">成交價 (Close Price)</label><input required type="number" step="0.001" value={closeData.closePrice} onChange={(e)=>setCloseData({...closeData, closePrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">平倉手續費 ($)</label><input type="number" step="0.01" value={closeData.closeCommission} onChange={(e)=>setCloseData({...closeData, closeCommission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div></form>
+            <form id="closeForm" onSubmit={handleClosePosition} className="p-5 space-y-4">
+              <p className="text-sm text-slate-600 mb-4">平倉後，該筆債券會移入「已結算區」，利潤會按 dirty price（clean price + accrued interest）鎖定。</p>
+              <div><label className="block text-xs font-medium text-slate-500 mb-1">賣出/平倉日期</label><input required type="date" value={closeData.closeDate} onChange={(e)=>setCloseData({...closeData, closeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+              <div><label className="block text-xs font-medium text-slate-500 mb-1">成交價 (Clean Close Price)</label><input required type="number" step="0.001" value={closeData.closePrice} onChange={(e)=>setCloseData({...closeData, closePrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+              {isCouponTreasury(trades.find((trade) => trade.id === closingTradeId)) && <div><label className="block text-xs font-medium text-slate-500 mb-1">平倉 Accrued Interest / 100（可選）</label><input type="number" min="0" step="0.001" value={closeData.closeAccruedInterestPer100} onChange={(e)=>setCloseData({...closeData, closeAccruedInterestPer100: e.target.value})} placeholder="Auto" className="w-full p-2 border rounded-lg text-sm" /></div>}
+              <div><label className="block text-xs font-medium text-slate-500 mb-1">平倉手續費 ($)</label><input type="number" step="0.01" value={closeData.closeCommission} onChange={(e)=>setCloseData({...closeData, closeCommission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+            </form>
             <div className="p-5 border-t bg-slate-50 flex justify-end space-x-3"><button onClick={() => setIsCloseModalOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg">取消</button><button type="submit" form="closeForm" className="px-4 py-2 text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-lg shadow-sm">確認平倉</button></div>
           </div>
         </div>

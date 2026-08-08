@@ -55,7 +55,7 @@ const fetchYieldCurve = async ({ bypassCache = false } = {}) => {
   const base = import.meta.env.BASE_URL || '/';
   const suffix = bypassCache ? `?refresh=${Date.now()}` : '';
   const res = await fetch(`${base}yield-curve.json${suffix}`, { cache: bypassCache ? 'no-store' : 'default' });
-  if (!res.ok) throw new Error(`yield-curve.json HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`收益率曲線資料請求失敗（HTTP ${res.status}）`);
   const data = await res.json();
   if (!data.points || data.points.length === 0) throw new Error('yield-curve.json 無資料');
   return data;
@@ -103,7 +103,7 @@ const parseJsonObject = (text) => {
     return JSON.parse(cleaned);
   } catch {
     const match = cleaned.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('AI response did not contain JSON');
+    if (!match) throw new Error('人工智能回應未包含 JSON');
     return JSON.parse(match[0]);
   }
 };
@@ -157,7 +157,7 @@ const callDeepSeekDirect = async ({ messages, userApiKey, temperature = 0.2, res
   });
 
   const text = result?.choices?.[0]?.message?.content;
-  if (!text) throw new Error('DeepSeek response was empty');
+  if (!text) throw new Error('DeepSeek 沒有回傳內容');
   return text;
 };
 
@@ -288,7 +288,7 @@ export default function App() {
           if (!Number.isFinite(cleanMarketPrice) || cleanMarketPrice <= 0) return;
           await saveTradeToDB({ ...trade, currentMarketPrice: roundMarketPriceForStorage(cleanMarketPrice), priceUpdatedAt: curveDate });
         } catch (err) {
-          console.error('Market price update failed:', trade.id, err);
+          console.error('更新市場價格失敗：', trade.id, err);
         } finally {
           priceUpdatesInFlightRef.current.delete(trade.id);
         }
@@ -319,7 +319,7 @@ export default function App() {
       setIsDbReady(true);
       setDbError('');
     }, (error) => {
-      console.error("Firestore error:", error);
+      console.error("Firestore 錯誤：", error);
       setDbError('無法同步 Firestore。請檢查網絡、Firebase 設定及安全規則後重試。');
       setIsDbReady(true);
     });
@@ -535,7 +535,7 @@ export default function App() {
       return;
     }
     if (isCouponTreasury(formData) && (!Number.isFinite(couponRate) || couponRate < 0 || ![1, 2, 4, 12].includes(couponFrequency))) {
-      alert('請輸入有效 coupon rate 及派息頻率。');
+      alert('請輸入有效票息率及派息頻率。');
       return;
     }
     const existingTrade = editingTradeId ? trades.find(t => t.id === editingTradeId) : null;
@@ -567,7 +567,7 @@ export default function App() {
     const closeCommission = Number(closeData.closeCommission || 0);
     const closeAccruedInterest = closeData.closeAccruedInterestPer100 === '' ? null : Number(closeData.closeAccruedInterestPer100);
     if (!Number.isFinite(closePrice) || closePrice <= 0 || !Number.isFinite(closeCommission) || closeCommission < 0 || (closeAccruedInterest != null && (!Number.isFinite(closeAccruedInterest) || closeAccruedInterest < 0))) {
-      alert('平倉價格必須大於 0，手續費及 accrued interest 不可為負數。');
+      alert('平倉價格必須大於 0，手續費及應計利息不可為負數。');
       return;
     }
     const updatedTrade = normalizeTradeForStorage({
@@ -613,11 +613,11 @@ export default function App() {
 
   const handleSmartParse = async () => {
     if (!rawTradeText.trim()) return;
-    if (!hasAiTransport) { alert("請先按 API Key 輸入 DeepSeek key。"); return; }
+    if (!hasAiTransport) { alert("請先按「設定 API Key」輸入 DeepSeek 金鑰。"); return; }
     setIsParsing(true);
     try {
       const parsedData = await extractTradeData(rawTradeText, userDeepSeekApiKey);
-      if (!isSupportedTreasuryType(parsedData)) throw new Error('TIPS is not supported');
+      if (!isSupportedTreasuryType(parsedData)) throw new Error('暫未支援 TIPS');
       setFormData({ ...defaultForm, ...parsedData });
       setSmartInputMode(false); setRawTradeText('');
     } catch { alert("無法解析文字，請檢查格式。"); } finally { setIsParsing(false); }
@@ -659,25 +659,25 @@ export default function App() {
         for (let i = 0; i < imported.length; i++) {
           const prefix = `第 ${i + 1} 筆`;
           const rawTrade = imported[i];
-          if (!rawTrade || typeof rawTrade !== 'object' || Array.isArray(rawTrade)) { errors.push(`${prefix}: 格式不是物件`); continue; }
+          if (!rawTrade || typeof rawTrade !== 'object' || Array.isArray(rawTrade)) { errors.push(`${prefix}：格式不是物件`); continue; }
           const trade = normalizeTradeForStorage(rawTrade);
-          if (existingIds.has(trade.id)) { errors.push(`${prefix}: 重複 id`); continue; }
-          if (trade.type === 'tips') { errors.push(`${prefix}: TIPS 暫未支援，資料未匯入`); continue; }
-          if (!validTypes.has(trade.type)) { errors.push(`${prefix}: type 無效`); continue; }
-          if (!validSides.has(trade.side)) { errors.push(`${prefix}: side 無效`); continue; }
-          if (!validStatus.has(imported[i]?.status)) { errors.push(`${prefix}: status 無效`); continue; }
-          if (!isValidISODate(trade.tradeDate) || !isValidISODate(trade.maturityDate)) { errors.push(`${prefix}: 日期格式或日期值無效`); continue; }
-          if (toDateAtMidnight(trade.maturityDate) <= toDateAtMidnight(trade.tradeDate)) { errors.push(`${prefix}: maturityDate 必須晚於 tradeDate`); continue; }
-          if (!Number.isFinite(trade.faceValue) || trade.faceValue <= 0) { errors.push(`${prefix}: faceValue 無效`); continue; }
-          if (!Number.isFinite(trade.cleanPrice) || trade.cleanPrice <= 0) { errors.push(`${prefix}: cleanPrice 無效`); continue; }
-          if (!Number.isFinite(trade.currentMarketPrice) || trade.currentMarketPrice <= 0) { errors.push(`${prefix}: currentMarketPrice 無效`); continue; }
-          if (!Number.isFinite(trade.commission) || trade.commission < 0) { errors.push(`${prefix}: commission 無效`); continue; }
-          if (trade.type !== 't-bill' && (!Number.isFinite(trade.couponRate) || trade.couponRate < 0)) { errors.push(`${prefix}: couponRate 無效`); continue; }
-          if (trade.type !== 't-bill' && !validFreq.has(trade.couponFrequency)) { errors.push(`${prefix}: couponFrequency 無效`); continue; }
-          if (trade.status === 'closed' && (!isValidISODate(trade.closeDate) || toDateAtMidnight(trade.closeDate) < toDateAtMidnight(trade.tradeDate) || toDateAtMidnight(trade.closeDate) > toDateAtMidnight(trade.maturityDate) || !Number.isFinite(trade.closePrice) || trade.closePrice <= 0 || trade.closeCommission < 0)) { errors.push(`${prefix}: closed trade 缺少有效 closeDate/closePrice`); continue; }
+          if (existingIds.has(trade.id)) { errors.push(`${prefix}：交易識別碼（id）重複`); continue; }
+          if (trade.type === 'tips') { errors.push(`${prefix}：TIPS 暫未支援，資料未匯入`); continue; }
+          if (!validTypes.has(trade.type)) { errors.push(`${prefix}：債券類型（type）無效`); continue; }
+          if (!validSides.has(trade.side)) { errors.push(`${prefix}：交易方向（side）無效`); continue; }
+          if (!validStatus.has(imported[i]?.status)) { errors.push(`${prefix}：狀態（status）無效`); continue; }
+          if (!isValidISODate(trade.tradeDate) || !isValidISODate(trade.maturityDate)) { errors.push(`${prefix}：日期格式或日期值無效`); continue; }
+          if (toDateAtMidnight(trade.maturityDate) <= toDateAtMidnight(trade.tradeDate)) { errors.push(`${prefix}：到期日（maturityDate）必須晚於交易日（tradeDate）`); continue; }
+          if (!Number.isFinite(trade.faceValue) || trade.faceValue <= 0) { errors.push(`${prefix}：面值（faceValue）無效`); continue; }
+          if (!Number.isFinite(trade.cleanPrice) || trade.cleanPrice <= 0) { errors.push(`${prefix}：淨價（cleanPrice）無效`); continue; }
+          if (!Number.isFinite(trade.currentMarketPrice) || trade.currentMarketPrice <= 0) { errors.push(`${prefix}：目前市場價格（currentMarketPrice）無效`); continue; }
+          if (!Number.isFinite(trade.commission) || trade.commission < 0) { errors.push(`${prefix}：手續費（commission）無效`); continue; }
+          if (trade.type !== 't-bill' && (!Number.isFinite(trade.couponRate) || trade.couponRate < 0)) { errors.push(`${prefix}：票息率（couponRate）無效`); continue; }
+          if (trade.type !== 't-bill' && !validFreq.has(trade.couponFrequency)) { errors.push(`${prefix}：派息頻率（couponFrequency）無效`); continue; }
+          if (trade.status === 'closed' && (!isValidISODate(trade.closeDate) || toDateAtMidnight(trade.closeDate) < toDateAtMidnight(trade.tradeDate) || toDateAtMidnight(trade.closeDate) > toDateAtMidnight(trade.maturityDate) || !Number.isFinite(trade.closePrice) || trade.closePrice <= 0 || trade.closeCommission < 0)) { errors.push(`${prefix}：已平倉交易缺少有效 closeDate／closePrice`); continue; }
 
           const fp = `${trade.cusip || ''}|${trade.tradeDate || ''}|${trade.faceValue || 0}`;
-          if (existingFingerprints.has(fp)) { errors.push(`${prefix}: 疑似重複交易 (CUSIP+TradeDate+FaceValue)`); continue; }
+          if (existingFingerprints.has(fp)) { errors.push(`${prefix}：疑似重複交易（CUSIP＋交易日期＋面值）`); continue; }
 
           try {
             await saveTradeToDB(trade);
@@ -685,8 +685,8 @@ export default function App() {
             existingFingerprints.add(fp);
             added++;
           } catch (error) {
-            console.error('Import write failed:', trade.id, error);
-            errors.push(`${prefix}: Firestore 寫入失敗`);
+            console.error('匯入資料寫入失敗：', trade.id, error);
+            errors.push(`${prefix}：Firestore 寫入失敗`);
           }
         }
 
@@ -716,7 +716,7 @@ export default function App() {
           <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg">
             <Landmark size={32} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">Bond Ledger</h1>
+          <h1 className="text-2xl font-bold text-slate-800 mb-2">美國國債帳本</h1>
           <p className="text-slate-500 mb-8 text-sm">請登入以管理你的專屬債券帳本，數據將安全同步至雲端，隨時隨地查閱。</p>
           <button onClick={handleGoogleLogin} className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium py-3 px-4 rounded-xl flex items-center justify-center transition-all shadow-sm">
             <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
@@ -746,7 +746,7 @@ export default function App() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
           <div className="p-2.5 sm:p-3 bg-blue-50 text-blue-600 rounded-lg flex-shrink-0"><DollarSign size={20} className="sm:hidden" /><DollarSign size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債 Clean Market Value</p><p className="text-base sm:text-xl font-bold text-slate-800 truncate">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p><p className="text-[10px] text-slate-400 truncate">Full ${portfolioMetrics.totalFullMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} · Accrued ${portfolioMetrics.totalAccruedInterest.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債淨價市值</p><p className="text-base sm:text-xl font-bold text-slate-800 truncate">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p><p className="text-[10px] text-slate-400 truncate">全價 ${portfolioMetrics.totalFullMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} · 應計利息 ${portfolioMetrics.totalAccruedInterest.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
         </div>
         <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
           <div className={`p-2.5 sm:p-3 rounded-lg flex-shrink-0 ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}><Activity size={20} className="sm:hidden" /><Activity size={24} className="hidden sm:block" /></div>
@@ -763,21 +763,21 @@ export default function App() {
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
         <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100">
-          <h3 className="text-sm sm:text-base font-bold text-slate-800 mb-3 flex items-center"><TrendingUp size={16} className="mr-2 text-blue-500"/> Benchmark 對比</h3>
+          <h3 className="text-sm sm:text-base font-bold text-slate-800 mb-3 flex items-center"><TrendingUp size={16} className="mr-2 text-blue-500"/> 基準對比</h3>
           <div className="flex items-center gap-2 mb-3">
             <select value={selectedBenchmark} onChange={(e) => setSelectedBenchmark(e.target.value)} className="text-xs sm:text-sm border rounded-md px-2 py-1">
-              <option value="UST10Y">UST 10Y</option>
-              <option value="SGOV">SGOV (~3M)</option>
-              <option value="SHY">SHY (~2Y)</option>
-              <option value="IEF">IEF (~7Y)</option>
-              <option value="TLT">TLT (~20Y)</option>
+              <option value="UST10Y">UST 10 年</option>
+              <option value="SGOV">SGOV（約 3 個月）</option>
+              <option value="SHY">SHY（約 2 年）</option>
+              <option value="IEF">IEF（約 7 年）</option>
+              <option value="TLT">TLT（約 20 年）</option>
             </select>
-            <span className="text-[11px] text-slate-500">Curve tenor: {benchmarkMetrics.benchmarkYears}Y</span>
+            <span className="text-[11px] text-slate-500">曲線年期：{benchmarkMetrics.benchmarkYears} 年</span>
           </div>
           <div className="grid grid-cols-3 gap-2">
             <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">美債組合 YTM</p><p className={`font-bold ${benchmarkMetrics.portfolioYield == null ? 'text-slate-400' : ''}`}>{benchmarkMetrics.portfolioYield == null ? '--' : `${benchmarkMetrics.portfolioYield.toFixed(2)}%`}</p></div>
-            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Benchmark YTM</p><p className="font-bold">{benchmarkMetrics.benchmarkYield == null ? '—' : `${benchmarkMetrics.benchmarkYield.toFixed(2)}%`}</p></div>
-            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">Spread</p><p className={`font-bold ${benchmarkMetrics.spread == null ? 'text-slate-400' : benchmarkMetrics.spread >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{benchmarkMetrics.spread == null ? '—' : `${benchmarkMetrics.spread >= 0 ? '+' : ''}${benchmarkMetrics.spread.toFixed(2)}%`}</p></div>
+            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">基準 YTM</p><p className="font-bold">{benchmarkMetrics.benchmarkYield == null ? '—' : `${benchmarkMetrics.benchmarkYield.toFixed(2)}%`}</p></div>
+            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">利差</p><p className={`font-bold ${benchmarkMetrics.spread == null ? 'text-slate-400' : benchmarkMetrics.spread >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{benchmarkMetrics.spread == null ? '—' : `${benchmarkMetrics.spread >= 0 ? '+' : ''}${benchmarkMetrics.spread.toFixed(2)}%`}</p></div>
           </div>
         </div>
         <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100">
@@ -800,14 +800,14 @@ export default function App() {
           <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
             <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><TrendingUp className="mr-2 text-blue-500" size={18}/> 美債收益率曲線</h3>
             <div className="flex items-center gap-3 text-[10px]">
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>Buy</span>
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"></span>Short</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>買入</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"></span>賣空</span>
             </div>
           </div>
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={yieldCurveChartData.curvePoints} margin={{ top: 20, right: 15, bottom: 0, left: -15 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="years" type="number" tick={{ fontSize: 10 }} unit="yr" domain={[0, 30]} />
+              <XAxis dataKey="years" type="number" tick={{ fontSize: 10 }} unit="年" domain={[0, 30]} />
               <YAxis tick={{ fontSize: 10 }} domain={['auto', 'auto']} unit="%" />
               <Tooltip formatter={(v) => [`${Number(v).toFixed(2)}%`, '收益率']} labelFormatter={(v) => `${Number(v).toFixed(1)} 年`} />
               <Line type="monotone" dataKey="yield" stroke="#3b82f6" strokeWidth={2.5} dot={false} />
@@ -841,7 +841,7 @@ export default function App() {
           <span className="text-[11px] text-slate-400 font-medium">${couponCalendar.reduce((s, v) => s + v, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
         </div>
         <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2">
-          {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((label, m) => {
+          {['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'].map((label, m) => {
             const total = couponCalendar[m];
             const has = total !== 0;
             const past = m < todayObj.getMonth();
@@ -861,7 +861,7 @@ export default function App() {
         <div className="flex flex-wrap justify-between items-center gap-2 mb-4 border-b border-slate-100 pb-3">
           <div>
             <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={18}/> 債券到期倒數</h3>
-            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-1">Current YTM is calculated from current clean market price + accrued interest, using today as valuation date.</p>
+            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-1">現時 YTM 以目前市場淨價加應計利息計算，並以今日作為估值日。</p>
           </div>
           <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-500">
             {yieldCurve?.updatedAt && <span className="bg-slate-100 px-2 py-0.5 rounded-md">FRED · {yieldCurve.updatedAt}</span>}
@@ -982,10 +982,10 @@ export default function App() {
               <div>
                 <label className="block text-xs font-medium text-slate-500 mb-1">債券類型</label>
                 <select value={ytmForm.type} onChange={(e) => setYtmForm(prev => ({ ...prev, type: e.target.value, accruedInterestPer100: e.target.value === 't-bill' ? '' : prev.accruedInterestPer100 }))} className="w-full p-2 border rounded-lg text-sm bg-white">
-                  <option value="t-bill">T-Bill</option>
-                  <option value="t-note">T-Note</option>
-                  <option value="t-bond">T-Bond</option>
-                  <option value="tips" disabled>TIPS（暫未支援）</option>
+                  <option value="t-bill">短期國庫券（T-Bill）</option>
+                  <option value="t-note">中期國庫券（T-Note）</option>
+                  <option value="t-bond">長期國庫券（T-Bond）</option>
+                  <option value="tips" disabled>通脹保值國債（TIPS，暫未支援）</option>
                 </select>
               </div>
               <div>
@@ -1025,8 +1025,8 @@ export default function App() {
                   </div>
                   {isCouponTreasury(ytmForm) && (
                     <div className="col-span-2">
-                      <label className="block text-xs font-medium text-slate-500 mb-1">Accrued Interest / 100 (optional)</label>
-                      <input type="number" min="0" step="0.001" value={ytmForm.accruedInterestPer100} onChange={(e) => update('accruedInterestPer100', e.target.value)} placeholder="Auto" className="w-full p-2 border rounded-lg text-sm" />
+                      <label className="block text-xs font-medium text-slate-500 mb-1">每 100 元面值的應計利息（可選）</label>
+                      <input type="number" min="0" step="0.001" value={ytmForm.accruedInterestPer100} onChange={(e) => update('accruedInterestPer100', e.target.value)} placeholder="自動計算" className="w-full p-2 border rounded-lg text-sm" />
                     </div>
                   )}
                 </>
@@ -1042,11 +1042,11 @@ export default function App() {
                 <>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     <div className="p-3 rounded-lg bg-blue-50 border border-blue-100">
-                      <p className="text-[11px] text-blue-700 font-semibold">Net Settlement YTM</p>
+                      <p className="text-[11px] text-blue-700 font-semibold">扣除結算成本後 YTM</p>
                       <p className="text-xl font-bold text-blue-700 mt-1">{pct(ytmQuote.netYtm)}</p>
                     </div>
                     <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
-                      <p className="text-[11px] text-slate-500 font-semibold">Clean-price reference YTM</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">淨價參考 YTM</p>
                       <p className="text-xl font-bold text-slate-800 mt-1">{pct(ytmQuote.grossYtm)}</p>
                     </div>
                     <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100">
@@ -1059,19 +1059,19 @@ export default function App() {
 
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">Clean Price</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">淨價</p>
                       <p className="font-bold text-slate-800">{ytmQuote.cleanPrice.toFixed(3)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">Accrued Interest / 100</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">每 100 元面值的應計利息</p>
                       <p className="font-bold text-slate-800">{ytmQuote.accruedInterestPer100.toFixed(3)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">Dirty Price</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">全價</p>
                       <p className="font-bold text-slate-800">{ytmQuote.dirtyPrice.toFixed(3)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">Dirty + Commission / 100</p>
+                      <p className="text-[11px] text-slate-500 font-semibold">每 100 元面值的全價連手續費</p>
                       <p className="font-bold text-slate-800">{ytmQuote.priceWithCommission.toFixed(3)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
@@ -1137,11 +1137,11 @@ export default function App() {
         </div>
         <div className="overflow-x-auto">
           {ledgerSubTab === 'coupons' ? (
-             <table className="w-full text-left text-sm whitespace-nowrap"><thead className="bg-emerald-50 text-emerald-800 font-medium"><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP / Type</th><th className="p-4 text-right">派息金額 (USD)</th></tr></thead><tbody className="divide-y divide-slate-100">{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id} className="hover:bg-slate-50"><td className="p-4 font-medium text-slate-700">{c.dateStr}</td><td className="p-4 text-slate-600">{c.cusip}</td><td className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</td></tr>))}</tbody></table>
+             <table className="w-full text-left text-sm whitespace-nowrap"><thead className="bg-emerald-50 text-emerald-800 font-medium"><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP／類型</th><th className="p-4 text-right">派息金額（美元）</th></tr></thead><tbody className="divide-y divide-slate-100">{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id} className="hover:bg-slate-50"><td className="p-4 font-medium text-slate-700">{c.dateStr}</td><td className="p-4 text-slate-600">{c.cusip}</td><td className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</td></tr>))}</tbody></table>
           ) : (
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-white text-slate-600 font-medium border-b border-slate-200">
-                <tr><th className="p-4">CUSIP</th><th className="p-4">Action/Type</th><th className="p-4 text-right">Face Value</th><th className="p-4 text-right">Cost (Clean)</th>{ledgerSubTab === 'active' ? <><th className="p-4 text-right text-blue-600">Clean Market Price</th><th className="p-4 text-right">Unrealized PnL</th></> : <><th className="p-4 text-right">Close Price</th><th className="p-4 text-right text-emerald-600">Realized PnL</th></>}<th className="p-4 text-center">Action</th></tr>
+                <tr><th className="p-4">CUSIP</th><th className="p-4">方向／類型</th><th className="p-4 text-right">面值</th><th className="p-4 text-right">成本（淨價）</th>{ledgerSubTab === 'active' ? <><th className="p-4 text-right text-blue-600">市場淨價</th><th className="p-4 text-right">未實現損益</th></> : <><th className="p-4 text-right">平倉價</th><th className="p-4 text-right text-emerald-600">已實現損益</th></>}<th className="p-4 text-center">操作</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-700">
                 {displayedTrades.length === 0 ? <tr><td colSpan="8" className="p-8 text-center text-slate-400">無紀錄。</td></tr> : displayedTrades.map(trade => {
@@ -1156,13 +1156,13 @@ export default function App() {
                   const closePrice = toFiniteNumber(trade.closePrice, marketPrice);
                   return (
                     <tr key={trade.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 font-medium">{trade.cusip || '--'}<div className="text-[10px] text-slate-400">Mat: {trade.maturityDate}</div></td>
-                      <td className="p-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-sm ${trade.side === 'sell' ? 'bg-red-500' : 'bg-emerald-500'} mr-1`}>{trade.side.toUpperCase()}</span><span className="px-2 py-0.5 rounded text-[10px] uppercase font-bold bg-slate-200 text-slate-700">{trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉 ({trade.closeDate})</div>}</td>
+                      <td className="p-4 font-medium">{trade.cusip || '--'}<div className="text-[10px] text-slate-400">到期：{trade.maturityDate}</div></td>
+                      <td className="p-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-sm ${trade.side === 'sell' ? 'bg-red-500' : 'bg-emerald-500'} mr-1`}>{trade.side === 'sell' ? '賣空' : '買入'}</span><span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700">{{ 't-bill': '短期國庫券', 't-note': '中期國庫券', 't-bond': '長期國庫券', tips: '通脹保值國債' }[trade.type] || trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉（{trade.closeDate}）</div>}</td>
                       <td className="p-4 text-right">${faceValue.toLocaleString()}</td><td className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
                       {ledgerSubTab === 'active' ? (
-                        <><td className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">Save</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">Accrued {accruedInterestPer100.toFixed(3)} · Dirty {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
+                        <><td className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       ) : (
-                        <><td className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000 (Par)'}</td><td className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
+                        <><td className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000（面值）'}</td><td className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       )}
                       <td className="p-4 text-center"><div className="flex items-center justify-center space-x-2"><button aria-label="編輯交易" title="編輯交易" onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button aria-label="平倉" onClick={()=>{setClosingTradeId(trade.id); setCloseData({ closeDate: formatDateOnly(new Date()), closePrice: trade.currentMarketPrice, closeCommission: 0, closeAccruedInterestPer100: '' }); setIsCloseModalOpen(true);}} className="text-orange-500 hover:bg-orange-50 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button aria-label="刪除交易" title="刪除交易" onClick={() => deleteTradeFromDB(trade.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={16} /></button></div></td>
                     </tr>
@@ -1181,8 +1181,8 @@ export default function App() {
       <nav className="bg-slate-900 text-white px-4 py-2.5 sm:py-3 sticky top-0 z-20 shadow-md">
         <div className="max-w-7xl mx-auto flex justify-between items-center gap-3">
           <div className="flex items-center space-x-2.5 min-w-0">
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center font-bold text-sm shadow-sm flex-shrink-0">BL</div>
-            <h1 className="text-base sm:text-xl font-bold tracking-tight truncate">Bond Ledger</h1>
+            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center font-bold text-sm shadow-sm flex-shrink-0">債</div>
+            <h1 className="text-base sm:text-xl font-bold tracking-tight truncate">美國國債帳本</h1>
           </div>
           {user && (
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
@@ -1210,7 +1210,7 @@ export default function App() {
         {unsupportedTips.length > 0 && (
           <div role="status" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-2">
             <AlertCircle size={17} className="mt-0.5 flex-shrink-0" />
-            <span>偵測到 {unsupportedTips.length} 筆既有 TIPS。資料仍保留在帳本，但在加入 CPI index ratio 模型前不會計入估值、YTM、利息或 P&amp;L。</span>
+            <span>偵測到 {unsupportedTips.length} 筆既有 TIPS。資料仍保留在帳本，但在加入 CPI 指數比率模型前不會計入估值、YTM、利息或損益。</span>
           </div>
         )}
         <div className="-mx-4 sm:mx-0 mb-5 overflow-x-auto px-4 sm:px-0">
@@ -1219,7 +1219,7 @@ export default function App() {
             <History size={15}/> 債券帳本
           </button>
           <button onClick={() => setActiveTab('ytm')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'ytm' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
-            <Calculator size={15}/> YTM 試算
+            <Calculator size={15}/> 到期收益率試算
           </button>
           <button onClick={() => setActiveTab('dashboard')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
             <TrendingUp size={15}/> 債券分析
@@ -1240,22 +1240,22 @@ export default function App() {
                   <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <p className="text-sm font-semibold text-slate-800">AI 交易單據解析</p>
+                        <p className="text-sm font-semibold text-slate-800">人工智能交易單據解析</p>
                         <p className="text-xs text-slate-500 mt-0.5">只用於把債券交易文字轉成目前債券表單格式。</p>
                       </div>
                       <button type="button" onClick={openApiKeySettings} className={`border px-3 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center ${hasUserDeepSeekApiKey ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-indigo-200 text-indigo-700'}`}>
-                        <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人 Key 已設定' : '設定 API Key'}
+                        <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人金鑰已設定' : '設定 API Key'}
                       </button>
                     </div>
                     {isApiKeyOpen && (
                       <div className="mt-3 space-y-2">
-                        <input type="password" value={apiKeyDraft} onChange={(e) => setApiKeyDraft(e.target.value)} placeholder="Paste your DeepSeek API key" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" autoComplete="off" />
+                        <input type="password" value={apiKeyDraft} onChange={(e) => setApiKeyDraft(e.target.value)} placeholder="貼上你的 DeepSeek API Key" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" autoComplete="off" />
                         <div className="flex flex-wrap gap-2">
                           <button type="button" onClick={handleSaveApiKey} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-xs font-semibold">儲存</button>
                           {hasUserDeepSeekApiKey && <button type="button" onClick={handleClearApiKey} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-xs font-semibold">清除</button>}
                           <button type="button" onClick={() => setIsApiKeyOpen(false)} className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-lg text-xs font-semibold">取消</button>
                         </div>
-                        <p className="text-[11px] text-slate-500">Key 只保留在目前頁面的記憶體；重新載入或關閉頁面後會自動清除，不會寫入 Firestore 或備份檔。</p>
+                        <p className="text-[11px] text-slate-500">金鑰只保留在目前頁面的記憶體；重新載入或關閉頁面後會自動清除，不會寫入 Firestore 或備份檔。</p>
                       </div>
                     )}
                   </div>
@@ -1263,11 +1263,11 @@ export default function App() {
                   <button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !hasAiTransport} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button>
                 </div>
               ) : (<>
-                <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">CUSIP / 名稱</label><input required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Bond Type</label><select required name="type" value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, couponRate: e.target.value==='t-bill'?0:formData.couponRate})} className="w-full p-2 border rounded-lg text-sm"><option value="t-bill">T-Bill</option><option value="t-note">T-Note</option><option value="t-bond">T-Bond</option><option value="tips" disabled>TIPS（暫未支援）</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Action</label><select required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">BUY (買入)</option><option value="sell">SELL (沽空)</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Trade Date</label><input required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Maturity Date</label><input required type="date" name="maturityDate" value={formData.maturityDate} onChange={(e)=>setFormData({...formData, maturityDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Face Value ($)</label><input required type="number" name="faceValue" value={formData.faceValue} onChange={(e)=>setFormData({...formData, faceValue: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Clean Price</label><input required type="number" step="0.001" name="cleanPrice" value={formData.cleanPrice} onChange={(e)=>setFormData({...formData, cleanPrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">Commission ($)</label><input type="number" step="0.01" name="commission" value={formData.commission} onChange={(e)=>setFormData({...formData, commission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>{formData.type !== 't-bill' && (<><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">Coupon Rate (%)</label><input required type="number" step="0.125" name="couponRate" value={formData.couponRate} onChange={(e)=>setFormData({...formData, couponRate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label><select name="couponFrequency" value={formData.couponFrequency} onChange={(e)=>setFormData({...formData, couponFrequency: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="12">Monthly</option><option value="4">Quarterly</option><option value="2">Semi-Annually</option><option value="1">Annually</option></select></div></>)}</div></form>
+                <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4"><div className="grid grid-cols-2 gap-4"><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">CUSIP／名稱</label><input required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">債券類型</label><select required name="type" value={formData.type} onChange={(e)=>setFormData({...formData, type: e.target.value, couponRate: e.target.value==='t-bill'?0:formData.couponRate})} className="w-full p-2 border rounded-lg text-sm"><option value="t-bill">短期國庫券（T-Bill）</option><option value="t-note">中期國庫券（T-Note）</option><option value="t-bond">長期國庫券（T-Bond）</option><option value="tips" disabled>通脹保值國債（TIPS，暫未支援）</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">交易方向</label><select required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">買入</option><option value="sell">賣空</option></select></div><div><label className="block text-xs font-medium text-slate-500 mb-1">交易日期</label><input required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">到期日</label><input required type="date" name="maturityDate" value={formData.maturityDate} onChange={(e)=>setFormData({...formData, maturityDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">面值（美元）</label><input required type="number" name="faceValue" value={formData.faceValue} onChange={(e)=>setFormData({...formData, faceValue: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">淨價</label><input required type="number" step="0.001" name="cleanPrice" value={formData.cleanPrice} onChange={(e)=>setFormData({...formData, cleanPrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div><label className="block text-xs font-medium text-slate-500 mb-1">手續費（美元）</label><input type="number" step="0.01" name="commission" value={formData.commission} onChange={(e)=>setFormData({...formData, commission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>{formData.type !== 't-bill' && (<><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">票息率（%）</label><input required type="number" step="0.125" name="couponRate" value={formData.couponRate} onChange={(e)=>setFormData({...formData, couponRate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div><div className="col-span-2"><label className="block text-xs font-medium text-slate-500 mb-1">派息頻率</label><select name="couponFrequency" value={formData.couponFrequency} onChange={(e)=>setFormData({...formData, couponFrequency: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="12">每月一次</option><option value="4">每季一次</option><option value="2">半年一次</option><option value="1">每年一次</option></select></div></>)}</div></form>
                 {isCouponTreasury(formData) && (
                   <div className="mt-4">
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Accrued Interest / 100 (optional)</label>
-                    <input type="number" min="0" step="0.001" value={formData.accruedInterestPer100 || ''} onChange={(e)=>setFormData({...formData, accruedInterestPer100: e.target.value})} placeholder="Auto" className="w-full p-2 border rounded-lg text-sm" />
+                    <label className="block text-xs font-medium text-slate-500 mb-1">每 100 元面值的應計利息（可選）</label>
+                    <input type="number" min="0" step="0.001" value={formData.accruedInterestPer100 || ''} onChange={(e)=>setFormData({...formData, accruedInterestPer100: e.target.value})} placeholder="自動計算" className="w-full p-2 border rounded-lg text-sm" />
                   </div>
                 )}
               </>)}
@@ -1283,11 +1283,11 @@ export default function App() {
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
             <div className="p-5 bg-orange-50 border-b border-orange-100 flex justify-between items-center"><h2 className="text-lg font-bold text-orange-800 flex items-center"><LogOut size={20} className="mr-2"/> 平倉結算</h2></div>
             <form id="closeForm" onSubmit={handleClosePosition} className="p-5 space-y-4">
-              <p className="text-sm text-slate-600 mb-4">平倉後，該筆債券會移入「已結算區」，利潤會按 dirty price（clean price + accrued interest）鎖定。</p>
+              <p className="text-sm text-slate-600 mb-4">平倉後，該筆債券會移入「已結算區」，利潤會按全價（淨價加應計利息）鎖定。</p>
               <div><label className="block text-xs font-medium text-slate-500 mb-1">賣出/平倉日期</label><input required type="date" value={closeData.closeDate} onChange={(e)=>setCloseData({...closeData, closeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
-              <div><label className="block text-xs font-medium text-slate-500 mb-1">成交價 (Clean Close Price)</label><input required type="number" step="0.001" value={closeData.closePrice} onChange={(e)=>setCloseData({...closeData, closePrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
-              {isCouponTreasury(trades.find((trade) => trade.id === closingTradeId)) && <div><label className="block text-xs font-medium text-slate-500 mb-1">平倉 Accrued Interest / 100（可選）</label><input type="number" min="0" step="0.001" value={closeData.closeAccruedInterestPer100} onChange={(e)=>setCloseData({...closeData, closeAccruedInterestPer100: e.target.value})} placeholder="Auto" className="w-full p-2 border rounded-lg text-sm" /></div>}
-              <div><label className="block text-xs font-medium text-slate-500 mb-1">平倉手續費 ($)</label><input type="number" step="0.01" value={closeData.closeCommission} onChange={(e)=>setCloseData({...closeData, closeCommission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+              <div><label className="block text-xs font-medium text-slate-500 mb-1">成交淨價</label><input required type="number" step="0.001" value={closeData.closePrice} onChange={(e)=>setCloseData({...closeData, closePrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+              {isCouponTreasury(trades.find((trade) => trade.id === closingTradeId)) && <div><label className="block text-xs font-medium text-slate-500 mb-1">每 100 元面值的平倉應計利息（可選）</label><input type="number" min="0" step="0.001" value={closeData.closeAccruedInterestPer100} onChange={(e)=>setCloseData({...closeData, closeAccruedInterestPer100: e.target.value})} placeholder="自動計算" className="w-full p-2 border rounded-lg text-sm" /></div>}
+              <div><label className="block text-xs font-medium text-slate-500 mb-1">平倉手續費（美元）</label><input type="number" step="0.01" value={closeData.closeCommission} onChange={(e)=>setCloseData({...closeData, closeCommission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
             </form>
             <div className="p-5 border-t bg-slate-50 flex justify-end space-x-3"><button onClick={() => setIsCloseModalOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg">取消</button><button type="submit" form="closeForm" className="px-4 py-2 text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-lg shadow-sm">確認平倉</button></div>
           </div>

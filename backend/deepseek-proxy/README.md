@@ -1,13 +1,12 @@
-# DeepSeek AI Proxy
+# DeepSeek 人工智能代理服務
 
-Cloudflare Worker proxy for the Bond Ledger AI trade extraction feature.
+供美國國債帳本人工智能交易資料擷取功能使用的 Cloudflare Worker 代理服務。
 
-The browser calls this worker through `VITE_AI_PROXY_URL` and sends a
-user-provided key in the `X-DeepSeek-API-Key` header. The Worker has no shared
-provider key, so a public endpoint cannot spend the project owner's DeepSeek
-balance. The frontend keeps the user key in page memory only.
+瀏覽器透過 `VITE_AI_PROXY_URL` 呼叫此 Worker，並在 `X-DeepSeek-API-Key`
+標頭傳送使用者提供的金鑰。Worker 沒有共用的服務供應商金鑰，因此公開端點
+不會消耗專案擁有者的 DeepSeek 餘額。前端只會把使用者金鑰保留在頁面記憶體。
 
-## Deploy
+## 部署
 
 ```bash
 cd backend/deepseek-proxy
@@ -16,18 +15,18 @@ npx wrangler login
 npx wrangler deploy
 ```
 
-After deployment, copy the worker URL into the GitHub repository secret
-`VITE_AI_PROXY_URL`, then redeploy GitHub Pages.
+部署後，把 Worker 網址複製至 GitHub 儲存庫密鑰 `VITE_AI_PROXY_URL`，
+再重新部署 GitHub Pages。
 
-Worker variables in `wrangler.toml`:
+`wrangler.toml` 內的 Worker 變數：
 
-- `DEEPSEEK_MODEL`: defaults to `deepseek-v4-pro`.
-- `ALLOWED_ORIGIN`: comma-separated browser origins allowed to call this worker.
+- `DEEPSEEK_MODEL`：預設為 `deepseek-v4-pro`。
+- `ALLOWED_ORIGIN`：以逗號分隔、獲准呼叫此 Worker 的瀏覽器來源。
 
-Requests without a user key receive `401`; browser requests from origins outside
-`ALLOWED_ORIGIN` receive `403`.
+沒有使用者金鑰的請求會收到 `401`；來自 `ALLOWED_ORIGIN` 以外來源的瀏覽器
+請求會收到 `403`。
 
-## Supported task
+## 支援的任務
 
-The worker only supports `extractTradeData`, which converts pasted bond trade
-text into the current `users/{uid}/trades` Treasury trade shape used by the app.
+Worker 只支援 `extractTradeData`，用於把貼上的債券交易文字轉成應用程式目前
+使用的 `users/{uid}/trades` 美國國債交易資料格式。

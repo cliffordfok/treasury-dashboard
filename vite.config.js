@@ -10,9 +10,10 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
-        name: 'US Treasury Dashboard',
-        short_name: 'Treasury',
+        name: '美國國債帳本',
+        short_name: '國債帳本',
         description: '美債投資組合管理工具',
+        lang: 'zh-HK',
         theme_color: '#0f172a',
         background_color: '#f1f5f9',
         display: 'standalone',

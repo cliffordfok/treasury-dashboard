@@ -213,7 +213,7 @@ export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
   const [dbError, setDbError] = useState('');
 
-  const [activeTab, setActiveTab] = useState('trades');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [ledgerSubTab, setLedgerSubTab] = useState('active'); 
   
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -1281,14 +1281,14 @@ export default function App() {
         )}
         <div className="primary-nav-wrap mb-5">
         <div className="primary-tabs grid grid-cols-3 gap-1 p-1 rounded-xl">
+          <button onClick={() => setActiveTab('dashboard')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'is-active' : ''}`}>
+            <TrendingUp size={15}/> 債券分析
+          </button>
           <button onClick={() => setActiveTab('trades')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'is-active' : ''}`}>
             <History size={15}/> 債券帳本
           </button>
           <button onClick={() => setActiveTab('ytm')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'ytm' ? 'is-active' : ''}`}>
             <Calculator size={15}/> 到期收益率試算
-          </button>
-          <button onClick={() => setActiveTab('dashboard')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'is-active' : ''}`}>
-            <TrendingUp size={15}/> 債券分析
           </button>
         </div>
         </div>

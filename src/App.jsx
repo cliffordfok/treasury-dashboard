@@ -187,6 +187,25 @@ const extractTradeData = async (rawText, userApiKey = '') => {
 
 const roundMarketPriceForStorage = (price) => Math.round(price * 1000) / 1000;
 
+const YieldCurveTooltip = ({ active, label, payload }) => {
+  const years = Number(label ?? payload?.[0]?.payload?.years);
+  const yieldValue = Number(payload?.[0]?.value ?? payload?.[0]?.payload?.yield);
+  if (!active || !Number.isFinite(years) || !Number.isFinite(yieldValue)) return null;
+
+  return (
+    <div className="yield-tooltip" role="tooltip">
+      <div className="yield-tooltip-row">
+        <span>年期</span>
+        <strong>{years.toFixed(2)} 年</strong>
+      </div>
+      <div className="yield-tooltip-row">
+        <span>收益率</span>
+        <strong>{yieldValue.toFixed(3)}%</strong>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -194,7 +213,7 @@ export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
   const [dbError, setDbError] = useState('');
 
-  const [activeTab, setActiveTab] = useState('trades');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [ledgerSubTab, setLedgerSubTab] = useState('active'); 
   
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -399,9 +418,28 @@ export default function App() {
   // --- Chart Data ---
   const yieldCurveChartData = useMemo(() => {
     if (!yieldCurve?.points?.length) return null;
-    const curvePoints = yieldCurve.points.map(p => ({ years: p.years, yield: p.yield }));
-    const twoYearYield = curvePoints.find(p => p.years === 2)?.yield;
-    const tenYearYield = curvePoints.find(p => p.years === 10)?.yield;
+    const sourceCurvePoints = yieldCurve.points
+      .map(p => ({ years: Number(p.years), yield: Number(p.yield) }))
+      .filter(p => Number.isFinite(p.years) && Number.isFinite(p.yield))
+      .sort((a, b) => a.years - b.years);
+    if (!sourceCurvePoints.length) return null;
+
+    const interactiveCurvePoints = [...sourceCurvePoints];
+    const firstYear = sourceCurvePoints[0].years;
+    const lastYear = sourceCurvePoints[sourceCurvePoints.length - 1].years;
+    const firstSampleYear = Math.ceil(firstYear / 0.05) * 0.05;
+    for (let years = firstSampleYear; years <= lastYear; years += 0.05) {
+      const normalizedYears = Number(years.toFixed(2));
+      const interpolatedYield = getMarketYTMFromCurve(yieldCurve, normalizedYears);
+      if (Number.isFinite(interpolatedYield)) {
+        interactiveCurvePoints.push({ years: normalizedYears, yield: interpolatedYield });
+      }
+    }
+    const curvePoints = Array.from(
+      new Map(interactiveCurvePoints.map(point => [point.years, point])).values(),
+    ).sort((a, b) => a.years - b.years);
+    const twoYearYield = sourceCurvePoints.find(p => p.years === 2)?.yield;
+    const tenYearYield = sourceCurvePoints.find(p => p.years === 10)?.yield;
     const bondDots = supportedActiveTrades.map(t => {
       const days = calculateForwardDaysBetween(todayObj, t.maturityDate);
       if (!days || days <= 0) return null;
@@ -413,7 +451,7 @@ export default function App() {
       curvePoints,
       bondDots,
       spread2s10s: Number.isFinite(twoYearYield) && Number.isFinite(tenYearYield) ? tenYearYield - twoYearYield : null,
-      spreadPoints: curvePoints.filter(p => p.years === 2 || p.years === 10),
+      spreadPoints: sourceCurvePoints.filter(p => p.years === 2 || p.years === 10),
     };
   }, [yieldCurve, supportedActiveTrades, todayObj]);
 
@@ -812,7 +850,7 @@ export default function App() {
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"></span>賣空</span>
             </div>
           </div>
-          <div className="yield-chart" aria-label="美債收益率曲線圖">
+          <div className="yield-chart" aria-label="美債收益率曲線圖；移動滑鼠或觸控曲線可查看年期及收益率">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={yieldCurveChartData.curvePoints} margin={{ top: 22, right: 16, bottom: 0, left: -14 }}>
                 <defs>
@@ -833,7 +871,7 @@ export default function App() {
                 <CartesianGrid vertical={false} strokeDasharray="3 5" stroke="rgba(148, 163, 184, 0.12)" />
                 <XAxis dataKey="years" type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} tickLine={false} axisLine={false} unit="年" domain={[0, 30]} />
                 <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} tickLine={false} axisLine={false} tickCount={5} domain={['auto', 'auto']} unit="%" />
-                <Tooltip cursor={{ stroke: 'rgba(232, 184, 75, 0.3)', strokeWidth: 1 }} formatter={(v) => [`${Number(v).toFixed(2)}%`, '收益率']} labelFormatter={(v) => `${Number(v).toFixed(1)} 年`} />
+                <Tooltip cursor={{ stroke: 'rgba(232, 184, 75, 0.3)', strokeWidth: 1 }} content={<YieldCurveTooltip />} />
                 <Area type="monotone" dataKey="yield" stroke="url(#yieldLine)" strokeWidth={2.5} fill="url(#yieldArea)" filter="url(#yieldGlow)" dot={false} activeDot={{ r: 5, fill: '#E8B84B', stroke: '#0A0E17', strokeWidth: 2 }} />
                 {yieldCurveChartData.spreadPoints.map(point => (
                   <ReferenceDot key={`spread-${point.years}`} x={point.years} y={point.yield} r={5} fill="#E8B84B" stroke="#0A0E17" strokeWidth={2} label={{ value: `${point.years}Y`, position: 'top', fontSize: 9, fill: '#E8B84B', fontWeight: 700 }} />
@@ -1243,14 +1281,14 @@ export default function App() {
         )}
         <div className="primary-nav-wrap mb-5">
         <div className="primary-tabs grid grid-cols-3 gap-1 p-1 rounded-xl">
+          <button onClick={() => setActiveTab('dashboard')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'is-active' : ''}`}>
+            <TrendingUp size={15}/> 債券分析
+          </button>
           <button onClick={() => setActiveTab('trades')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'is-active' : ''}`}>
             <History size={15}/> 債券帳本
           </button>
           <button onClick={() => setActiveTab('ytm')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'ytm' ? 'is-active' : ''}`}>
             <Calculator size={15}/> 到期收益率試算
-          </button>
-          <button onClick={() => setActiveTab('dashboard')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'is-active' : ''}`}>
-            <TrendingUp size={15}/> 債券分析
           </button>
         </div>
         </div>

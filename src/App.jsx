@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Bot, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
@@ -400,6 +400,8 @@ export default function App() {
   const yieldCurveChartData = useMemo(() => {
     if (!yieldCurve?.points?.length) return null;
     const curvePoints = yieldCurve.points.map(p => ({ years: p.years, yield: p.yield }));
+    const twoYearYield = curvePoints.find(p => p.years === 2)?.yield;
+    const tenYearYield = curvePoints.find(p => p.years === 10)?.yield;
     const bondDots = supportedActiveTrades.map(t => {
       const days = calculateForwardDaysBetween(todayObj, t.maturityDate);
       if (!days || days <= 0) return null;
@@ -407,7 +409,12 @@ export default function App() {
       const marketYtm = getMarketYTMFromCurve(yieldCurve, remainingYears);
       return { cusip: t.cusip || t.type.toUpperCase(), x: remainingYears, y: marketYtm, side: t.side };
     }).filter(d => d?.y != null);
-    return { curvePoints, bondDots };
+    return {
+      curvePoints,
+      bondDots,
+      spread2s10s: Number.isFinite(twoYearYield) && Number.isFinite(tenYearYield) ? tenYearYield - twoYearYield : null,
+      spreadPoints: curvePoints.filter(p => p.years === 2 || p.years === 10),
+    };
   }, [yieldCurve, supportedActiveTrades, todayObj]);
 
   const couponCalendar = useMemo(() => {
@@ -707,18 +714,18 @@ export default function App() {
   };
 
   // --- 登入畫面 UI ---
-  if (authLoading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-500" size={48}/></div>;
+  if (authLoading) return <div className="app-loading min-h-screen flex items-center justify-center"><Loader2 className="animate-spin" size={42}/></div>;
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-slate-100">
-          <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-lg">
+      <div className="auth-screen min-h-screen flex flex-col items-center justify-center p-4">
+        <div className="auth-card p-8 rounded-2xl max-w-md w-full text-center">
+          <div className="brand-mark w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6">
             <Landmark size={32} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">美國國債帳本</h1>
+          <h1 className="auth-title text-2xl font-bold mb-2">美國國債帳本</h1>
           <p className="text-slate-500 mb-8 text-sm">請登入以管理你的專屬債券帳本，數據將安全同步至雲端，隨時隨地查閱。</p>
-          <button onClick={handleGoogleLogin} className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium py-3 px-4 rounded-xl flex items-center justify-center transition-all shadow-sm">
+          <button onClick={handleGoogleLogin} className="google-signin w-full font-medium py-3 px-4 rounded-xl flex items-center justify-center">
             <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
               <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
@@ -733,36 +740,36 @@ export default function App() {
   }
 
   // --- 主畫面 UI ---
-  if (!isDbReady) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Loader2 className="animate-spin text-blue-500" size={48}/></div>;
+  if (!isDbReady) return <div className="app-loading min-h-screen flex items-center justify-center"><Loader2 className="animate-spin" size={42}/></div>;
 
   const renderDashboard = () => (
-    <div className="space-y-4 sm:space-y-6">
-      <div className="bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-700 rounded-2xl shadow-lg p-5 sm:p-6 text-white relative overflow-hidden">
+    <div className="dashboard-view space-y-4 sm:space-y-6">
+      <div className="hero-card rounded-2xl p-5 sm:p-6 text-white relative overflow-hidden">
         <div className="absolute -top-2 -right-2 opacity-15 pointer-events-none"><Landmark size={140} /></div>
-        <p className="text-emerald-100 text-xs sm:text-sm font-medium mb-1.5">美債累計已實現利潤</p>
-        <p className="text-3xl sm:text-4xl font-bold tracking-tight">{portfolioMetrics.totalRealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalRealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
-        <span className="inline-block text-[11px] sm:text-xs bg-white/15 backdrop-blur-sm px-2.5 py-1 rounded-md mt-2.5 ring-1 ring-white/20">已包含所有平倉、到期結算及歷史收息</span>
+        <p className="hero-kicker text-xs sm:text-sm font-medium mb-1.5">美債累計已實現利潤</p>
+        <p className={`hero-value font-bold tracking-tight ${portfolioMetrics.totalRealizedPnL >= 0 ? 'is-positive' : 'is-negative'}`}>{portfolioMetrics.totalRealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalRealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+        <span className="hero-chip inline-block text-[11px] sm:text-xs px-2.5 py-1 rounded-md mt-2.5">已包含所有平倉、到期結算及歷史收息</span>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
-          <div className="p-2.5 sm:p-3 bg-blue-50 text-blue-600 rounded-lg flex-shrink-0"><DollarSign size={20} className="sm:hidden" /><DollarSign size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債淨價市值</p><p className="text-base sm:text-xl font-bold text-slate-800 truncate">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p><p className="text-[10px] text-slate-400 truncate">全價 ${portfolioMetrics.totalFullMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} · 應計利息 ${portfolioMetrics.totalAccruedInterest.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+      <div className="stats-grid grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
+          <div className="stat-icon stat-icon--cool p-2.5 sm:p-3 rounded-lg flex-shrink-0"><DollarSign size={20} className="sm:hidden" /><DollarSign size={24} className="hidden sm:block" /></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債淨價市值</p><p className="metric-value text-base sm:text-xl font-bold text-slate-800">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p><p className="metric-detail text-[10px] text-slate-400">全價 ${portfolioMetrics.totalFullMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} · 應計利息 ${portfolioMetrics.totalAccruedInterest.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
         </div>
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
-          <div className={`p-2.5 sm:p-3 rounded-lg flex-shrink-0 ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}><Activity size={20} className="sm:hidden" /><Activity size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債未實現盈虧</p><p className={`text-base sm:text-xl font-bold truncate ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>{portfolioMetrics.totalUnrealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalUnrealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+        <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
+          <div className={`stat-icon p-2.5 sm:p-3 rounded-lg flex-shrink-0 ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'stat-icon--gain' : 'stat-icon--loss'}`}><Activity size={20} className="sm:hidden" /><Activity size={24} className="hidden sm:block" /></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債未實現盈虧</p><p className={`metric-value text-base sm:text-xl font-bold ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>{portfolioMetrics.totalUnrealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalUnrealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
         </div>
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
-          <div className="p-2.5 sm:p-3 bg-amber-50 text-amber-600 rounded-lg flex-shrink-0"><TrendingUp size={20} className="sm:hidden" /><TrendingUp size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債加權平均 YTM</p><p className={`text-base sm:text-xl font-bold ${portfolioMetrics.totalWeightYTM == null ? 'text-slate-400' : 'text-slate-800'}`}>{portfolioMetrics.totalWeightYTM == null ? '--' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`}</p></div>
+        <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
+          <div className="stat-icon stat-icon--gold p-2.5 sm:p-3 rounded-lg flex-shrink-0"><TrendingUp size={20} className="sm:hidden" /><TrendingUp size={24} className="hidden sm:block" /></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債加權平均 YTM</p><p className={`metric-value text-base sm:text-xl font-bold ${portfolioMetrics.totalWeightYTM == null ? 'text-slate-400' : 'text-slate-800'}`}>{portfolioMetrics.totalWeightYTM == null ? '--' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`}</p></div>
         </div>
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow flex items-center gap-3 sm:gap-4">
-          <div className="p-2.5 sm:p-3 bg-emerald-50 text-emerald-600 rounded-lg flex-shrink-0"><Wallet size={20} className="sm:hidden" /><Wallet size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">平均每月利息</p><p className="text-base sm:text-xl font-bold text-emerald-600 truncate">${portfolioMetrics.monthlyAvgIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+        <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
+          <div className="stat-icon stat-icon--gain p-2.5 sm:p-3 rounded-lg flex-shrink-0"><Wallet size={20} className="sm:hidden" /><Wallet size={24} className="hidden sm:block" /></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">平均每月利息</p><p className="metric-value text-base sm:text-xl font-bold text-emerald-600">${portfolioMetrics.monthlyAvgIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
         </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100">
+        <div className="glass-panel p-4 sm:p-5 rounded-xl">
           <h3 className="text-sm sm:text-base font-bold text-slate-800 mb-3 flex items-center"><TrendingUp size={16} className="mr-2 text-blue-500"/> 基準對比</h3>
           <div className="flex items-center gap-2 mb-3">
             <select value={selectedBenchmark} onChange={(e) => setSelectedBenchmark(e.target.value)} className="text-xs sm:text-sm border rounded-md px-2 py-1">
@@ -775,12 +782,12 @@ export default function App() {
             <span className="text-[11px] text-slate-500">曲線年期：{benchmarkMetrics.benchmarkYears} 年</span>
           </div>
           <div className="grid grid-cols-3 gap-2">
-            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">美債組合 YTM</p><p className={`font-bold ${benchmarkMetrics.portfolioYield == null ? 'text-slate-400' : ''}`}>{benchmarkMetrics.portfolioYield == null ? '--' : `${benchmarkMetrics.portfolioYield.toFixed(2)}%`}</p></div>
-            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">基準 YTM</p><p className="font-bold">{benchmarkMetrics.benchmarkYield == null ? '—' : `${benchmarkMetrics.benchmarkYield.toFixed(2)}%`}</p></div>
-            <div className="p-3 rounded-lg bg-slate-50 border"><p className="text-[11px] text-slate-500">利差</p><p className={`font-bold ${benchmarkMetrics.spread == null ? 'text-slate-400' : benchmarkMetrics.spread >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{benchmarkMetrics.spread == null ? '—' : `${benchmarkMetrics.spread >= 0 ? '+' : ''}${benchmarkMetrics.spread.toFixed(2)}%`}</p></div>
+            <div className="micro-stat p-3 rounded-lg"><p className="text-[11px] text-slate-500">美債組合 YTM</p><p className={`font-bold ${benchmarkMetrics.portfolioYield == null ? 'text-slate-400' : ''}`}>{benchmarkMetrics.portfolioYield == null ? '--' : `${benchmarkMetrics.portfolioYield.toFixed(2)}%`}</p></div>
+            <div className="micro-stat p-3 rounded-lg"><p className="text-[11px] text-slate-500">基準 YTM</p><p className="font-bold">{benchmarkMetrics.benchmarkYield == null ? '—' : `${benchmarkMetrics.benchmarkYield.toFixed(2)}%`}</p></div>
+            <div className="micro-stat p-3 rounded-lg"><p className="text-[11px] text-slate-500">利差</p><p className={`font-bold ${benchmarkMetrics.spread == null ? 'text-slate-400' : benchmarkMetrics.spread >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{benchmarkMetrics.spread == null ? '—' : `${benchmarkMetrics.spread >= 0 ? '+' : ''}${benchmarkMetrics.spread.toFixed(2)}%`}</p></div>
           </div>
         </div>
-        <div className="bg-white p-4 sm:p-5 rounded-xl shadow-sm border border-slate-100">
+        <div className="glass-panel p-4 sm:p-5 rounded-xl">
           <h3 className="text-sm sm:text-base font-bold text-slate-800 mb-3 flex items-center"><History size={16} className="mr-2 text-slate-600"/> 匯入稽核記錄</h3>
           {importAuditLog.length === 0 ? <p className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3">尚未有匯入記錄。</p> : (
             <div className="space-y-2">
@@ -796,37 +803,58 @@ export default function App() {
         </div>
       </div>
       {yieldCurveChartData && (
-        <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
-          <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+        <div className="glass-panel chart-panel p-4 sm:p-6 rounded-xl">
+          <div className="panel-heading flex justify-between items-center mb-4 pb-3">
             <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><TrendingUp className="mr-2 text-blue-500" size={18}/> 美債收益率曲線</h3>
-            <div className="flex items-center gap-3 text-[10px]">
+            <div className="chart-legend flex items-center gap-3 text-[10px]">
+              {yieldCurveChartData.spread2s10s != null && <span className="spread-chip">10Y–2Y {yieldCurveChartData.spread2s10s >= 0 ? '+' : ''}{yieldCurveChartData.spread2s10s.toFixed(2)}%</span>}
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>買入</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"></span>賣空</span>
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={yieldCurveChartData.curvePoints} margin={{ top: 20, right: 15, bottom: 0, left: -15 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="years" type="number" tick={{ fontSize: 10 }} unit="年" domain={[0, 30]} />
-              <YAxis tick={{ fontSize: 10 }} domain={['auto', 'auto']} unit="%" />
-              <Tooltip formatter={(v) => [`${Number(v).toFixed(2)}%`, '收益率']} labelFormatter={(v) => `${Number(v).toFixed(1)} 年`} />
-              <Line type="monotone" dataKey="yield" stroke="#3b82f6" strokeWidth={2.5} dot={false} />
-              {yieldCurveChartData.bondDots.map(d => (
-                <ReferenceDot key={d.cusip} x={d.x} y={d.y} r={7} fill={d.side === 'sell' ? '#f87171' : '#10b981'} stroke="#fff" strokeWidth={2.5} label={{ value: d.cusip, position: 'top', fontSize: 9, fill: '#475569', fontWeight: 600 }} />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="yield-chart" aria-label="美債收益率曲線圖">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={yieldCurveChartData.curvePoints} margin={{ top: 22, right: 16, bottom: 0, left: -14 }}>
+                <defs>
+                  <linearGradient id="yieldLine" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor="#4F8DF7" />
+                    <stop offset="52%" stopColor="#E8B84B" />
+                    <stop offset="100%" stopColor="#F4D477" />
+                  </linearGradient>
+                  <linearGradient id="yieldArea" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#E8B84B" stopOpacity={0.28} />
+                    <stop offset="100%" stopColor="#4F8DF7" stopOpacity={0.01} />
+                  </linearGradient>
+                  <filter id="yieldGlow" x="-20%" y="-40%" width="140%" height="180%">
+                    <feGaussianBlur stdDeviation="3" result="blur" />
+                    <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                  </filter>
+                </defs>
+                <CartesianGrid vertical={false} strokeDasharray="3 5" stroke="rgba(148, 163, 184, 0.12)" />
+                <XAxis dataKey="years" type="number" tick={{ fontSize: 10, fill: '#94A3B8' }} tickLine={false} axisLine={false} unit="年" domain={[0, 30]} />
+                <YAxis tick={{ fontSize: 10, fill: '#94A3B8' }} tickLine={false} axisLine={false} tickCount={5} domain={['auto', 'auto']} unit="%" />
+                <Tooltip cursor={{ stroke: 'rgba(232, 184, 75, 0.3)', strokeWidth: 1 }} formatter={(v) => [`${Number(v).toFixed(2)}%`, '收益率']} labelFormatter={(v) => `${Number(v).toFixed(1)} 年`} />
+                <Area type="monotone" dataKey="yield" stroke="url(#yieldLine)" strokeWidth={2.5} fill="url(#yieldArea)" filter="url(#yieldGlow)" dot={false} activeDot={{ r: 5, fill: '#E8B84B', stroke: '#0A0E17', strokeWidth: 2 }} />
+                {yieldCurveChartData.spreadPoints.map(point => (
+                  <ReferenceDot key={`spread-${point.years}`} x={point.years} y={point.yield} r={5} fill="#E8B84B" stroke="#0A0E17" strokeWidth={2} label={{ value: `${point.years}Y`, position: 'top', fontSize: 9, fill: '#E8B84B', fontWeight: 700 }} />
+                ))}
+                {yieldCurveChartData.bondDots.map(d => (
+                  <ReferenceDot key={d.cusip} x={d.x} y={d.y} r={6} fill={d.side === 'sell' ? '#F87171' : '#34D399'} stroke="#101624" strokeWidth={2.5} label={{ value: d.cusip, position: 'top', fontSize: 9, fill: '#CBD5E1', fontWeight: 600 }} />
+                ))}
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       )}
-      <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
-        <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+      <div className="glass-panel p-4 sm:p-6 rounded-xl">
+        <div className="panel-heading flex justify-between items-center mb-4 pb-3">
           <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Wallet className="mr-2 text-emerald-500" size={18}/> 今年剩餘應收派息</h3>
           {upcomingCouponsList.length > 0 && <span className="text-[11px] text-slate-400 font-medium">{upcomingCouponsList.length} 筆</span>}
         </div>
         {upcomingCouponsList.length === 0 ? <p className="text-sm text-slate-500 py-6 text-center bg-slate-50 rounded-lg">今年內暫無剩餘派息。</p> : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-3">
+          <div className="payment-grid grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-3">
             {upcomingCouponsList.map(c => (
-              <div key={c.id} className="bg-gradient-to-br from-emerald-50/70 to-emerald-50/20 border border-emerald-100 p-3 rounded-lg hover:border-emerald-300 transition-colors">
+              <div key={c.id} className="payment-card p-3 rounded-lg">
                 <p className="text-[10px] font-semibold text-emerald-700 tracking-wide">{c.dateStr}</p>
                 <p className="text-[11px] text-slate-500 truncate mt-0.5">{c.cusip}</p>
                 <p className={`font-bold text-sm sm:text-base mt-1 ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</p>
@@ -835,19 +863,19 @@ export default function App() {
           </div>
         )}
       </div>
-      <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
-        <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+      <div className="glass-panel p-4 sm:p-6 rounded-xl">
+        <div className="panel-heading flex justify-between items-center mb-4 pb-3">
           <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Calendar className="mr-2 text-emerald-500" size={18}/> 年度收息日曆 · {todayObj.getFullYear()}</h3>
           <span className="text-[11px] text-slate-400 font-medium">${couponCalendar.reduce((s, v) => s + v, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
         </div>
-        <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2">
+        <div className="month-grid grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2">
           {['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'].map((label, m) => {
             const total = couponCalendar[m];
             const has = total !== 0;
             const past = m < todayObj.getMonth();
             const current = m === todayObj.getMonth();
             return (
-              <div key={m} className={`p-2.5 sm:p-3 rounded-lg border text-center transition-colors ${has ? (past ? 'bg-emerald-50/50 border-emerald-200/60' : 'bg-emerald-50 border-emerald-200') : (past ? 'bg-slate-50/60 border-slate-100' : 'bg-slate-50 border-slate-200')} ${current ? 'ring-2 ring-blue-400 ring-offset-1' : ''}`}>
+              <div key={m} className={`month-cell p-2.5 sm:p-3 rounded-lg text-center ${has ? 'month-cell--funded' : ''} ${past ? 'month-cell--past' : ''} ${current ? 'month-cell--current' : ''}`}>
                 <p className={`text-[10px] font-semibold uppercase tracking-wide ${current ? 'text-blue-600' : 'text-slate-400'}`}>{label}</p>
                 <p className={`text-sm font-bold mt-1 ${has ? (total >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-slate-300'}`}>
                   {has ? `$${Math.abs(total).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'}
@@ -857,8 +885,8 @@ export default function App() {
           })}
         </div>
       </div>
-      <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-100">
-        <div className="flex flex-wrap justify-between items-center gap-2 mb-4 border-b border-slate-100 pb-3">
+      <div className="glass-panel p-4 sm:p-6 rounded-xl">
+        <div className="panel-heading flex flex-wrap justify-between items-center gap-2 mb-4 pb-3">
           <div>
             <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={18}/> 債券到期倒數</h3>
             <p className="text-[10px] sm:text-[11px] text-slate-400 mt-1">現時 YTM 以目前市場淨價加應計利息計算，並以今日作為估值日。</p>
@@ -880,13 +908,13 @@ export default function App() {
             return `${Math.floor(d/365)} 年 ${Math.floor((d%365)/30)} 個月`;
           };
           const getColor = (d) => {
-            if (d < 30) return { bar: 'bg-red-500', text: 'text-red-600', bg: 'bg-red-50' };
-            if (d < 90) return { bar: 'bg-amber-500', text: 'text-amber-600', bg: 'bg-amber-50' };
-            if (d < 365) return { bar: 'bg-blue-500', text: 'text-blue-600', bg: 'bg-blue-50' };
-            return { bar: 'bg-emerald-500', text: 'text-emerald-600', bg: 'bg-emerald-50' };
+            if (d < 30) return 'danger';
+            if (d < 90) return 'warning';
+            if (d < 365) return 'cool';
+            return 'gain';
           };
           return (
-            <div className="space-y-2.5">
+            <div className="countdown-list space-y-2.5">
               {sorted.map(trade => {
                 const days = calculateDaysBetween(todayObj, trade.maturityDate);
                 const forwardDays = calculateForwardDaysBetween(todayObj, trade.maturityDate);
@@ -896,7 +924,7 @@ export default function App() {
                 const marketYtm = forwardDays && forwardDays > 0 ? getMarketYTMFromCurve(yieldCurve, forwardDays / 365.25) : null;
                 const delta = marketYtm != null && ytm != null ? ytm - marketYtm : null;
                 return (
-                  <div key={trade.id} className="p-2.5 sm:p-0 sm:bg-transparent rounded-lg bg-slate-50/60 sm:rounded-none space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-3">
+                  <div key={trade.id} className="countdown-row p-2.5 sm:p-0 rounded-lg space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-3">
                     {/* Mobile：上排為 CUSIP + YTM/Market；Desktop 保持橫向 */}
                     <div className="flex items-center justify-between sm:w-32 sm:flex-shrink-0 sm:block">
                       <div className="min-w-0">
@@ -927,9 +955,9 @@ export default function App() {
                       </div>
                     </div>
                     {/* 倒數 bar：mobile 全寬，desktop flex-1 */}
-                    <div className={`w-full sm:flex-1 h-7 ${color.bg} rounded-md overflow-hidden relative ring-1 ring-inset ring-black/5`}>
-                      <div className={`h-full ${color.bar} transition-all`} style={{ width: `${pct}%` }}></div>
-                      <span className={`absolute inset-0 flex items-center px-3 text-xs font-bold ${color.text}`}>{formatCountdown(days)}</span>
+                    <div className={`countdown-track countdown-track--${color} w-full sm:flex-1 h-7 rounded-md overflow-hidden relative`}>
+                      <progress className="countdown-progress" max="100" value={pct} aria-label={`${trade.cusip || trade.type} 到期進度`} />
+                      <span className="absolute inset-0 flex items-center px-3 text-xs font-bold">{formatCountdown(days)}</span>
                     </div>
                     {/* Desktop-only YTM / Market columns */}
                     <div className="hidden sm:block w-16 flex-shrink-0 text-right">
@@ -967,9 +995,9 @@ export default function App() {
     const pct = (value) => value == null || !Number.isFinite(value) ? '--' : `${value.toFixed(3)}%`;
 
     return (
-      <div className="space-y-4 sm:space-y-6">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-wrap justify-between items-center gap-3">
+      <div className="calculator-view space-y-4 sm:space-y-6">
+        <div className="glass-panel calculator-panel rounded-xl overflow-hidden">
+          <div className="panel-heading p-4 sm:p-5 flex flex-wrap justify-between items-center gap-3">
             <div>
               <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center gap-2"><Calculator size={18} className="text-blue-600"/> 買入前 YTM 試算器</h3>
               <p className="text-xs text-slate-500 mt-1">買入美債前，估算未計及已計入手續費後的到期收益率。</p>
@@ -1035,21 +1063,21 @@ export default function App() {
 
             <div className="space-y-3">
               {!ytmQuote.isValid ? (
-                <div className="h-full min-h-[220px] rounded-xl border border-dashed border-slate-200 bg-slate-50 flex items-center justify-center text-sm text-slate-500 px-4 text-center">
+                <div className="empty-state h-full min-h-[220px] rounded-xl flex items-center justify-center text-sm text-slate-500 px-4 text-center">
                   請輸入有效的到期日、價格及面值以計算 YTM。
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    <div className="p-3 rounded-lg bg-blue-50 border border-blue-100">
+                  <div className="quote-grid grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="quote-card quote-card--primary p-3 rounded-lg">
                       <p className="text-[11px] text-blue-700 font-semibold">扣除結算成本後 YTM</p>
                       <p className="text-xl font-bold text-blue-700 mt-1">{pct(ytmQuote.netYtm)}</p>
                     </div>
-                    <div className="p-3 rounded-lg bg-slate-50 border border-slate-200">
+                    <div className="quote-card p-3 rounded-lg">
                       <p className="text-[11px] text-slate-500 font-semibold">淨價參考 YTM</p>
                       <p className="text-xl font-bold text-slate-800 mt-1">{pct(ytmQuote.grossYtm)}</p>
                     </div>
-                    <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-100">
+                    <div className="quote-card quote-card--gain p-3 rounded-lg">
                       <p className="text-[11px] text-emerald-700 font-semibold">曲線息差</p>
                       <p className={`text-xl font-bold mt-1 ${ytmQuote.spreadToCurve == null ? 'text-slate-400' : ytmQuote.spreadToCurve >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
                         {ytmQuote.spreadToCurve == null ? '--' : `${ytmQuote.spreadToCurve >= 0 ? '+' : ''}${ytmQuote.spreadToCurve.toFixed(3)}%`}
@@ -1057,7 +1085,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="calculator-details grid grid-cols-2 gap-3 text-sm">
                     <div className="p-3 rounded-lg border bg-white">
                       <p className="text-[11px] text-slate-500 font-semibold">淨價</p>
                       <p className="font-bold text-slate-800">{ytmQuote.cleanPrice.toFixed(3)}</p>
@@ -1097,7 +1125,7 @@ export default function App() {
                   </div>
 
                   {ytmQuote.marketYield != null && (
-                    <div className="p-3 rounded-lg bg-slate-900 text-white text-sm flex flex-wrap justify-between gap-2">
+                    <div className="curve-strip p-3 rounded-lg text-white text-sm flex flex-wrap justify-between gap-2">
                       <span className="text-slate-300">FRED 曲線插值（{ytmQuote.years.toFixed(2)} 年）</span>
                       <span className="font-bold">{ytmQuote.marketYield.toFixed(3)}%</span>
                     </div>
@@ -1106,7 +1134,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={handleAddYtmToLedger}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
+                    className="primary-button w-full px-4 py-3 rounded-lg text-sm font-semibold flex items-center justify-center gap-2"
                   >
                     <Plus size={16} /> 加入債券帳本
                   </button>
@@ -1125,25 +1153,25 @@ export default function App() {
     else if (ledgerSubTab === 'closed') displayedTrades = [...maturedTrades, ...closedTrades].sort((a,b) => String(b.tradeDate).localeCompare(String(a.tradeDate)));
 
     return (
-      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white">
+      <div className="glass-panel trades-panel rounded-xl overflow-hidden">
+        <div className="panel-heading p-4 flex justify-between items-center">
           <h3 className="text-base sm:text-lg font-bold text-slate-800">債券交易總帳</h3>
-          <button onClick={() => { setFormData(defaultForm); setIsFormOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors flex items-center shadow-sm"><Plus size={15} className="mr-1" /> 新增交易</button>
+          <button onClick={() => { setFormData(defaultForm); setIsFormOpen(true); }} className="primary-button px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><Plus size={15} className="mr-1" /> 新增交易</button>
         </div>
-        <div className="flex gap-1 sm:gap-6 px-2 sm:px-4 pt-2 bg-slate-50 border-b border-slate-200 overflow-x-auto">
+        <div className="ledger-tabs flex gap-1 sm:gap-6 px-2 sm:px-4 pt-2">
           <button onClick={() => setLedgerSubTab('active')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'active' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Activity size={14} className="mr-1.5"/> 活躍 ({activeTrades.length})</button>
           <button onClick={() => setLedgerSubTab('closed')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'closed' ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Archive size={14} className="mr-1.5"/> 已結算 ({maturedTrades.length + closedTrades.length})</button>
           <button onClick={() => setLedgerSubTab('coupons')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'coupons' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><History size={14} className="mr-1.5"/> 收息 ({receivedCoupons.length})</button>
         </div>
-        <div className="overflow-x-auto">
+        <div className="table-shell">
           {ledgerSubTab === 'coupons' ? (
-             <table className="w-full text-left text-sm whitespace-nowrap"><thead className="bg-emerald-50 text-emerald-800 font-medium"><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP／類型</th><th className="p-4 text-right">派息金額（美元）</th></tr></thead><tbody className="divide-y divide-slate-100">{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id} className="hover:bg-slate-50"><td className="p-4 font-medium text-slate-700">{c.dateStr}</td><td className="p-4 text-slate-600">{c.cusip}</td><td className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</td></tr>))}</tbody></table>
+             <table className="data-table coupon-table w-full text-left text-sm whitespace-nowrap"><thead><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP／類型</th><th className="p-4 text-right">派息金額（美元）</th></tr></thead><tbody>{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id}><td data-label="DATE" className="p-4 font-medium text-slate-700">{c.dateStr}</td><td data-label="CUSIP" className="p-4 text-slate-600">{c.cusip}</td><td data-label="AMOUNT" className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</td></tr>))}</tbody></table>
           ) : (
-            <table className="w-full text-left text-sm whitespace-nowrap">
-              <thead className="bg-white text-slate-600 font-medium border-b border-slate-200">
+            <table className="data-table holdings-table w-full text-left text-sm whitespace-nowrap">
+              <thead>
                 <tr><th className="p-4">CUSIP</th><th className="p-4">方向／類型</th><th className="p-4 text-right">面值</th><th className="p-4 text-right">成本（淨價）</th>{ledgerSubTab === 'active' ? <><th className="p-4 text-right text-blue-600">市場淨價</th><th className="p-4 text-right">未實現損益</th></> : <><th className="p-4 text-right">平倉價</th><th className="p-4 text-right text-emerald-600">已實現損益</th></>}<th className="p-4 text-center">操作</th></tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-700">
+              <tbody>
                 {displayedTrades.length === 0 ? <tr><td colSpan="8" className="p-8 text-center text-slate-400">無紀錄。</td></tr> : displayedTrades.map(trade => {
                   const isMaturedBond = isMatured(trade.maturityDate) && trade.status !== 'closed';
                   const isUnsupported = !isSupportedTreasuryType(trade);
@@ -1155,16 +1183,16 @@ export default function App() {
                   const dirtyPrice = getDirtyPrice(marketPrice, accruedInterestPer100) || marketPrice;
                   const closePrice = toFiniteNumber(trade.closePrice, marketPrice);
                   return (
-                    <tr key={trade.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 font-medium">{trade.cusip || '--'}<div className="text-[10px] text-slate-400">到期：{trade.maturityDate}</div></td>
-                      <td className="p-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold text-white shadow-sm ${trade.side === 'sell' ? 'bg-red-500' : 'bg-emerald-500'} mr-1`}>{trade.side === 'sell' ? '賣空' : '買入'}</span><span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700">{{ 't-bill': '短期國庫券', 't-note': '中期國庫券', 't-bond': '長期國庫券', tips: '通脹保值國債' }[trade.type] || trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉（{trade.closeDate}）</div>}</td>
-                      <td className="p-4 text-right">${faceValue.toLocaleString()}</td><td className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
+                    <tr key={trade.id}>
+                      <td data-label="CUSIP" className="p-4 font-medium">{trade.cusip || '--'}<div className="text-[10px] text-slate-400">到期：{trade.maturityDate}</div></td>
+                      <td data-label="TYPE" className="p-4"><span className={`trade-side ${trade.side === 'sell' ? 'trade-side--sell' : 'trade-side--buy'} px-2 py-0.5 rounded text-[10px] font-bold mr-1`}>{trade.side === 'sell' ? '賣空' : '買入'}</span><span className={`treasury-badge treasury-badge--${trade.type} px-2 py-0.5 rounded text-[10px] font-bold`}>{{ 't-bill': '短期國庫券', 't-note': '中期國庫券', 't-bond': '長期國庫券', tips: '通脹保值國債' }[trade.type] || trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉（{trade.closeDate}）</div>}</td>
+                      <td data-label="FACE" className="p-4 text-right">${faceValue.toLocaleString()}</td><td data-label="COST" className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
                       {ledgerSubTab === 'active' ? (
-                        <><td className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
+                        <><td data-label="MARKET" className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       ) : (
-                        <><td className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000（面值）'}</td><td className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
+                        <><td data-label="CLOSE" className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000（面值）'}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       )}
-                      <td className="p-4 text-center"><div className="flex items-center justify-center space-x-2"><button aria-label="編輯交易" title="編輯交易" onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="text-blue-500 hover:bg-blue-50 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button aria-label="平倉" onClick={()=>{setClosingTradeId(trade.id); setCloseData({ closeDate: formatDateOnly(new Date()), closePrice: trade.currentMarketPrice, closeCommission: 0, closeAccruedInterestPer100: '' }); setIsCloseModalOpen(true);}} className="text-orange-500 hover:bg-orange-50 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button aria-label="刪除交易" title="刪除交易" onClick={() => deleteTradeFromDB(trade.id)} className="text-red-500 hover:bg-red-50 p-1 rounded"><Trash2 size={16} /></button></div></td>
+                      <td data-label="ACTIONS" className="p-4 text-center"><div className="flex items-center justify-center space-x-2"><button aria-label="編輯交易" title="編輯交易" onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="icon-button text-blue-500 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button aria-label="平倉" onClick={()=>{setClosingTradeId(trade.id); setCloseData({ closeDate: formatDateOnly(new Date()), closePrice: trade.currentMarketPrice, closeCommission: 0, closeAccruedInterestPer100: '' }); setIsCloseModalOpen(true);}} className="icon-button text-orange-500 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button aria-label="刪除交易" title="刪除交易" onClick={() => deleteTradeFromDB(trade.id)} className="icon-button text-red-500 p-1 rounded"><Trash2 size={16} /></button></div></td>
                     </tr>
                   );
                 })}
@@ -1177,51 +1205,51 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-20">
-      <nav className="bg-slate-900 text-white px-4 py-2.5 sm:py-3 sticky top-0 z-20 shadow-md">
-        <div className="max-w-7xl mx-auto flex justify-between items-center gap-3">
+    <div className="app-shell min-h-screen font-sans pb-20">
+      <nav className="app-nav text-white px-3 sm:px-4 py-2.5 sm:py-3 sticky top-0 z-20">
+        <div className="app-container mx-auto flex justify-between items-center gap-3">
           <div className="flex items-center space-x-2.5 min-w-0">
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-700 rounded-lg flex items-center justify-center font-bold text-sm shadow-sm flex-shrink-0">債</div>
-            <h1 className="text-base sm:text-xl font-bold tracking-tight truncate">美國國債帳本</h1>
+            <div className="brand-mark brand-mark--small w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm flex-shrink-0">債</div>
+            <h1 className="app-title text-base sm:text-xl font-bold tracking-tight truncate">美國國債帳本</h1>
           </div>
           {user && (
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
               <span className="text-xs text-slate-300 hidden lg:inline truncate max-w-[160px]">{user.email}</span>
-              <button onClick={handleExport} disabled={trades.length === 0} className="text-xs sm:text-sm bg-slate-800 hover:bg-slate-700 disabled:opacity-40 px-2.5 py-1.5 rounded-md transition-colors flex items-center gap-1" title="匯出資料">
+              <button onClick={handleExport} disabled={trades.length === 0} className="nav-action text-xs sm:text-sm px-2.5 py-1.5 rounded-md flex items-center gap-1" title="匯出資料">
                 <Download size={14}/><span className="hidden sm:inline">匯出</span>
               </button>
-              <button onClick={handleImport} className="text-xs sm:text-sm bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 rounded-md transition-colors flex items-center gap-1" title="匯入資料">
+              <button onClick={handleImport} className="nav-action text-xs sm:text-sm px-2.5 py-1.5 rounded-md flex items-center gap-1" title="匯入資料">
                 <Upload size={14}/><span className="hidden sm:inline">匯入</span>
               </button>
-              <button onClick={handleLogout} className="text-xs sm:text-sm bg-slate-800 hover:bg-red-600 px-2.5 py-1.5 rounded-md transition-colors flex items-center gap-1" title="登出">
+              <button onClick={handleLogout} className="nav-action nav-action--danger text-xs sm:text-sm px-2.5 py-1.5 rounded-md flex items-center gap-1" title="登出">
                 <LogOut size={14}/><span className="hidden sm:inline">登出</span>
               </button>
             </div>
           )}
         </div>
       </nav>
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+      <main className="app-main app-container mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
         {dbError && (
-          <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 flex items-start gap-2">
+          <div role="alert" className="status-banner status-banner--danger mb-4 rounded-xl px-4 py-3 text-sm flex items-start gap-2">
             <AlertCircle size={17} className="mt-0.5 flex-shrink-0" />
             <span>{dbError}</span>
           </div>
         )}
         {unsupportedTips.length > 0 && (
-          <div role="status" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-2">
+          <div role="status" className="status-banner status-banner--warning mb-4 rounded-xl px-4 py-3 text-sm flex items-start gap-2">
             <AlertCircle size={17} className="mt-0.5 flex-shrink-0" />
             <span>偵測到 {unsupportedTips.length} 筆既有 TIPS。資料仍保留在帳本，但在加入 CPI 指數比率模型前不會計入估值、YTM、利息或損益。</span>
           </div>
         )}
-        <div className="-mx-4 sm:mx-0 mb-5 overflow-x-auto px-4 sm:px-0">
-        <div className="flex w-max min-w-full sm:min-w-0 gap-1 bg-slate-200/70 p-1 rounded-xl shadow-inner">
-          <button onClick={() => setActiveTab('trades')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+        <div className="primary-nav-wrap mb-5">
+        <div className="primary-tabs grid grid-cols-3 gap-1 p-1 rounded-xl">
+          <button onClick={() => setActiveTab('trades')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'trades' ? 'is-active' : ''}`}>
             <History size={15}/> 債券帳本
           </button>
-          <button onClick={() => setActiveTab('ytm')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'ytm' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+          <button onClick={() => setActiveTab('ytm')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'ytm' ? 'is-active' : ''}`}>
             <Calculator size={15}/> 到期收益率試算
           </button>
-          <button onClick={() => setActiveTab('dashboard')} className={`px-4 sm:px-5 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'bg-white shadow text-blue-600' : 'text-slate-600 hover:text-slate-800'}`}>
+          <button onClick={() => setActiveTab('dashboard')} className={`primary-tab px-2 sm:px-5 py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5 ${activeTab === 'dashboard' ? 'is-active' : ''}`}>
             <TrendingUp size={15}/> 債券分析
           </button>
         </div>
@@ -1230,14 +1258,14 @@ export default function App() {
       </main>
 
       {isFormOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="p-5 bg-slate-50 border-b flex justify-between items-center"><h2 className="text-lg font-bold">{editingTradeId ? '編輯交易' : '新增債券交易'}</h2><button onClick={() => setIsFormOpen(false)} className="text-slate-400 hover:text-slate-600 text-xl font-bold">&times;</button></div>
+        <div className="modal-backdrop fixed inset-0 flex items-center justify-center p-3 sm:p-4 z-50">
+          <div className="modal-panel rounded-2xl w-full max-w-md overflow-hidden">
+            <div className="modal-header p-5 flex justify-between items-center"><h2 className="text-lg font-bold">{editingTradeId ? '編輯交易' : '新增債券交易'}</h2><button onClick={() => setIsFormOpen(false)} className="modal-close text-xl font-bold" aria-label="關閉">&times;</button></div>
             {!editingTradeId && (<div className="px-5 pt-4"><div className="flex bg-slate-100 p-1 rounded-lg"><button type="button" onClick={() => setSmartInputMode(false)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${!smartInputMode ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>手動輸入</button><button type="button" onClick={() => setSmartInputMode(true)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${smartInputMode ? 'bg-indigo-500 text-white shadow' : 'text-slate-500'}`}>✨ 智能貼上</button></div></div>)}
             <div className="p-5 overflow-y-auto max-h-[60vh]">
               {smartInputMode && !editingTradeId ? (
                 <div className="space-y-4">
-                  <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                  <div className="ai-panel rounded-lg p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold text-slate-800">人工智能交易單據解析</p>
@@ -1272,16 +1300,16 @@ export default function App() {
                 )}
               </>)}
             </div>
-            <div className="p-5 border-t bg-slate-50 flex justify-end space-x-3"><button onClick={() => setIsFormOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg">取消</button>{!smartInputMode && <button type="submit" form="tradeForm" className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm">儲存交易</button>}</div>
+            <div className="modal-footer p-5 flex justify-end space-x-3"><button onClick={() => setIsFormOpen(false)} className="secondary-button px-4 py-2 text-sm font-medium rounded-lg">取消</button>{!smartInputMode && <button type="submit" form="tradeForm" className="primary-button px-4 py-2 text-sm font-medium rounded-lg">儲存交易</button>}</div>
           </div>
         </div>
       )}
       
       {/* 平倉彈出視窗 */}
       {isCloseModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
-            <div className="p-5 bg-orange-50 border-b border-orange-100 flex justify-between items-center"><h2 className="text-lg font-bold text-orange-800 flex items-center"><LogOut size={20} className="mr-2"/> 平倉結算</h2></div>
+        <div className="modal-backdrop fixed inset-0 flex items-center justify-center p-3 sm:p-4 z-50">
+          <div className="modal-panel rounded-2xl w-full max-w-sm overflow-hidden">
+            <div className="modal-header modal-header--warning p-5 flex justify-between items-center"><h2 className="text-lg font-bold flex items-center"><LogOut size={20} className="mr-2"/> 平倉結算</h2></div>
             <form id="closeForm" onSubmit={handleClosePosition} className="p-5 space-y-4">
               <p className="text-sm text-slate-600 mb-4">平倉後，該筆債券會移入「已結算區」，利潤會按全價（淨價加應計利息）鎖定。</p>
               <div><label className="block text-xs font-medium text-slate-500 mb-1">賣出/平倉日期</label><input required type="date" value={closeData.closeDate} onChange={(e)=>setCloseData({...closeData, closeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
@@ -1289,7 +1317,7 @@ export default function App() {
               {isCouponTreasury(trades.find((trade) => trade.id === closingTradeId)) && <div><label className="block text-xs font-medium text-slate-500 mb-1">每 100 元面值的平倉應計利息（可選）</label><input type="number" min="0" step="0.001" value={closeData.closeAccruedInterestPer100} onChange={(e)=>setCloseData({...closeData, closeAccruedInterestPer100: e.target.value})} placeholder="自動計算" className="w-full p-2 border rounded-lg text-sm" /></div>}
               <div><label className="block text-xs font-medium text-slate-500 mb-1">平倉手續費（美元）</label><input type="number" step="0.01" value={closeData.closeCommission} onChange={(e)=>setCloseData({...closeData, closeCommission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
             </form>
-            <div className="p-5 border-t bg-slate-50 flex justify-end space-x-3"><button onClick={() => setIsCloseModalOpen(false)} className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 rounded-lg">取消</button><button type="submit" form="closeForm" className="px-4 py-2 text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-lg shadow-sm">確認平倉</button></div>
+            <div className="modal-footer p-5 flex justify-end space-x-3"><button onClick={() => setIsCloseModalOpen(false)} className="secondary-button px-4 py-2 text-sm font-medium rounded-lg">取消</button><button type="submit" form="closeForm" className="danger-button px-4 py-2 text-sm font-medium rounded-lg">確認平倉</button></div>
           </div>
         </div>
       )}

@@ -55,4 +55,4 @@ npm run check
 
 ## 部署
 
-合併至 `main` 後，GitHub Actions 會依序執行程式碼檢查、測試及建置，再部署至 GitHub Pages。FRED 工作流程更新 `yield-curve.json` 並推送至 `main` 時，會觸發同一條部署工作流程，不會再產生重複部署作業。
+合併至 `main` 後，GitHub Actions 會依序執行程式碼檢查、測試及建置，再部署至 GitHub Pages。FRED 工作流程成功更新 `yield-curve.json` 後，部署工作流程會透過 `workflow_run` 重新建置及發布最新資料；FRED 更新失敗時不會觸發部署。

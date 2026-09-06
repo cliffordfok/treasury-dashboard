@@ -42,4 +42,26 @@ export default defineConfig({
     }),
   ],
   base: '/treasury-dashboard/',
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'firebase-firestore',
+              test: /node_modules[\\/](?:@firebase[\\/]firestore|firebase[\\/]firestore)/,
+            },
+            {
+              name: 'firebase-auth',
+              test: /node_modules[\\/](?:@firebase[\\/]auth|firebase[\\/]auth)/,
+            },
+            {
+              name: 'firebase-app-check',
+              test: /node_modules[\\/](?:@firebase[\\/]app-check|firebase[\\/]app-check)/,
+            },
+          ],
+        },
+      },
+    },
+  },
 })

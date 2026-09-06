@@ -13,7 +13,7 @@
     "check": "npm run lint && npm test && npm run build"
   },
   "dependencies": {
-    "firebase": "^12.13.0",
+    "firebase": "^12.18.0",
     "lucide-react": "^1.14.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -25,13 +25,13 @@
     "@firebase/rules-unit-testing": "^5.0.2",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "eslint": "^10.8.1",
+    "eslint": "^10.10.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.3",
+    "eslint-plugin-react-refresh": "^0.5.6",
     "firebase-tools": "^15.29.0",
     "globals": "^17.9.0",
     "tailwindcss": "^4.3.3",
-    "vite": "^8.0.11",
+    "vite": "^8.2.2",
     "vitest": "^4.1.10"
   },
   "overrides": {

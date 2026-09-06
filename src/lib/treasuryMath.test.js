@@ -138,6 +138,24 @@ describe('trade normalization', () => {
     expect(trade.couponFrequency).toBe(0);
     expect(trade).not.toHaveProperty('accruedInterestPer100');
   });
+
+  it('keeps only the documented Firestore schema and valid optional values', () => {
+    const trade = normalizeTradeForStorage({
+      ...couponTrade,
+      cusip: ' 91282ABC1 ',
+      unexpected: 'must not reach Firestore',
+      fredEstimatedPrice: '99.75',
+      fredEstimatedAt: '2026-09-03',
+      fredPricingSignature: 't-note|2030-07-15|4|2',
+      deletedAt: '2026-09-06T04:00:00Z',
+    });
+
+    expect(trade.cusip).toBe('91282ABC1');
+    expect(trade).not.toHaveProperty('unexpected');
+    expect(trade.fredEstimatedPrice).toBe(99.75);
+    expect(trade.fredEstimatedAt).toBe('2026-09-03');
+    expect(trade.deletedAt).toBe('2026-09-06T04:00:00.000Z');
+  });
 });
 
 describe('coupon generation', () => {

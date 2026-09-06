@@ -356,7 +356,6 @@ export const normalizeTradeForStorage = (trade) => {
   const status = trade.status === 'closed' ? 'closed' : 'active';
   const isBill = trade.type === 't-bill';
   const normalized = {
-    ...trade,
     id: String(trade.id || makeTradeId()),
     cusip: String(trade.cusip || '').trim(),
     type: trade.type,
@@ -384,6 +383,28 @@ export const normalizeTradeForStorage = (trade) => {
     if (isCouponTreasury(normalized) && closeAccrued != null) normalized.closeAccruedInterestPer100 = closeAccrued;
     else delete normalized.closeAccruedInterestPer100;
   }
+
+  const fredEstimatedPrice = Number(trade.fredEstimatedPrice);
+  if (
+    Number.isFinite(fredEstimatedPrice)
+    && fredEstimatedPrice > 0
+    && isValidISODate(trade.fredEstimatedAt)
+    && String(trade.fredPricingSignature || '').trim()
+  ) {
+    normalized.fredEstimatedPrice = fredEstimatedPrice;
+    normalized.fredEstimatedAt = trade.fredEstimatedAt;
+    normalized.fredPricingSignature = String(trade.fredPricingSignature).trim();
+  }
+
+  if (isValidISODate(trade.priceUpdatedAt)) {
+    normalized.priceUpdatedAt = trade.priceUpdatedAt;
+  }
+
+  const deletedAt = String(trade.deletedAt || '');
+  if (!Number.isNaN(Date.parse(deletedAt)) && deletedAt.endsWith('Z')) {
+    normalized.deletedAt = new Date(deletedAt).toISOString();
+  }
+
   return normalized;
 };
 

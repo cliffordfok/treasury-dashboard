@@ -1,6 +1,7 @@
 import { lazy, Suspense, useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Bot, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound, RotateCcw } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, doc, setDoc, writeBatch } from 'firebase/firestore';
 import {
@@ -48,6 +49,13 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+const appCheckSiteKey = import.meta.env.VITE_FIREBASE_APPCHECK_SITE_KEY;
+if (import.meta.env.PROD && appCheckSiteKey) {
+  initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(appCheckSiteKey),
+    isTokenAutoRefreshEnabled: true,
+  });
+}
 const auth = getAuth(app);
 const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
@@ -280,8 +288,9 @@ export default function App() {
 
   const saveTradeToDB = useCallback(async (tradeData) => {
     if (!user) return;
-    const tradeRef = doc(db, 'users', user.uid, 'trades', tradeData.id);
-    await setDoc(tradeRef, tradeData);
+    const normalizedTrade = normalizeTradeForStorage(tradeData);
+    const tradeRef = doc(db, 'users', user.uid, 'trades', normalizedTrade.id);
+    await setDoc(tradeRef, normalizedTrade);
   }, [user]);
 
   const saveTradeWithFeedback = useCallback(async (tradeData, actionLabel) => {
@@ -781,6 +790,7 @@ export default function App() {
           if (!validTypes.has(trade.type)) { errors.push(`${prefix}：債券類型（type）無效`); continue; }
           if (!validSides.has(trade.side)) { errors.push(`${prefix}：交易方向（side）無效`); continue; }
           if (!validStatus.has(imported[i]?.status)) { errors.push(`${prefix}：狀態（status）無效`); continue; }
+          if (!trade.cusip || trade.cusip.length > 120) { errors.push(`${prefix}：CUSIP／名稱無效`); continue; }
           if (!isValidISODate(trade.tradeDate) || !isValidISODate(trade.maturityDate)) { errors.push(`${prefix}：日期格式或日期值無效`); continue; }
           if (toDateAtMidnight(trade.maturityDate) <= toDateAtMidnight(trade.tradeDate)) { errors.push(`${prefix}：到期日（maturityDate）必須晚於交易日（tradeDate）`); continue; }
           if (!Number.isFinite(trade.faceValue) || trade.faceValue <= 0) { errors.push(`${prefix}：面值（faceValue）無效`); continue; }

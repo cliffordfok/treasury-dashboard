@@ -2,9 +2,141 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function isDate(value) {
+      return value is string
+        && value.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
+    }
+
+    function isTimestamp(value) {
+      return value is string
+        && value.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$');
+    }
+
+    function isNumberInRange(value, minimum, maximum) {
+      return value is number && value >= minimum && value <= maximum;
+    }
+
+    function hasValidFields(data) {
+      return data.keys().hasAll([
+          'id', 'cusip', 'type', 'side', 'tradeDate', 'maturityDate',
+          'faceValue', 'cleanPrice', 'couponRate', 'commission',
+          'couponFrequency', 'currentMarketPrice', 'status'
+        ])
+        && data.keys().hasOnly([
+          'id', 'cusip', 'type', 'side', 'tradeDate', 'maturityDate',
+          'faceValue', 'cleanPrice', 'couponRate', 'commission',
+          'couponFrequency', 'currentMarketPrice', 'status',
+          'accruedInterestPer100', 'closeDate', 'closePrice',
+          'closeCommission', 'closeAccruedInterestPer100',
+          'fredEstimatedPrice', 'fredEstimatedAt', 'fredPricingSignature',
+          'deletedAt', 'priceUpdatedAt'
+        ]);
+    }
+
+    function hasValidIdentity(data, tradeId) {
+      return data.id is string
+        && data.id == tradeId
+        && data.id.size() > 0
+        && data.id.size() <= 1500
+        && data.cusip is string
+        && data.cusip.size() > 0
+        && data.cusip.size() <= 120;
+    }
+
+    function hasValidTerms(data) {
+      return data.type in ['t-bill', 't-note', 't-bond', 'tips']
+        && data.side in ['buy', 'sell']
+        && data.status in ['active', 'closed']
+        && isDate(data.tradeDate)
+        && isDate(data.maturityDate)
+        && data.maturityDate > data.tradeDate
+        && isNumberInRange(data.faceValue, 0.01, 1000000000000)
+        && isNumberInRange(data.cleanPrice, 0.001, 1000000)
+        && isNumberInRange(data.currentMarketPrice, 0.001, 1000000)
+        && isNumberInRange(data.couponRate, 0, 100)
+        && isNumberInRange(data.commission, 0, 1000000000)
+        && (
+          (data.type == 't-bill' && data.couponRate == 0 && data.couponFrequency == 0)
+          || (data.type != 't-bill' && data.couponFrequency == 2)
+        );
+    }
+
+    function hasValidOptionalValues(data) {
+      return (!('accruedInterestPer100' in data)
+          || isNumberInRange(data.accruedInterestPer100, 0, 1000))
+        && (!('closeAccruedInterestPer100' in data)
+          || isNumberInRange(data.closeAccruedInterestPer100, 0, 1000))
+        && (!('deletedAt' in data) || isTimestamp(data.deletedAt))
+        && (!('priceUpdatedAt' in data) || isDate(data.priceUpdatedAt));
+    }
+
+    function hasValidClose(data) {
+      return data.status == 'active'
+        ? !data.keys().hasAny([
+            'closeDate', 'closePrice', 'closeCommission',
+            'closeAccruedInterestPer100'
+          ])
+        : data.keys().hasAll(['closeDate', 'closePrice', 'closeCommission'])
+          && isDate(data.closeDate)
+          && data.closeDate >= data.tradeDate
+          && data.closeDate <= data.maturityDate
+          && isNumberInRange(data.closePrice, 0.001, 1000000)
+          && isNumberInRange(data.closeCommission, 0, 1000000000);
+    }
+
+    function hasValidFredEstimate(data) {
+      return !data.keys().hasAny([
+          'fredEstimatedPrice', 'fredEstimatedAt', 'fredPricingSignature'
+        ])
+        || (
+          data.keys().hasAll([
+            'fredEstimatedPrice', 'fredEstimatedAt', 'fredPricingSignature'
+          ])
+          && isNumberInRange(data.fredEstimatedPrice, 0.001, 1000000)
+          && isDate(data.fredEstimatedAt)
+          && data.fredPricingSignature is string
+          && data.fredPricingSignature.size() > 0
+          && data.fredPricingSignature.size() <= 160
+        );
+    }
+
+    function isValidTrade(data, tradeId) {
+      return hasValidFields(data)
+        && hasValidIdentity(data, tradeId)
+        && hasValidTerms(data)
+        && hasValidOptionalValues(data)
+        && hasValidClose(data)
+        && hasValidFredEstimate(data);
+    }
+
     match /users/{userId}/trades/{tradeId} {
-      allow read, create, update, delete: if request.auth != null
-        && request.auth.uid == userId;
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && request.resource.data.type in ['t-bill', 't-note', 't-bond']
+        && isValidTrade(request.resource.data, tradeId);
+
+      allow update: if isOwner(userId)
+        && isValidTrade(request.resource.data, tradeId)
+        && (
+          (
+            resource.data.type != 'tips'
+            && request.resource.data.type in ['t-bill', 't-note', 't-bond']
+          )
+          || (
+            resource.data.type == 'tips'
+            && request.resource.data.type == 'tips'
+          )
+        );
+
+      // The application uses a recoverable deletedAt marker. Client-side hard
+      // deletion is deliberately denied so an accidental action cannot destroy
+      // the ledger document.
+      allow delete: if false;
     }
 
     match /{document=**} {

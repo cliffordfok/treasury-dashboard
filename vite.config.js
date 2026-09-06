@@ -31,7 +31,11 @@ export default defineConfig({
           {
             urlPattern: /yield-curve\.json$/,
             handler: 'NetworkFirst',
-            options: { cacheName: 'fred-data', expiration: { maxAgeSeconds: 86400 } },
+            options: {
+              cacheName: 'fred-data',
+              networkTimeoutSeconds: 10,
+              expiration: { maxAgeSeconds: 86400 },
+            },
           },
         ],
       },

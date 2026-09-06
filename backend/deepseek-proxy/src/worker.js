@@ -74,19 +74,42 @@ const callDeepSeek = async ({ apiKey, env, messages, model, temperature = 0.2, r
     payload.response_format = responseFormat;
   }
 
-  const upstream = await fetch(DEEPSEEK_API_URL, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${deepSeekApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  const configuredTimeout = Number(env.DEEPSEEK_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(configuredTimeout)
+    ? Math.min(Math.max(configuredTimeout, 1000), 30000)
+    : 15000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let upstream;
+  try {
+    upstream = await fetch(DEEPSEEK_API_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${deepSeekApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error("DeepSeek request timed out");
+      timeoutError.status = 504;
+      throw timeoutError;
+    }
+    const networkError = new Error("Unable to reach DeepSeek");
+    networkError.status = 502;
+    throw networkError;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const data = await upstream.json().catch(() => ({}));
   if (!upstream.ok) {
     const message = data?.error?.message || `DeepSeek returned HTTP ${upstream.status}`;
-    throw new Error(message);
+    const upstreamError = new Error(message);
+    upstreamError.status = upstream.status >= 500 ? 502 : upstream.status;
+    throw upstreamError;
   }
 
   const text = data?.choices?.[0]?.message?.content;
@@ -186,7 +209,10 @@ export default {
 
       return jsonResponse({ error: "Unknown task" }, 400, corsHeaders);
     } catch (error) {
-      return jsonResponse({ error: error.message || "AI proxy failed" }, 500, corsHeaders);
+      const status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599
+        ? error.status
+        : 500;
+      return jsonResponse({ error: error.message || "AI proxy failed" }, status, corsHeaders);
     }
   },
 };

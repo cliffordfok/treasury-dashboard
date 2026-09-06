@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: fred-yield-curve
+  cancel-in-progress: false
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
@@ -26,76 +30,96 @@ jobs:
             exit 1
           fi
 
-          SERIES="DGS1MO DGS3MO DGS6MO DGS1 DGS2 DGS3 DGS5 DGS7 DGS10 DGS20 DGS30"
-          YEARS="0.0833 0.25 0.5 1 2 3 5 7 10 20 30"
+          SERIES=(DGS1MO DGS3MO DGS6MO DGS1 DGS2 DGS3 DGS5 DGS7 DGS10 DGS20 DGS30)
+          YEARS=(0.0833 0.25 0.5 1 2 3 5 7 10 20 30)
+          TMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "$TMP_DIR"' EXIT
 
           fetch_series() {
             local series_id="$1"
-            local url="https://api.stlouisfed.org/fred/series/observations?series_id=${series_id}&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1"
-            local body status attempt
-            body="$(mktemp)"
+            local destination="$2"
+            local url="https://api.stlouisfed.org/fred/series/observations?series_id=${series_id}&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=10"
+            local status attempt
 
             for attempt in 1 2 3; do
-              status="$(curl -sS --retry 2 --retry-delay 5 --retry-all-errors -w '%{http_code}' -o "$body" "$url" || true)"
+              status="$(curl -sS --retry 2 --retry-delay 5 --retry-all-errors -w '%{http_code}' -o "$destination" "$url" || true)"
               if [ "$status" = "200" ]; then
-                cat "$body"
-                rm -f "$body"
-                return 0
+                if jq -e '.observations | type == "array" and length > 0' "$destination" > /dev/null; then
+                  return 0
+                fi
+                echo "FRED ${series_id} returned an invalid observation payload" >&2
               fi
 
               echo "FRED ${series_id} returned HTTP ${status} on attempt ${attempt}/3" >&2
-              sed -e 's/api_key=[^&]*/api_key=***REDACTED***/g' "$body" >&2 || true
               sleep 10
             done
 
-            rm -f "$body"
             return 1
           }
 
-          echo '{"points":[' > /tmp/curve.json
-          FIRST=true
-          POINTS=0
-          i=0
-
-          for SERIES_ID in $SERIES; do
-            YEAR=$(echo "$YEARS" | cut -d' ' -f$((i+1)))
-
-            if RESP=$(fetch_series "$SERIES_ID"); then
-              VALUE=$(echo "$RESP" | jq -r '.observations[0].value // empty')
-              DATE=$(echo "$RESP" | jq -r '.observations[0].date // empty')
-
-              if [ -n "$VALUE" ] && [ "$VALUE" != "." ]; then
-                if [ "$FIRST" = true ]; then FIRST=false; else echo ',' >> /tmp/curve.json; fi
-                jq -n \
-                  --arg id "$SERIES_ID" \
-                  --argjson years "$YEAR" \
-                  --argjson yield "$VALUE" \
-                  --arg date "$DATE" \
-                  '{id: $id, years: $years, yield: $yield, date: $date}' >> /tmp/curve.json
-                POINTS=$((POINTS+1))
-              else
-                echo "FRED ${SERIES_ID} has no latest observation value; skipping" >&2
-              fi
-            else
-              echo "FRED ${SERIES_ID} failed after retries; skipping" >&2
+          for SERIES_ID in "${SERIES[@]}"; do
+            if ! fetch_series "$SERIES_ID" "$TMP_DIR/${SERIES_ID}.json"; then
+              echo "::error::FRED ${SERIES_ID} failed after retries"
+              exit 1
             fi
-
-            i=$((i+1))
           done
 
-          echo '],"updatedAt":"'$(date -u +%Y-%m-%d)'"}' >> /tmp/curve.json
+          COMMON_DATE=""
+          while IFS= read -r CANDIDATE_DATE; do
+            HAS_ALL=true
+            for SERIES_ID in "${SERIES[@]}"; do
+              if ! jq -e --arg date "$CANDIDATE_DATE" '.observations[] | select(.date == $date and .value != ".")' "$TMP_DIR/${SERIES_ID}.json" > /dev/null; then
+                HAS_ALL=false
+                break
+              fi
+            done
+            if [ "$HAS_ALL" = true ]; then
+              COMMON_DATE="$CANDIDATE_DATE"
+              break
+            fi
+          done < <(jq -r '.observations[] | select(.value != ".") | .date' "$TMP_DIR/${SERIES[0]}.json")
 
-          if [ "$POINTS" -eq 0 ]; then
-            echo "::error::FRED returned zero usable yield curve points"
-            cat /tmp/curve.json
+          if [ -z "$COMMON_DATE" ]; then
+            echo "::error::FRED returned no common observation date across all 11 tenors"
             exit 1
           fi
 
-          jq . /tmp/curve.json > /dev/null
+          CURVE_FILE="$TMP_DIR/curve.json"
+          echo '{"points":[' > "$CURVE_FILE"
+          FIRST=true
+          POINTS=0
+
+          for i in "${!SERIES[@]}"; do
+            SERIES_ID="${SERIES[$i]}"
+            VALUE="$(jq -r --arg date "$COMMON_DATE" '.observations[] | select(.date == $date and .value != ".") | .value' "$TMP_DIR/${SERIES_ID}.json" | head -n 1)"
+            if [ -z "$VALUE" ]; then
+              echo "::error::FRED ${SERIES_ID} has no value for ${COMMON_DATE}"
+              exit 1
+            fi
+            if [ "$FIRST" = true ]; then FIRST=false; else echo ',' >> "$CURVE_FILE"; fi
+            jq -n \
+              --arg id "$SERIES_ID" \
+              --argjson years "${YEARS[$i]}" \
+              --argjson yield "$VALUE" \
+              --arg date "$COMMON_DATE" \
+              '{id: $id, years: $years, yield: $yield, date: $date}' >> "$CURVE_FILE"
+            POINTS=$((POINTS+1))
+          done
+
+          echo '],"observationDate":"'"$COMMON_DATE"'","updatedAt":"'"$COMMON_DATE"'"}' >> "$CURVE_FILE"
+
+          if [ "$POINTS" -ne "${#SERIES[@]}" ]; then
+            echo "::error::FRED returned ${POINTS}/${#SERIES[@]} usable yield curve points"
+            exit 1
+          fi
+
+          jq -e --arg date "$COMMON_DATE" \
+            '(.points | length) == 11 and ([.points[].date] | unique) == [$date] and .observationDate == $date and .updatedAt == $date' \
+            "$CURVE_FILE" > /dev/null
 
           mkdir -p public
-          cp /tmp/curve.json public/yield-curve.json
-          echo "Generated yield-curve.json with ${POINTS} points:"
+          cp "$CURVE_FILE" public/yield-curve.json
+          echo "Generated yield-curve.json with ${POINTS} points for ${COMMON_DATE}:"
           cat public/yield-curve.json
 
       - name: Commit and push

@@ -175,6 +175,54 @@ export const getDirtyPrice = (cleanPrice, accruedInterestPer100) => {
   return clean + (Number.isFinite(accrued) ? accrued : 0);
 };
 
+export const calculateHoldToMaturityQuote = (trade, settlementDate) => {
+  if (!isSupportedTreasuryType(trade)) return null;
+
+  const faceValue = Number(trade.faceValue);
+  const cleanPrice = Number(trade.cleanPrice);
+  const commission = Number(trade.commission || 0);
+  const settlement = toDateAtMidnight(settlementDate);
+  const maturity = toDateAtMidnight(trade.maturityDate);
+  if (
+    !Number.isFinite(faceValue) || faceValue <= 0
+    || !Number.isFinite(cleanPrice) || cleanPrice <= 0
+    || !Number.isFinite(commission) || commission < 0
+    || !settlement || !maturity || maturity <= settlement
+  ) return null;
+
+  const accruedInterestPer100 = getQuotedAccruedInterestPer100(trade, settlement);
+  const dirtyPrice = getDirtyPrice(cleanPrice, accruedInterestPer100);
+  if (dirtyPrice == null) return null;
+
+  const couponIncome = generateAllCoupons({
+    ...trade,
+    id: trade.id || 'hold-to-maturity-quote',
+    side: 'buy',
+    status: 'active',
+    tradeDate: formatDateOnly(settlement),
+  }).reduce((total, coupon) => total + coupon.amount, 0);
+  const cleanPrincipalCost = (cleanPrice * faceValue) / 100;
+  const accruedInterestValue = (accruedInterestPer100 * faceValue) / 100;
+  const principalCost = (dirtyPrice * faceValue) / 100;
+  const totalCost = principalCost + commission;
+  const redemptionValue = faceValue;
+  const maturityProceeds = redemptionValue + couponIncome;
+
+  return {
+    accruedInterestPer100,
+    accruedInterestValue,
+    dirtyPrice,
+    priceWithCommission: dirtyPrice + ((commission / faceValue) * 100),
+    cleanPrincipalCost,
+    principalCost,
+    totalCost,
+    redemptionValue,
+    couponEstimate: couponIncome,
+    maturityProfit: maturityProceeds - totalCost,
+    breakevenPrice: (((maturityProceeds - commission) / faceValue) * 100) - accruedInterestPer100,
+  };
+};
+
 export const getMarketYTMFromCurve = (curve, years) => {
   if (!curve?.points?.length || !Number.isFinite(years) || years <= 0) return null;
   const points = [...curve.points].sort((a, b) => a.years - b.years);

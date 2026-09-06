@@ -4,6 +4,7 @@ import {
   calculateAccruedInterestPer100,
   calculateClosedTradePricePnl,
   calculateForwardDaysBetween,
+  calculateHoldToMaturityQuote,
   calculateMaturedTradePricePnl,
   formatDateOnly,
   generateAllCoupons,
@@ -91,6 +92,20 @@ describe('accrued interest and PnL', () => {
   it('deducts purchase accrued interest from maturity settlement PnL', () => {
     const trade = { ...couponTrade, cleanPrice: 99, accruedInterestPer100: 1 };
     expect(calculateMaturedTradePricePnl(trade)).toBeCloseTo(-1, 8);
+  });
+
+  it('uses scheduled coupon cashflows for hold-to-maturity profit and breakeven price', () => {
+    const trade = {
+      ...couponTrade,
+      tradeDate: '2026-07-14',
+      maturityDate: '2026-07-15',
+      commission: 0,
+    };
+    const quote = calculateHoldToMaturityQuote(trade, trade.tradeDate);
+
+    expect(quote.couponEstimate).toBe(20);
+    expect(quote.maturityProfit).toBeCloseTo(0.1104972376, 8);
+    expect(quote.breakevenPrice).toBeCloseTo(100.0110497238, 8);
   });
 });
 

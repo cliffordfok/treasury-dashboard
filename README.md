@@ -5,6 +5,7 @@
 ## 目前限制
 
 - TIPS 需要 CPI 指數比率、通脹調整後本金及通縮下限。現有 TIPS 記錄會保留及顯示，但不會計入估值、YTM、利息或損益；新增及匯入 TIPS 會被阻擋。
+- FRED CMT 曲線只用作獨立的理論淨價估算，不會覆寫使用者輸入的市場淨價；理論估值不應視為個別 CUSIP 的可成交報價。
 - 定價模型供個人記錄及估算，不應視為券商結單、稅務或投資建議的替代品。
 - `firestore.rules` 已納入版本控制，但不會由 GitHub Pages 工作流程自動部署。
 
@@ -20,7 +21,9 @@ npm run dev
 
 在 `.env` 填寫 Firebase 網頁應用程式設定。Firebase Web API Key 是用戶端設定，不應把管理員憑證或服務供應商密鑰寫入任何 `VITE_` 變數。
 
-FRED 資料由 `.github/workflows/fetch-yield-curve.yml` 在伺服器端取得並寫入 `public/yield-curve.json`；瀏覽器及 Vite 建置程序不會收到 FRED API Key。
+FRED 資料由 `.github/workflows/fetch-yield-curve.yml` 在伺服器端取得並寫入 `public/yield-curve.json`；瀏覽器及 Vite 建置程序不會收到 FRED API Key。工作流程只會發布 11 個指定年期均有數值的最近共同觀察日，前端亦會再次驗證點數、年期及觀察日期。
+
+交易的刪除操作會先要求確認，然後移至帳本內的「回收桶」。回收桶保留完整交易資料並可隨時復原，不會直接永久刪除 Firestore 文件。
 
 ## 驗證
 
@@ -36,7 +39,7 @@ npm run build
 npm run check
 ```
 
-回歸測試涵蓋 ISO 日期解析、夏令時間日數、月末派息時間表、應計利息、全價損益及 TIPS 防護。
+回歸測試涵蓋 ISO 日期解析、夏令時間日數、月末派息時間表、應計利息、全價損益、到期現金流、FRED 曲線完整性、理論估值日期防倒退、可復原刪除及 TIPS 防護。
 
 ## Firebase 安全規則
 

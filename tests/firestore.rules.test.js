@@ -121,6 +121,24 @@ describe('Firestore trade ledger rules', () => {
     await assertFails(deleteDoc(reference));
   });
 
+  it.each([1, 4, 12])('allows safe updates to legacy coupon frequency %i without changing its terms', async (couponFrequency) => {
+    const alice = testEnvironment.authenticatedContext('alice');
+    const reference = tradeRef(alice);
+    const legacyTrade = makeTrade({ couponFrequency });
+
+    await testEnvironment.withSecurityRulesDisabled(async (context) => {
+      await setDoc(tradeRef(context), legacyTrade);
+    });
+    await assertSucceeds(updateDoc(reference, { currentMarketPrice: 100.5 }));
+    await assertSucceeds(updateDoc(reference, {
+      deletedAt: '2026-09-06T04:00:00.000Z',
+    }));
+    await assertSucceeds(updateDoc(reference, { deletedAt: deleteField() }));
+    await assertFails(updateDoc(reference, { couponRate: 5 }));
+    await assertFails(updateDoc(reference, { couponFrequency: couponFrequency === 1 ? 4 : 1 }));
+    await assertSucceeds(updateDoc(reference, { couponFrequency: 2 }));
+  });
+
   it('preserves valid legacy TIPS records but prevents new TIPS creation', async () => {
     const alice = testEnvironment.authenticatedContext('alice');
     const reference = tradeRef(alice);

@@ -11,3 +11,10 @@ export const restoreDeletedTrade = (trade) => {
   delete restoredTrade.deletedAt;
   return restoredTrade;
 };
+
+export const buildTradeBackup = (activeTrades, deletedTrades) => {
+  if (!Array.isArray(activeTrades) || !Array.isArray(deletedTrades)) {
+    throw new Error('備份交易集合無效');
+  }
+  return [...activeTrades, ...deletedTrades];
+};

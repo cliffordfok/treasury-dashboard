@@ -3,6 +3,7 @@ import {
   buildCommonYieldCurve,
   FRED_CURVE_SERIES,
   getFredPricingSignature,
+  hasCurrentFredEstimate,
   normalizeYieldCurve,
   shouldUpdateFredEstimate,
 } from './yieldCurve.js';
@@ -95,5 +96,18 @@ describe('FRED theoretical estimate freshness', () => {
       fredPricingSignature: getFredPricingSignature(trade),
     };
     expect(shouldUpdateFredEstimate(pricedTrade, '2026-09-03')).toBe(false);
+    expect(hasCurrentFredEstimate(pricedTrade)).toBe(false);
+  });
+
+  it('only exposes a complete estimate calculated for the current bond terms', () => {
+    const pricedTrade = {
+      ...trade,
+      fredEstimatedPrice: 99.125,
+      fredEstimatedAt: '2026-09-04',
+      fredPricingSignature: getFredPricingSignature(trade),
+    };
+    expect(hasCurrentFredEstimate(pricedTrade)).toBe(true);
+    expect(hasCurrentFredEstimate({ ...pricedTrade, maturityDate: '2031-07-15' })).toBe(false);
+    expect(hasCurrentFredEstimate({ ...pricedTrade, fredEstimatedPrice: null })).toBe(false);
   });
 });

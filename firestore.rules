@@ -47,7 +47,7 @@ service cloud.firestore {
         && data.cusip.size() <= 120;
     }
 
-    function hasValidTerms(data) {
+    function hasValidBaseTerms(data) {
       return data.type in ['t-bill', 't-note', 't-bond', 'tips']
         && data.side in ['buy', 'sell']
         && data.status in ['active', 'closed']
@@ -58,11 +58,22 @@ service cloud.firestore {
         && isNumberInRange(data.cleanPrice, 0.001, 1000000)
         && isNumberInRange(data.currentMarketPrice, 0.001, 1000000)
         && isNumberInRange(data.couponRate, 0, 100)
-        && isNumberInRange(data.commission, 0, 1000000000)
-        && (
-          (data.type == 't-bill' && data.couponRate == 0 && data.couponFrequency == 0)
-          || (data.type != 't-bill' && data.couponFrequency == 2)
-        );
+        && isNumberInRange(data.commission, 0, 1000000000);
+    }
+
+    function hasSupportedCouponTerms(data) {
+      return (data.type == 't-bill' && data.couponRate == 0 && data.couponFrequency == 0)
+        || (data.type != 't-bill' && data.couponFrequency == 2);
+    }
+
+    function hasUnchangedLegacyCouponTerms(data) {
+      return resource.data.type != 't-bill'
+        && resource.data.couponFrequency in [1, 4, 12]
+        && data.type == resource.data.type
+        && data.tradeDate == resource.data.tradeDate
+        && data.maturityDate == resource.data.maturityDate
+        && data.couponRate == resource.data.couponRate
+        && data.couponFrequency == resource.data.couponFrequency;
     }
 
     function hasValidOptionalValues(data) {
@@ -107,7 +118,18 @@ service cloud.firestore {
     function isValidTrade(data, tradeId) {
       return hasValidFields(data)
         && hasValidIdentity(data, tradeId)
-        && hasValidTerms(data)
+        && hasValidBaseTerms(data)
+        && hasSupportedCouponTerms(data)
+        && hasValidOptionalValues(data)
+        && hasValidClose(data)
+        && hasValidFredEstimate(data);
+    }
+
+    function isValidTradeUpdate(data, tradeId) {
+      return hasValidFields(data)
+        && hasValidIdentity(data, tradeId)
+        && hasValidBaseTerms(data)
+        && (hasSupportedCouponTerms(data) || hasUnchangedLegacyCouponTerms(data))
         && hasValidOptionalValues(data)
         && hasValidClose(data)
         && hasValidFredEstimate(data);
@@ -121,7 +143,7 @@ service cloud.firestore {
         && isValidTrade(request.resource.data, tradeId);
 
       allow update: if isOwner(userId)
-        && isValidTrade(request.resource.data, tradeId)
+        && isValidTradeUpdate(request.resource.data, tradeId)
         && (
           (
             resource.data.type != 'tips'

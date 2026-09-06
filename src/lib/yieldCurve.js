@@ -121,10 +121,18 @@ export const getFredPricingSignature = (trade) => [
   Number(trade?.couponFrequency) || 0,
 ].join('|');
 
+export const hasCurrentFredEstimate = (trade) => (
+  Number.isFinite(Number(trade?.fredEstimatedPrice))
+  && Number(trade.fredEstimatedPrice) > 0
+  && isValidISODate(trade?.fredEstimatedAt)
+  && trade?.fredPricingSignature === getFredPricingSignature(trade)
+);
+
 export const shouldUpdateFredEstimate = (trade, observationDate) => {
   if (!isValidISODate(observationDate)) return false;
-  const estimatedAt = isValidISODate(trade?.fredEstimatedAt) ? trade.fredEstimatedAt : '';
-  if (estimatedAt && estimatedAt > observationDate) return false;
   const hasCurrentTerms = trade?.fredPricingSignature === getFredPricingSignature(trade);
-  return !hasCurrentTerms || !estimatedAt || estimatedAt < observationDate;
+  const estimatedAt = isValidISODate(trade?.fredEstimatedAt) ? trade.fredEstimatedAt : '';
+  if (!hasCurrentTerms) return !estimatedAt || estimatedAt <= observationDate;
+  if (estimatedAt && estimatedAt > observationDate) return false;
+  return !estimatedAt || estimatedAt < observationDate;
 };

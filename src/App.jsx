@@ -31,10 +31,11 @@ import {
 } from './lib/treasuryMath.js';
 import {
   getFredPricingSignature,
+  hasCurrentFredEstimate,
   normalizeYieldCurve,
   shouldUpdateFredEstimate,
 } from './lib/yieldCurve.js';
-import { markTradeDeleted, restoreDeletedTrade } from './lib/tradeLifecycle.js';
+import { buildTradeBackup, markTradeDeleted, restoreDeletedTrade } from './lib/tradeLifecycle.js';
 
 const YieldCurveChart = lazy(() => import('./components/YieldCurveChart.jsx'));
 
@@ -739,8 +740,9 @@ export default function App() {
 
   // --- 匯出 / 匯入 ---
   const handleExport = () => {
-    if (trades.length === 0) return;
-    const data = JSON.stringify(trades, null, 2);
+    const backupTrades = buildTradeBackup(trades, deletedTrades);
+    if (backupTrades.length === 0) return;
+    const data = JSON.stringify(backupTrades, null, 2);
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1278,7 +1280,8 @@ export default function App() {
                   const faceValue = toFiniteNumber(trade.faceValue);
                   const cleanPrice = toFiniteNumber(trade.cleanPrice);
                   const marketPrice = toFiniteNumber(trade.currentMarketPrice, cleanPrice);
-                  const fredEstimatedPrice = Number(trade.fredEstimatedPrice);
+                  const fredEstimateIsCurrent = hasCurrentFredEstimate(trade);
+                  const fredEstimatedPrice = fredEstimateIsCurrent ? Number(trade.fredEstimatedPrice) : NaN;
                   const accruedInterestPer100 = calculateAccruedInterestPer100(trade, todayObj);
                   const dirtyPrice = getDirtyPrice(marketPrice, accruedInterestPer100) || marketPrice;
                   const closePrice = toFiniteNumber(trade.closePrice, marketPrice);
@@ -1288,7 +1291,7 @@ export default function App() {
                       <td data-label="TYPE" className="p-4"><span className={`trade-side ${trade.side === 'sell' ? 'trade-side--sell' : 'trade-side--buy'} px-2 py-0.5 rounded text-[10px] font-bold mr-1`}>{trade.side === 'sell' ? '賣空' : '買入'}</span><span className={`treasury-badge treasury-badge--${trade.type} px-2 py-0.5 rounded text-[10px] font-bold`}>{{ 't-bill': '短期國庫券', 't-note': '中期國庫券', 't-bond': '長期國庫券', tips: '通脹保值國債' }[trade.type] || trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉（{trade.closeDate}）</div>}</td>
                       <td data-label="FACE" className="p-4 text-right">${faceValue.toLocaleString()}</td><td data-label="COST" className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
                       {ledgerSubTab === 'active' ? (
-                        <><td data-label="MARKET" className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td data-label="FRED ESTIMATE" className="p-4 text-right"><div className="font-medium text-violet-600">{Number.isFinite(fredEstimatedPrice) && fredEstimatedPrice > 0 ? fredEstimatedPrice.toFixed(3) : '--'}</div>{trade.fredEstimatedAt && <div className="text-[10px] text-slate-400">觀察日 {trade.fredEstimatedAt}</div>}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
+                        <><td data-label="MARKET" className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td data-label="FRED ESTIMATE" className="p-4 text-right"><div className="font-medium text-violet-600">{Number.isFinite(fredEstimatedPrice) && fredEstimatedPrice > 0 ? fredEstimatedPrice.toFixed(3) : '--'}</div>{fredEstimateIsCurrent && <div className="text-[10px] text-slate-400">觀察日 {trade.fredEstimatedAt}</div>}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       ) : (
                         <><td data-label="CLOSE" className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000（面值）'}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       )}
@@ -1315,7 +1318,7 @@ export default function App() {
           {user && (
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
               <span className="text-xs text-slate-300 hidden lg:inline truncate max-w-[160px]">{user.email}</span>
-              <button onClick={handleExport} disabled={trades.length === 0} className="nav-action text-xs sm:text-sm px-2.5 py-1.5 rounded-md flex items-center gap-1" title="匯出資料">
+              <button onClick={handleExport} disabled={trades.length + deletedTrades.length === 0} className="nav-action text-xs sm:text-sm px-2.5 py-1.5 rounded-md flex items-center gap-1" title="匯出資料">
                 <Download size={14}/><span className="hidden sm:inline">匯出</span>
               </button>
               <button onClick={handleImport} className="nav-action text-xs sm:text-sm px-2.5 py-1.5 rounded-md flex items-center gap-1" title="匯入資料">

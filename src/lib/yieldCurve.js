@@ -14,6 +14,57 @@ export const FRED_CURVE_SERIES = [
   { id: 'DGS30', years: 30 },
 ];
 
+export const buildCommonYieldCurve = (seriesPayloads) => {
+  if (!seriesPayloads || typeof seriesPayloads !== 'object') {
+    throw new Error('FRED 回應集合無效');
+  }
+
+  const valuesBySeries = new Map();
+  for (const expected of FRED_CURVE_SERIES) {
+    const observations = seriesPayloads[expected.id]?.observations;
+    if (!Array.isArray(observations) || observations.length === 0) {
+      throw new Error(`FRED ${expected.id} 缺少觀察值`);
+    }
+
+    const valuesByDate = new Map();
+    for (const observation of observations) {
+      const yieldValue = Number(observation?.value);
+      if (
+        isValidISODate(observation?.date)
+        && observation?.value !== '.'
+        && Number.isFinite(yieldValue)
+        && yieldValue > -100
+      ) {
+        valuesByDate.set(observation.date, yieldValue);
+      }
+    }
+    if (valuesByDate.size === 0) {
+      throw new Error(`FRED ${expected.id} 沒有可用觀察值`);
+    }
+    valuesBySeries.set(expected.id, valuesByDate);
+  }
+
+  const firstSeriesDates = [...valuesBySeries.get(FRED_CURVE_SERIES[0].id).keys()];
+  const commonDate = firstSeriesDates
+    .filter((date) => FRED_CURVE_SERIES.every(({ id }) => valuesBySeries.get(id).has(date)))
+    .sort((left, right) => right.localeCompare(left))[0];
+
+  if (!commonDate) {
+    throw new Error('FRED 11 個年期沒有共同觀察日');
+  }
+
+  return normalizeYieldCurve({
+    points: FRED_CURVE_SERIES.map(({ id, years }) => ({
+      id,
+      years,
+      yield: valuesBySeries.get(id).get(commonDate),
+      date: commonDate,
+    })),
+    observationDate: commonDate,
+    updatedAt: commonDate,
+  });
+};
+
 export const normalizeYieldCurve = (data) => {
   if (!data || typeof data !== 'object' || !Array.isArray(data.points)) {
     throw new Error('yield-curve.json 格式無效');

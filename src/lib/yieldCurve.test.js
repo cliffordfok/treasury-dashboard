@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildCommonYieldCurve,
   FRED_CURVE_SERIES,
   getFredPricingSignature,
   normalizeYieldCurve,
@@ -16,6 +17,29 @@ const makeCurve = (date = '2026-09-03') => ({
 });
 
 describe('FRED yield curve validation', () => {
+  const makeSeriesPayloads = () => Object.fromEntries(FRED_CURVE_SERIES.map(({ id }, index) => [
+    id,
+    {
+      observations: [
+        { date: '2026-09-04', value: id === 'DGS30' ? '.' : String(4 + index / 10) },
+        { date: '2026-09-03', value: String(3.9 + index / 10) },
+        { date: '2026-09-02', value: String(3.8 + index / 10) },
+      ],
+    },
+  ]));
+
+  it('selects the latest complete common date instead of mixing observations', () => {
+    const curve = buildCommonYieldCurve(makeSeriesPayloads());
+    expect(curve.observationDate).toBe('2026-09-03');
+    expect(new Set(curve.points.map((point) => point.date))).toEqual(new Set(['2026-09-03']));
+  });
+
+  it('fails closed when the 11 series have no common date', () => {
+    const payloads = makeSeriesPayloads();
+    payloads.DGS30.observations = [{ date: '2026-09-01', value: '4.5' }];
+    expect(() => buildCommonYieldCurve(payloads)).toThrow('沒有共同觀察日');
+  });
+
   it('accepts exactly one complete observation date and corrects legacy updatedAt', () => {
     const curve = normalizeYieldCurve(makeCurve());
     expect(curve.points).toHaveLength(11);

@@ -12,7 +12,7 @@
 
 ## 本機開發
 
-環境需求：Node.js 20。執行 Firestore Emulator 規則測試另需 Java 21。
+環境需求：Node.js 22.12 或以上。執行 Firestore Emulator 規則測試另需 Java 21。
 
 ```bash
 npm ci

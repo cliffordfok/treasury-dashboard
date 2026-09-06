@@ -63,7 +63,7 @@ export const calculateDaysBetween = (date1, date2) => {
 export const isMatured = (maturityDate, valuationDate = new Date()) => {
   const maturity = toDateAtMidnight(maturityDate);
   const valuation = toDateAtMidnight(valuationDate);
-  return Boolean(maturity && valuation && maturity < valuation);
+  return Boolean(maturity && valuation && maturity <= valuation);
 };
 
 const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();

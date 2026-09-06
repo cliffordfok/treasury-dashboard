@@ -10,6 +10,7 @@ import {
   generateAllCoupons,
   getCouponDates,
   getPurchaseAccruedInterestPer100,
+  isMatured,
   isSupportedTreasuryType,
   isValidISODate,
   normalizeTradeForStorage,
@@ -51,6 +52,11 @@ describe('calendar-safe date handling', () => {
 
   it('counts calendar days without daylight-saving drift', () => {
     expect(calculateForwardDaysBetween('2026-03-08', '2026-03-09')).toBe(1);
+  });
+
+  it('settles a Treasury on its maturity date', () => {
+    expect(isMatured('2026-07-15', '2026-07-14')).toBe(false);
+    expect(isMatured('2026-07-15', '2026-07-15')).toBe(true);
   });
 
   it('clamps month-end dates instead of overflowing into March', () => {

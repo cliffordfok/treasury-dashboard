@@ -22,9 +22,12 @@ npx wrangler deploy
 
 - `DEEPSEEK_MODEL`：預設為 `deepseek-v4-pro`。
 - `ALLOWED_ORIGIN`：以逗號分隔、獲准呼叫此 Worker 的瀏覽器來源。
+- `DEEPSEEK_TIMEOUT_MS`：可選，上游請求 timeout，預設 15000 毫秒並限制於 1000–30000 毫秒。
 
 沒有使用者金鑰的請求會收到 `401`；來自 `ALLOWED_ORIGIN` 以外來源的瀏覽器
 請求會收到 `403`。
+
+DeepSeek 上游請求逾時會中止並回傳 `504`；上游 5xx 則轉為 `502`。
 
 ## 支援的任務
 

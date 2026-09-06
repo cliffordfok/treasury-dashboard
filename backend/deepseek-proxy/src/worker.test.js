@@ -75,4 +75,49 @@ describe('DeepSeek BYOK worker', () => {
     await expect(response.json()).resolves.toEqual({ trade: { type: 't-note' } });
     expect(upstream).toHaveBeenCalledOnce();
   });
+
+  it('aborts a stalled DeepSeek request with a gateway timeout', async () => {
+    const upstream = vi.fn((_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      }, { once: true });
+    }));
+    vi.stubGlobal('fetch', upstream);
+
+    const response = await worker.fetch(makeRequest({
+      apiKey: 'user-key',
+      body: { task: 'extractTradeData', rawText: 'Buy a Treasury note' },
+    }), { ...env, DEEPSEEK_TIMEOUT_MS: '1000' });
+
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toEqual({ error: 'DeepSeek request timed out' });
+  });
+
+  it('maps an upstream server failure to a bad gateway response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      error: { message: 'upstream unavailable' },
+    }), { status: 503, headers: { 'Content-Type': 'application/json' } })));
+
+    const response = await worker.fetch(makeRequest({
+      apiKey: 'user-key',
+      body: { task: 'extractTradeData', rawText: 'Buy a Treasury note' },
+    }), env);
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: 'upstream unavailable' });
+  });
+
+  it('maps an upstream network failure to a bad gateway response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('socket failure'); }));
+
+    const response = await worker.fetch(makeRequest({
+      apiKey: 'user-key',
+      body: { task: 'extractTradeData', rawText: 'Buy a Treasury note' },
+    }), env);
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: 'Unable to reach DeepSeek' });
+  });
 });

@@ -3,6 +3,10 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: ['main']
+  # Pushes made by the FRED workflow's GITHUB_TOKEN do not trigger push workflows.
+  workflow_run:
+    workflows: ['Fetch FRED Yield Curve']
+    types: [completed]
 
 permissions:
   contents: read
@@ -15,6 +19,7 @@ concurrency:
 
 jobs:
   build-and-deploy:
+    if: github.event_name == 'push' || github.event.workflow_run.conclusion == 'success'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

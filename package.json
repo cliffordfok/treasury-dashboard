@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run --exclude tests/firestore.rules.test.js",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-treasury-dashboard \"vitest run tests/firestore.rules.test.js\"",
     "check": "npm run lint && npm test && npm run build"
   },
   "dependencies": {
@@ -21,14 +22,19 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@firebase/rules-unit-testing": "^5.0.2",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.0.1",
     "eslint": "^10.8.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
+    "firebase-tools": "^15.29.0",
     "globals": "^17.9.0",
     "tailwindcss": "^4.3.3",
     "vite": "^8.0.11",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "qs": "6.16.0"
   }
 }

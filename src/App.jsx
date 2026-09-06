@@ -1,22 +1,22 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Bot, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Bot, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound, RotateCcw } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceDot } from 'recharts';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, doc, setDoc } from 'firebase/firestore';
 import {
   calculateAccruedInterestPer100,
   calculateActiveUnrealizedPnl,
   calculateClosedTradePricePnl,
   calculateDaysBetween,
   calculateForwardDaysBetween,
+  calculateHoldToMaturityQuote,
   calculateMaturedTradePricePnl,
   calculateTradePricePnl,
   formatDateOnly,
   generateAllCoupons,
   getDirtyPrice,
   getMarketYTMFromCurve,
-  getQuotedAccruedInterestPer100,
   getTradeYTM,
   isCouponTreasury,
   isMatured,
@@ -29,6 +29,12 @@ import {
   toFiniteNumber,
   yieldToPrice,
 } from './lib/treasuryMath.js';
+import {
+  getFredPricingSignature,
+  normalizeYieldCurve,
+  shouldUpdateFredEstimate,
+} from './lib/yieldCurve.js';
+import { markTradeDeleted, restoreDeletedTrade } from './lib/tradeLifecycle.js';
 
 // --- 真實環境 Firebase 設定 (使用環境變數) ---
 const firebaseConfig = {
@@ -56,9 +62,7 @@ const fetchYieldCurve = async ({ bypassCache = false } = {}) => {
   const suffix = bypassCache ? `?refresh=${Date.now()}` : '';
   const res = await fetch(`${base}yield-curve.json${suffix}`, { cache: bypassCache ? 'no-store' : 'default' });
   if (!res.ok) throw new Error(`收益率曲線資料請求失敗（HTTP ${res.status}）`);
-  const data = await res.json();
-  if (!data.points || data.points.length === 0) throw new Error('yield-curve.json 無資料');
-  return data;
+  return normalizeYieldCurve(await res.json());
 };
 
 const fetchWithRetry = async (url, options, retries = 3, timeoutMs = 15000) => {
@@ -210,6 +214,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [trades, setTrades] = useState([]);
+  const [deletedTrades, setDeletedTrades] = useState([]);
   const [isDbReady, setIsDbReady] = useState(false);
   const [dbError, setDbError] = useState('');
 
@@ -259,6 +264,7 @@ export default function App() {
       setUser(currentUser);
       if (!currentUser) {
         setTrades([]);
+        setDeletedTrades([]);
         setIsDbReady(false);
         setDbError('');
       }
@@ -277,17 +283,17 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // --- 當 yield curve 載入後，自動用市場 yield 計算理論價格更新所有活躍持倉 ---
+  // --- 當 yield curve 載入後，更新獨立的 FRED 理論估值，不覆寫使用者市場價 ---
   const priceUpdatesInFlightRef = useRef(new Set());
   useEffect(() => {
     if (!yieldCurve?.points?.length || !user || !isDbReady) return;
-    const curveDate = yieldCurve.updatedAt;
+    const curveDate = yieldCurve.observationDate;
     if (!curveDate) return;
     const toUpdate = trades.filter(t =>
       isSupportedTreasuryType(t)
       && t.status !== 'closed'
       && !isMatured(t.maturityDate)
-      && t.priceUpdatedAt !== curveDate
+      && shouldUpdateFredEstimate(t, curveDate)
       && !priceUpdatesInFlightRef.current.has(t.id)
     );
     for (const trade of toUpdate) {
@@ -305,7 +311,12 @@ export default function App() {
           const accruedInterestPer100 = calculateAccruedInterestPer100(trade, valuationDate);
           const cleanMarketPrice = isCouponTreasury(trade) ? newMktPrice - accruedInterestPer100 : newMktPrice;
           if (!Number.isFinite(cleanMarketPrice) || cleanMarketPrice <= 0) return;
-          await saveTradeToDB({ ...trade, currentMarketPrice: roundMarketPriceForStorage(cleanMarketPrice), priceUpdatedAt: curveDate });
+          await saveTradeToDB({
+            ...trade,
+            fredEstimatedPrice: roundMarketPriceForStorage(cleanMarketPrice),
+            fredEstimatedAt: curveDate,
+            fredPricingSignature: getFredPricingSignature(trade),
+          });
         } catch (err) {
           console.error('更新市場價格失敗：', trade.id, err);
         } finally {
@@ -333,8 +344,9 @@ export default function App() {
     // 使用 user.uid 作為個人專屬路徑 (每個 Google 帳號有獨立空間)
     const tradesRef = collection(db, 'users', user.uid, 'trades');
     const unsubscribe = onSnapshot(tradesRef, (snapshot) => {
-      const fetchedTrades = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setTrades(fetchedTrades);
+      const fetchedTrades = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+      setTrades(fetchedTrades.filter((trade) => !trade.deletedAt));
+      setDeletedTrades(fetchedTrades.filter((trade) => Boolean(trade.deletedAt)));
       setIsDbReady(true);
       setDbError('');
     }, (error) => {
@@ -488,21 +500,15 @@ export default function App() {
     if (!days || days <= 0) return { isValid: false };
     const years = days / 365.25;
     const trade = { type: ytmForm.type, tradeDate: ytmForm.tradeDate, couponRate, couponFrequency, maturityDate: ytmForm.maturityDate, accruedInterestPer100: ytmForm.accruedInterestPer100 };
-    const accruedInterestPer100 = getQuotedAccruedInterestPer100(trade, tradeDate);
-    const dirtyPrice = getDirtyPrice(cleanPrice, accruedInterestPer100);
-    if (dirtyPrice == null) return { isValid: false };
-    const priceWithCommission = dirtyPrice + ((commission / faceValue) * 100);
-    const grossYtm = solveYTMFromPrice(trade, dirtyPrice, tradeDate);
-    const netYtm = solveYTMFromPrice(trade, priceWithCommission, tradeDate);
-    const cleanPrincipalCost = (cleanPrice * faceValue) / 100;
-    const accruedInterestValue = (accruedInterestPer100 * faceValue) / 100;
-    const principalCost = (dirtyPrice * faceValue) / 100;
-    const totalCost = principalCost + commission;
-    const redemptionValue = faceValue;
-    const annualCoupon = ytmForm.type === 't-bill' ? 0 : faceValue * (couponRate / 100);
-    const couponEstimate = annualCoupon * years;
-    const maturityProfit = redemptionValue + couponEstimate - totalCost;
-    const breakevenPrice = 100 + ((couponEstimate - commission) / faceValue) * 100;
+    const maturityQuote = calculateHoldToMaturityQuote({
+      ...trade,
+      faceValue,
+      cleanPrice,
+      commission,
+    }, tradeDate);
+    if (!maturityQuote) return { isValid: false };
+    const grossYtm = solveYTMFromPrice(trade, maturityQuote.dirtyPrice, tradeDate);
+    const netYtm = solveYTMFromPrice(trade, maturityQuote.priceWithCommission, tradeDate);
     const marketYield = getMarketYTMFromCurve(yieldCurve, years);
 
     return {
@@ -511,17 +517,7 @@ export default function App() {
       years,
       faceValue,
       cleanPrice,
-      accruedInterestPer100,
-      accruedInterestValue,
-      dirtyPrice,
-      priceWithCommission,
-      cleanPrincipalCost,
-      principalCost,
-      totalCost,
-      redemptionValue,
-      couponEstimate,
-      maturityProfit,
-      breakevenPrice,
+      ...maturityQuote,
       grossYtm,
       netYtm,
       marketYield,
@@ -555,9 +551,23 @@ export default function App() {
     setActiveTab('trades');
   };
 
-  const deleteTradeFromDB = async (id) => {
-    if (!user) return;
-    await deleteDoc(doc(db, 'users', user.uid, 'trades', id));
+  const handleDeleteTrade = async (trade) => {
+    if (!user || !window.confirm(`將 ${trade.cusip || '這筆交易'} 移至回收桶？之後仍可復原。`)) return;
+    try {
+      await saveTradeToDB(markTradeDeleted(trade));
+    } catch (error) {
+      console.error('移至回收桶失敗：', trade.id, error);
+      alert('未能刪除交易，資料沒有變更。請檢查網絡後重試。');
+    }
+  };
+
+  const handleRestoreTrade = async (trade) => {
+    try {
+      await saveTradeToDB(restoreDeletedTrade(trade));
+    } catch (error) {
+      console.error('復原交易失敗：', trade.id, error);
+      alert('未能復原交易，請檢查網絡後重試。');
+    }
   };
 
   const handleSaveTrade = async (e) => {
@@ -930,7 +940,7 @@ export default function App() {
             <p className="text-[10px] sm:text-[11px] text-slate-400 mt-1">現時 YTM 以目前市場淨價加應計利息計算，並以今日作為估值日。</p>
           </div>
           <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-500">
-            {yieldCurve?.updatedAt && <span className="bg-slate-100 px-2 py-0.5 rounded-md">FRED · {yieldCurve.updatedAt}</span>}
+            {yieldCurve?.observationDate && <span className="bg-slate-100 px-2 py-0.5 rounded-md">FRED 觀察日 · {yieldCurve.observationDate}</span>}
             {yieldCurveError && <span className="text-red-500 flex items-center max-w-[180px] truncate" title={yieldCurveError}><AlertCircle size={11} className="mr-1 flex-shrink-0"/>{yieldCurveError}</span>}
             <button onClick={handleRefreshCurve} disabled={isFetchingCurve} title="重新讀取市場收益率" aria-label="重新讀取市場收益率" className="p-1.5 hover:bg-slate-100 rounded-md disabled:opacity-40 transition-colors">
               {isFetchingCurve ? <Loader2 size={14} className="animate-spin"/> : <RefreshCw size={14}/>}
@@ -1196,18 +1206,24 @@ export default function App() {
           <h3 className="text-base sm:text-lg font-bold text-slate-800">債券交易總帳</h3>
           <button onClick={() => { setFormData(defaultForm); setIsFormOpen(true); }} className="primary-button px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold flex items-center"><Plus size={15} className="mr-1" /> 新增交易</button>
         </div>
-        <div className="ledger-tabs flex gap-1 sm:gap-6 px-2 sm:px-4 pt-2">
+        <div className="ledger-tabs flex gap-1 sm:gap-6 px-2 sm:px-4 pt-2 overflow-x-auto">
           <button onClick={() => setLedgerSubTab('active')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'active' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Activity size={14} className="mr-1.5"/> 活躍 ({activeTrades.length})</button>
           <button onClick={() => setLedgerSubTab('closed')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'closed' ? 'border-slate-800 text-slate-800' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Archive size={14} className="mr-1.5"/> 已結算 ({maturedTrades.length + closedTrades.length})</button>
           <button onClick={() => setLedgerSubTab('coupons')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'coupons' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><History size={14} className="mr-1.5"/> 收息 ({receivedCoupons.length})</button>
+          <button onClick={() => setLedgerSubTab('deleted')} className={`pb-2.5 px-2 text-xs sm:text-sm font-bold flex items-center border-b-2 whitespace-nowrap transition-colors ${ledgerSubTab === 'deleted' ? 'border-red-500 text-red-500' : 'border-transparent text-slate-500 hover:text-slate-700'}`}><Trash2 size={14} className="mr-1.5"/> 回收桶 ({deletedTrades.length})</button>
         </div>
         <div className="table-shell">
           {ledgerSubTab === 'coupons' ? (
              <table className="data-table coupon-table w-full text-left text-sm whitespace-nowrap"><thead><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP／類型</th><th className="p-4 text-right">派息金額（美元）</th></tr></thead><tbody>{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id}><td data-label="DATE" className="p-4 font-medium text-slate-700">{c.dateStr}</td><td data-label="CUSIP" className="p-4 text-slate-600">{c.cusip}</td><td data-label="AMOUNT" className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</td></tr>))}</tbody></table>
+          ) : ledgerSubTab === 'deleted' ? (
+            <table className="data-table holdings-table w-full text-left text-sm whitespace-nowrap">
+              <thead><tr><th className="p-4">CUSIP</th><th className="p-4">類型</th><th className="p-4 text-right">面值</th><th className="p-4">刪除時間</th><th className="p-4 text-center">操作</th></tr></thead>
+              <tbody>{deletedTrades.length === 0 ? <tr><td colSpan="5" className="p-8 text-center text-slate-400">回收桶沒有交易。</td></tr> : [...deletedTrades].sort((a,b) => String(b.deletedAt).localeCompare(String(a.deletedAt))).map(trade => (<tr key={trade.id}><td data-label="CUSIP" className="p-4 font-medium">{trade.cusip || '--'}</td><td data-label="TYPE" className="p-4">{{ 't-bill': '短期國庫券', 't-note': '中期國庫券', 't-bond': '長期國庫券', tips: '通脹保值國債' }[trade.type] || trade.type}</td><td data-label="FACE" className="p-4 text-right">${toFiniteNumber(trade.faceValue).toLocaleString()}</td><td data-label="DELETED" className="p-4">{new Date(trade.deletedAt).toLocaleString('zh-HK')}</td><td data-label="ACTIONS" className="p-4 text-center"><button type="button" onClick={() => handleRestoreTrade(trade)} className="secondary-button px-3 py-2 text-xs font-semibold rounded-lg inline-flex items-center gap-1"><RotateCcw size={14}/> 復原</button></td></tr>))}</tbody>
+            </table>
           ) : (
             <table className="data-table holdings-table w-full text-left text-sm whitespace-nowrap">
               <thead>
-                <tr><th className="p-4">CUSIP</th><th className="p-4">方向／類型</th><th className="p-4 text-right">面值</th><th className="p-4 text-right">成本（淨價）</th>{ledgerSubTab === 'active' ? <><th className="p-4 text-right text-blue-600">市場淨價</th><th className="p-4 text-right">未實現損益</th></> : <><th className="p-4 text-right">平倉價</th><th className="p-4 text-right text-emerald-600">已實現損益</th></>}<th className="p-4 text-center">操作</th></tr>
+                <tr><th className="p-4">CUSIP</th><th className="p-4">方向／類型</th><th className="p-4 text-right">面值</th><th className="p-4 text-right">成本（淨價）</th>{ledgerSubTab === 'active' ? <><th className="p-4 text-right text-blue-600">自訂市場淨價</th><th className="p-4 text-right text-violet-600">FRED 理論淨價</th><th className="p-4 text-right">未實現損益</th></> : <><th className="p-4 text-right">平倉價</th><th className="p-4 text-right text-emerald-600">已實現損益</th></>}<th className="p-4 text-center">操作</th></tr>
               </thead>
               <tbody>
                 {displayedTrades.length === 0 ? <tr><td colSpan="8" className="p-8 text-center text-slate-400">無紀錄。</td></tr> : displayedTrades.map(trade => {
@@ -1217,6 +1233,7 @@ export default function App() {
                   const faceValue = toFiniteNumber(trade.faceValue);
                   const cleanPrice = toFiniteNumber(trade.cleanPrice);
                   const marketPrice = toFiniteNumber(trade.currentMarketPrice, cleanPrice);
+                  const fredEstimatedPrice = Number(trade.fredEstimatedPrice);
                   const accruedInterestPer100 = calculateAccruedInterestPer100(trade, todayObj);
                   const dirtyPrice = getDirtyPrice(marketPrice, accruedInterestPer100) || marketPrice;
                   const closePrice = toFiniteNumber(trade.closePrice, marketPrice);
@@ -1226,11 +1243,11 @@ export default function App() {
                       <td data-label="TYPE" className="p-4"><span className={`trade-side ${trade.side === 'sell' ? 'trade-side--sell' : 'trade-side--buy'} px-2 py-0.5 rounded text-[10px] font-bold mr-1`}>{trade.side === 'sell' ? '賣空' : '買入'}</span><span className={`treasury-badge treasury-badge--${trade.type} px-2 py-0.5 rounded text-[10px] font-bold`}>{{ 't-bill': '短期國庫券', 't-note': '中期國庫券', 't-bond': '長期國庫券', tips: '通脹保值國債' }[trade.type] || trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉（{trade.closeDate}）</div>}</td>
                       <td data-label="FACE" className="p-4 text-right">${faceValue.toLocaleString()}</td><td data-label="COST" className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
                       {ledgerSubTab === 'active' ? (
-                        <><td data-label="MARKET" className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
+                        <><td data-label="MARKET" className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td data-label="FRED ESTIMATE" className="p-4 text-right"><div className="font-medium text-violet-600">{Number.isFinite(fredEstimatedPrice) && fredEstimatedPrice > 0 ? fredEstimatedPrice.toFixed(3) : '--'}</div>{trade.fredEstimatedAt && <div className="text-[10px] text-slate-400">觀察日 {trade.fredEstimatedAt}</div>}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       ) : (
                         <><td data-label="CLOSE" className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000（面值）'}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
                       )}
-                      <td data-label="ACTIONS" className="p-4 text-center"><div className="flex items-center justify-center space-x-2"><button aria-label="編輯交易" title="編輯交易" onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="icon-button text-blue-500 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button aria-label="平倉" onClick={()=>{setClosingTradeId(trade.id); setCloseData({ closeDate: formatDateOnly(new Date()), closePrice: trade.currentMarketPrice, closeCommission: 0, closeAccruedInterestPer100: '' }); setIsCloseModalOpen(true);}} className="icon-button text-orange-500 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button aria-label="刪除交易" title="刪除交易" onClick={() => deleteTradeFromDB(trade.id)} className="icon-button text-red-500 p-1 rounded"><Trash2 size={16} /></button></div></td>
+                      <td data-label="ACTIONS" className="p-4 text-center"><div className="flex items-center justify-center space-x-2"><button aria-label="編輯交易" title="編輯交易" onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="icon-button text-blue-500 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button aria-label="平倉" onClick={()=>{setClosingTradeId(trade.id); setCloseData({ closeDate: formatDateOnly(new Date()), closePrice: trade.currentMarketPrice, closeCommission: 0, closeAccruedInterestPer100: '' }); setIsCloseModalOpen(true);}} className="icon-button text-orange-500 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button aria-label="移至回收桶" title="移至回收桶" onClick={() => handleDeleteTrade(trade)} className="icon-button text-red-500 p-1 rounded"><Trash2 size={16} /></button></div></td>
                     </tr>
                   );
                 })}

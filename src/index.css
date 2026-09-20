@@ -626,6 +626,7 @@ h3 {
 }
 
 .hero-card > .absolute {
+  position: absolute;
   right: 4.5% !important;
   top: 50% !important;
   opacity: 0.075 !important;

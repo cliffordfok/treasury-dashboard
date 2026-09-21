@@ -63,7 +63,8 @@ service cloud.firestore {
 
     function hasSupportedCouponTerms(data) {
       return (data.type == 't-bill' && data.couponRate == 0 && data.couponFrequency == 0)
-        || (data.type != 't-bill' && data.couponFrequency == 2);
+        || (data.type in ['t-note', 't-bond'] && data.couponFrequency == 2)
+        || (data.type == 'tips' && data.couponFrequency in [1, 2, 4, 12]);
     }
 
     function hasUnchangedLegacyCouponTerms(data) {
@@ -74,6 +75,20 @@ service cloud.firestore {
         && data.maturityDate == resource.data.maturityDate
         && data.couponRate == resource.data.couponRate
         && data.couponFrequency == resource.data.couponFrequency;
+    }
+
+    function hasUnchangedTipsTerms(data) {
+      return resource.data.type == 'tips'
+        && data.type == resource.data.type
+        && data.side == resource.data.side
+        && data.tradeDate == resource.data.tradeDate
+        && data.maturityDate == resource.data.maturityDate
+        && data.faceValue == resource.data.faceValue
+        && data.cleanPrice == resource.data.cleanPrice
+        && data.couponRate == resource.data.couponRate
+        && data.commission == resource.data.commission
+        && data.couponFrequency == resource.data.couponFrequency
+        && data.status == resource.data.status;
     }
 
     function hasValidOptionalValues(data) {
@@ -129,7 +144,13 @@ service cloud.firestore {
       return hasValidFields(data)
         && hasValidIdentity(data, tradeId)
         && hasValidBaseTerms(data)
-        && (hasSupportedCouponTerms(data) || hasUnchangedLegacyCouponTerms(data))
+        && (
+          (resource.data.type == 'tips' && hasUnchangedTipsTerms(data))
+          || (
+            resource.data.type != 'tips'
+            && (hasSupportedCouponTerms(data) || hasUnchangedLegacyCouponTerms(data))
+          )
+        )
         && hasValidOptionalValues(data)
         && hasValidClose(data)
         && hasValidFredEstimate(data);
@@ -139,7 +160,7 @@ service cloud.firestore {
       allow read: if isOwner(userId);
 
       allow create: if isOwner(userId)
-        && request.resource.data.type in ['t-bill', 't-note', 't-bond']
+        && request.resource.data.type in ['t-bill', 't-note', 't-bond', 'tips']
         && isValidTrade(request.resource.data, tradeId);
 
       allow update: if isOwner(userId)

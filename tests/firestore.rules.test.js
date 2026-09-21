@@ -139,17 +139,16 @@ describe('Firestore trade ledger rules', () => {
     await assertSucceeds(updateDoc(reference, { couponFrequency: 2 }));
   });
 
-  it('preserves valid legacy TIPS records but prevents new TIPS creation', async () => {
+  it('allows valid TIPS backup restoration while keeping TIPS terms immutable', async () => {
     const alice = testEnvironment.authenticatedContext('alice');
     const reference = tradeRef(alice);
     const tipsTrade = makeTrade({ type: 'tips', accruedInterestPer100: 1.25 });
 
-    await assertFails(setDoc(reference, tipsTrade));
-    await testEnvironment.withSecurityRulesDisabled(async (context) => {
-      await setDoc(tradeRef(context), tipsTrade);
-    });
+    await assertSucceeds(setDoc(reference, tipsTrade));
     await assertSucceeds(updateDoc(reference, { currentMarketPrice: 100.5 }));
     await assertSucceeds(setDoc(reference, { ...tipsTrade, currentMarketPrice: 100.75 }));
     await assertFails(updateDoc(reference, { type: 't-note' }));
+    await assertFails(updateDoc(reference, { couponFrequency: 4 }));
+    await assertFails(updateDoc(reference, { couponRate: 2 }));
   });
 });

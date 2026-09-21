@@ -35,7 +35,12 @@ import {
   normalizeYieldCurve,
   shouldUpdateFredEstimate,
 } from './lib/yieldCurve.js';
-import { buildTradeBackup, markTradeDeleted, restoreDeletedTrade } from './lib/tradeLifecycle.js';
+import {
+  buildTradeBackup,
+  markTradeDeleted,
+  normalizeTradeBackupEntry,
+  restoreDeletedTrade,
+} from './lib/tradeLifecycle.js';
 
 const YieldCurveChart = lazy(() => import('./components/YieldCurveChart.jsx'));
 
@@ -776,35 +781,20 @@ export default function App() {
         if (!Array.isArray(imported)) { alert('檔案格式錯誤：需要為交易陣列。'); return; }
         if (imported.length > MAX_IMPORT_TRADES) { alert(`每次最多匯入 ${MAX_IMPORT_TRADES} 筆交易。`); return; }
         const existingIds = new Set([...trades, ...deletedTrades].map(t => t.id));
-        const validTypes = new Set(['t-bill', 't-note', 't-bond']);
-        const validSides = new Set(['buy', 'sell']);
-        const validFreq = new Set([2]);
-        const validStatus = new Set(['active', 'closed', undefined, null, '']);
         const errors = [];
         const pendingTrades = [];
 
         for (let i = 0; i < imported.length; i++) {
           const prefix = `第 ${i + 1} 筆`;
           const rawTrade = imported[i];
-          if (!rawTrade || typeof rawTrade !== 'object' || Array.isArray(rawTrade)) { errors.push(`${prefix}：格式不是物件`); continue; }
-          const trade = normalizeTradeForStorage(rawTrade);
-          delete trade.deletedAt;
-          if (!trade.id || trade.id.length > 1500 || trade.id.includes('/')) { errors.push(`${prefix}：交易識別碼（id）無效`); continue; }
+          let trade;
+          try {
+            trade = normalizeTradeBackupEntry(rawTrade);
+          } catch (error) {
+            errors.push(`${prefix}：${error.message}`);
+            continue;
+          }
           if (existingIds.has(trade.id)) { errors.push(`${prefix}：交易識別碼（id）重複`); continue; }
-          if (trade.type === 'tips') { errors.push(`${prefix}：TIPS 暫未支援，資料未匯入`); continue; }
-          if (!validTypes.has(trade.type)) { errors.push(`${prefix}：債券類型（type）無效`); continue; }
-          if (!validSides.has(trade.side)) { errors.push(`${prefix}：交易方向（side）無效`); continue; }
-          if (!validStatus.has(imported[i]?.status)) { errors.push(`${prefix}：狀態（status）無效`); continue; }
-          if (!trade.cusip || trade.cusip.length > 120) { errors.push(`${prefix}：CUSIP／名稱無效`); continue; }
-          if (!isValidISODate(trade.tradeDate) || !isValidISODate(trade.maturityDate)) { errors.push(`${prefix}：日期格式或日期值無效`); continue; }
-          if (toDateAtMidnight(trade.maturityDate) <= toDateAtMidnight(trade.tradeDate)) { errors.push(`${prefix}：到期日（maturityDate）必須晚於交收日（legacy tradeDate）`); continue; }
-          if (!Number.isFinite(trade.faceValue) || trade.faceValue <= 0) { errors.push(`${prefix}：面值（faceValue）無效`); continue; }
-          if (!Number.isFinite(trade.cleanPrice) || trade.cleanPrice <= 0) { errors.push(`${prefix}：淨價（cleanPrice）無效`); continue; }
-          if (!Number.isFinite(trade.currentMarketPrice) || trade.currentMarketPrice <= 0) { errors.push(`${prefix}：目前市場價格（currentMarketPrice）無效`); continue; }
-          if (!Number.isFinite(trade.commission) || trade.commission < 0) { errors.push(`${prefix}：手續費（commission）無效`); continue; }
-          if (trade.type !== 't-bill' && (!Number.isFinite(trade.couponRate) || trade.couponRate < 0)) { errors.push(`${prefix}：票息率（couponRate）無效`); continue; }
-          if (trade.type !== 't-bill' && !validFreq.has(trade.couponFrequency)) { errors.push(`${prefix}：派息頻率（couponFrequency）無效`); continue; }
-          if (trade.status === 'closed' && (!isValidISODate(trade.closeDate) || toDateAtMidnight(trade.closeDate) < toDateAtMidnight(trade.tradeDate) || toDateAtMidnight(trade.closeDate) > toDateAtMidnight(trade.maturityDate) || !Number.isFinite(trade.closePrice) || trade.closePrice <= 0 || trade.closeCommission < 0)) { errors.push(`${prefix}：已平倉交易缺少有效 closeDate／closePrice`); continue; }
 
           existingIds.add(trade.id);
           pendingTrades.push(trade);

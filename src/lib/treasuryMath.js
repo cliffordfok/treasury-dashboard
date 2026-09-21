@@ -152,12 +152,14 @@ const getStoredAccruedInterest = (value) => {
 
 export const getPurchaseAccruedInterestPer100 = (trade) => {
   if (!isCouponTreasury(trade)) return 0;
+  // Legacy storage calls this field tradeDate, but it represents settlement date.
   return getStoredAccruedInterest(trade.accruedInterestPer100)
     ?? calculateAccruedInterestPer100(trade, trade.tradeDate);
 };
 
 export const getCloseAccruedInterestPer100 = (trade) => {
   if (!isCouponTreasury(trade)) return 0;
+  // Legacy storage calls this field closeDate, but it represents settlement date.
   return getStoredAccruedInterest(trade.closeAccruedInterestPer100)
     ?? calculateAccruedInterestPer100(trade, trade.closeDate);
 };
@@ -371,8 +373,11 @@ export const normalizeTradeForStorage = (trade) => {
     status,
   };
 
+  // Existing TIPS remain unsupported for calculations, but valid legacy ledger
+  // fields must survive routine writes such as price updates and soft deletion.
+  const preservesStoredAccruedInterest = isCouponTreasury(normalized) || normalized.type === 'tips';
   const purchaseAccrued = getStoredAccruedInterest(trade.accruedInterestPer100);
-  if (isCouponTreasury(normalized) && purchaseAccrued != null) normalized.accruedInterestPer100 = purchaseAccrued;
+  if (preservesStoredAccruedInterest && purchaseAccrued != null) normalized.accruedInterestPer100 = purchaseAccrued;
   else delete normalized.accruedInterestPer100;
 
   if (status === 'closed') {
@@ -380,7 +385,7 @@ export const normalizeTradeForStorage = (trade) => {
     normalized.closePrice = toFiniteNumber(trade.closePrice, normalized.currentMarketPrice);
     normalized.closeCommission = toFiniteNumber(trade.closeCommission);
     const closeAccrued = getStoredAccruedInterest(trade.closeAccruedInterestPer100);
-    if (isCouponTreasury(normalized) && closeAccrued != null) normalized.closeAccruedInterestPer100 = closeAccrued;
+    if (preservesStoredAccruedInterest && closeAccrued != null) normalized.closeAccruedInterestPer100 = closeAccrued;
     else delete normalized.closeAccruedInterestPer100;
   }
 

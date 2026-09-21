@@ -17,7 +17,7 @@ const getAllowedOrigins = (env) => String(env.ALLOWED_ORIGIN || "")
 
 const isOriginAllowed = (request, env) => {
   const requestOrigin = request.headers.get("Origin");
-  if (!requestOrigin) return true;
+  if (!requestOrigin) return false;
   const allowedOrigins = getAllowedOrigins(env);
   return allowedOrigins.includes("*") || allowedOrigins.includes(requestOrigin);
 };
@@ -124,7 +124,7 @@ Return only valid JSON with these fields:
   "cusip": string,
   "type": "t-bill" | "t-note" | "t-bond",
   "side": "buy" | "sell",
-  "tradeDate": "YYYY-MM-DD",
+  "tradeDate": "YYYY-MM-DD" | "",
   "maturityDate": "YYYY-MM-DD",
   "faceValue": number,
   "cleanPrice": number,
@@ -136,6 +136,8 @@ Return only valid JSON with these fields:
 
 Rules:
 - Use "buy" unless the text clearly says sell/short.
+- The legacy field "tradeDate" stores the settlement date used for calculations, not the execution date.
+- Use an explicitly stated settlement/settle date. If none is stated, return an empty string and do not infer T+1.
 - Use clean price, not dirty price, when both are present.
 - T-Bill couponRate must be 0 and couponFrequency must be 0.
 - For T-Note/T-Bond, default couponFrequency to 2 when not stated.
@@ -159,6 +161,25 @@ export default {
 
     if (request.method !== "POST") {
       return jsonResponse({ error: "Method not allowed" }, 405, corsHeaders);
+    }
+
+    if (!env.AI_RATE_LIMITER?.limit) {
+      return jsonResponse({ error: "Rate limiter unavailable" }, 503, corsHeaders);
+    }
+
+    const rateLimitKey = request.headers.get("CF-Connecting-IP") || "unknown-client";
+    let rateLimitResult;
+    try {
+      rateLimitResult = await env.AI_RATE_LIMITER.limit({ key: rateLimitKey });
+    } catch {
+      return jsonResponse({ error: "Rate limiter unavailable" }, 503, corsHeaders);
+    }
+    if (!rateLimitResult?.success) {
+      return jsonResponse(
+        { error: "Too many requests" },
+        429,
+        { ...corsHeaders, "Retry-After": "60" },
+      );
     }
 
     const userApiKey = request.headers.get("X-DeepSeek-API-Key") || "";

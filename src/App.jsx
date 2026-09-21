@@ -86,7 +86,8 @@ const fetchWithRetry = async (url, options, retries = 3, timeoutMs = 15000) => {
       const response = await fetch(url, { ...options, signal: controller.signal });
       if (!response.ok) {
         const error = new Error(`HTTP error! status: ${response.status}`);
-        error.retryable = response.status === 429 || response.status >= 500;
+        // Respect an explicit rate limit instead of multiplying rejected requests.
+        error.retryable = response.status >= 500;
         throw error;
       }
       return await response.json();
@@ -131,7 +132,7 @@ Return only valid JSON with these fields:
   "cusip": string,
   "type": "t-bill" | "t-note" | "t-bond",
   "side": "buy" | "sell",
-  "tradeDate": "YYYY-MM-DD",
+  "tradeDate": "YYYY-MM-DD" | "",
   "maturityDate": "YYYY-MM-DD",
   "faceValue": number,
   "cleanPrice": number,
@@ -143,6 +144,8 @@ Return only valid JSON with these fields:
 
 Rules:
 - Use "buy" unless the text clearly says sell/short.
+- The legacy field "tradeDate" stores the settlement date used for calculations, not the execution date.
+- Use an explicitly stated settlement/settle date. If none is stated, return an empty string and do not infer T+1.
 - Use clean price, not dirty price, when both are present.
 - T-Bill couponRate must be 0 and couponFrequency must be 0.
 - For T-Note/T-Bond, default couponFrequency to 2 when not stated.
@@ -637,7 +640,7 @@ export default function App() {
       return;
     }
     if (!isValidISODate(formData.tradeDate) || !isValidISODate(formData.maturityDate) || toDateAtMidnight(formData.maturityDate) <= toDateAtMidnight(formData.tradeDate)) {
-      alert('請輸入有效交易日及較後的到期日。');
+      alert('請輸入有效交收日及較後的到期日。');
       return;
     }
     const faceValue = Number(formData.faceValue);
@@ -675,7 +678,7 @@ export default function App() {
     const trade = trades.find(t => t.id === closingTradeId);
     if (!trade) return;
     if (!isValidISODate(closeData.closeDate) || toDateAtMidnight(closeData.closeDate) < toDateAtMidnight(trade.tradeDate) || toDateAtMidnight(closeData.closeDate) > toDateAtMidnight(trade.maturityDate)) {
-      alert('平倉日期必須介乎交易日與到期日之間。');
+      alert('平倉交收日必須介乎開倉交收日與到期日之間。');
       return;
     }
     const closePrice = Number(closeData.closePrice);
@@ -794,7 +797,7 @@ export default function App() {
           if (!validStatus.has(imported[i]?.status)) { errors.push(`${prefix}：狀態（status）無效`); continue; }
           if (!trade.cusip || trade.cusip.length > 120) { errors.push(`${prefix}：CUSIP／名稱無效`); continue; }
           if (!isValidISODate(trade.tradeDate) || !isValidISODate(trade.maturityDate)) { errors.push(`${prefix}：日期格式或日期值無效`); continue; }
-          if (toDateAtMidnight(trade.maturityDate) <= toDateAtMidnight(trade.tradeDate)) { errors.push(`${prefix}：到期日（maturityDate）必須晚於交易日（tradeDate）`); continue; }
+          if (toDateAtMidnight(trade.maturityDate) <= toDateAtMidnight(trade.tradeDate)) { errors.push(`${prefix}：到期日（maturityDate）必須晚於交收日（legacy tradeDate）`); continue; }
           if (!Number.isFinite(trade.faceValue) || trade.faceValue <= 0) { errors.push(`${prefix}：面值（faceValue）無效`); continue; }
           if (!Number.isFinite(trade.cleanPrice) || trade.cleanPrice <= 0) { errors.push(`${prefix}：淨價（cleanPrice）無效`); continue; }
           if (!Number.isFinite(trade.currentMarketPrice) || trade.currentMarketPrice <= 0) { errors.push(`${prefix}：目前市場價格（currentMarketPrice）無效`); continue; }
@@ -1119,7 +1122,7 @@ export default function App() {
                 <input id="ytm-face-value" type="number" min="1" step="100" value={ytmForm.faceValue} onChange={(e) => update('faceValue', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               <div>
-                <label htmlFor="ytm-trade-date" className="block text-xs font-medium text-slate-500 mb-1">交易日期</label>
+                <label htmlFor="ytm-trade-date" className="block text-xs font-medium text-slate-500 mb-1">交收日期</label>
                 <input id="ytm-trade-date" type="date" value={ytmForm.tradeDate} onChange={(e) => update('tradeDate', e.target.value)} className="w-full p-2 border rounded-lg text-sm" />
               </div>
               <div>
@@ -1411,7 +1414,7 @@ export default function App() {
                       <select id="trade-side" required name="side" value={formData.side} onChange={(e)=>setFormData({...formData, side: e.target.value})} className="w-full p-2 border rounded-lg text-sm"><option value="buy">買入</option><option value="sell">賣空</option></select>
                     </div>
                     <div>
-                      <label htmlFor="trade-date" className="block text-xs font-medium text-slate-500 mb-1">交易日期</label>
+                      <label htmlFor="trade-date" className="block text-xs font-medium text-slate-500 mb-1">買入／開倉交收日</label>
                       <input id="trade-date" required type="date" name="tradeDate" value={formData.tradeDate} onChange={(e)=>setFormData({...formData, tradeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" />
                     </div>
                     <div>
@@ -1465,7 +1468,7 @@ export default function App() {
             <div className="modal-header modal-header--warning p-5 flex justify-between items-center"><h2 id="close-dialog-title" className="text-lg font-bold flex items-center"><LogOut size={20} className="mr-2"/> 平倉結算</h2></div>
             <form id="closeForm" onSubmit={handleClosePosition} className="p-5 space-y-4">
               <p className="text-sm text-slate-600 mb-4">平倉後，該筆債券會移入「已結算區」，利潤會按全價（淨價加應計利息）鎖定。</p>
-              <div><label htmlFor="close-date" className="block text-xs font-medium text-slate-500 mb-1">賣出/平倉日期</label><input id="close-date" required type="date" value={closeData.closeDate} onChange={(e)=>setCloseData({...closeData, closeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
+              <div><label htmlFor="close-date" className="block text-xs font-medium text-slate-500 mb-1">賣出／平倉交收日</label><input id="close-date" required type="date" value={closeData.closeDate} onChange={(e)=>setCloseData({...closeData, closeDate: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
               <div><label htmlFor="close-price" className="block text-xs font-medium text-slate-500 mb-1">成交淨價</label><input id="close-price" required type="number" step="0.001" value={closeData.closePrice} onChange={(e)=>setCloseData({...closeData, closePrice: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>
               {isCouponTreasury(trades.find((trade) => trade.id === closingTradeId)) && <div><label htmlFor="close-accrued-interest" className="block text-xs font-medium text-slate-500 mb-1">每 100 元面值的平倉應計利息（可選）</label><input id="close-accrued-interest" type="number" min="0" step="0.001" value={closeData.closeAccruedInterestPer100} onChange={(e)=>setCloseData({...closeData, closeAccruedInterestPer100: e.target.value})} placeholder="自動計算" className="w-full p-2 border rounded-lg text-sm" /></div>}
               <div><label htmlFor="close-commission" className="block text-xs font-medium text-slate-500 mb-1">平倉手續費（美元）</label><input id="close-commission" type="number" step="0.01" value={closeData.closeCommission} onChange={(e)=>setCloseData({...closeData, closeCommission: e.target.value})} className="w-full p-2 border rounded-lg text-sm" /></div>

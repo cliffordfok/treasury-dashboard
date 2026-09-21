@@ -78,6 +78,27 @@ describe('accrued interest and PnL', () => {
     expect(calculateAccruedInterestPer100(trade, '2026-04-15')).not.toBe(1.25);
   });
 
+  it('treats legacy tradeDate and closeDate fields as settlement dates', () => {
+    const trade = {
+      ...couponTrade,
+      tradeDate: '2026-03-02',
+      cleanPrice: 100,
+      commission: 0,
+      status: 'closed',
+      closeDate: '2026-03-03',
+      closePrice: 100,
+      closeCommission: 0,
+    };
+    const purchaseAccrued = calculateAccruedInterestPer100(trade, trade.tradeDate);
+    const closeAccrued = calculateAccruedInterestPer100(trade, trade.closeDate);
+
+    expect(getPurchaseAccruedInterestPer100(trade)).toBeCloseTo(purchaseAccrued, 10);
+    expect(calculateClosedTradePricePnl(trade)).toBeCloseTo(
+      ((closeAccrued - purchaseAccrued) * trade.faceValue) / 100,
+      10,
+    );
+  });
+
   it('resets accrued interest to zero on a coupon date', () => {
     expect(calculateAccruedInterestPer100(couponTrade, '2026-07-15')).toBe(0);
   });
@@ -122,6 +143,48 @@ describe('unsupported TIPS protection', () => {
     expect(isSupportedTreasuryType(tipsTrade)).toBe(false);
     expect(generateAllCoupons(tipsTrade)).toEqual([]);
     expect(calculateClosedTradePricePnl({ ...tipsTrade, status: 'closed' })).toBeNull();
+  });
+
+  it('preserves valid legacy TIPS fields during routine active-trade writes', () => {
+    const normalized = normalizeTradeForStorage({
+      ...tipsTrade,
+      cusip: '912810TIPS',
+      accruedInterestPer100: 1.25,
+      fredEstimatedPrice: 99.75,
+      fredEstimatedAt: '2026-09-17',
+      fredPricingSignature: 'tips|2030-07-15|4|2',
+      priceUpdatedAt: '2026-09-18',
+      deletedAt: '2026-09-20T01:02:03.000Z',
+    });
+
+    expect(normalized.accruedInterestPer100).toBe(1.25);
+    expect(normalized.fredEstimatedPrice).toBe(99.75);
+    expect(normalized.fredEstimatedAt).toBe('2026-09-17');
+    expect(normalized.fredPricingSignature).toBe('tips|2030-07-15|4|2');
+    expect(normalized.priceUpdatedAt).toBe('2026-09-18');
+    expect(normalized.deletedAt).toBe('2026-09-20T01:02:03.000Z');
+  });
+
+  it('preserves valid legacy TIPS close and accrued-interest fields', () => {
+    const normalized = normalizeTradeForStorage({
+      ...tipsTrade,
+      cusip: '912810TIPS',
+      accruedInterestPer100: 1.25,
+      status: 'closed',
+      closeDate: '2026-09-18',
+      closePrice: 101,
+      closeCommission: 2,
+      closeAccruedInterestPer100: 1.75,
+    });
+
+    expect(normalized).toMatchObject({
+      accruedInterestPer100: 1.25,
+      closeDate: '2026-09-18',
+      closePrice: 101,
+      closeCommission: 2,
+      closeAccruedInterestPer100: 1.75,
+    });
+    expect(calculateClosedTradePricePnl(normalized)).toBeNull();
   });
 });
 

@@ -142,13 +142,14 @@ describe('Firestore trade ledger rules', () => {
   it('preserves valid legacy TIPS records but prevents new TIPS creation', async () => {
     const alice = testEnvironment.authenticatedContext('alice');
     const reference = tradeRef(alice);
-    const tipsTrade = makeTrade({ type: 'tips' });
+    const tipsTrade = makeTrade({ type: 'tips', accruedInterestPer100: 1.25 });
 
     await assertFails(setDoc(reference, tipsTrade));
     await testEnvironment.withSecurityRulesDisabled(async (context) => {
       await setDoc(tradeRef(context), tipsTrade);
     });
     await assertSucceeds(updateDoc(reference, { currentMarketPrice: 100.5 }));
+    await assertSucceeds(setDoc(reference, { ...tipsTrade, currentMarketPrice: 100.75 }));
     await assertFails(updateDoc(reference, { type: 't-note' }));
   });
 });

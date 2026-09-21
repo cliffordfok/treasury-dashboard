@@ -24,8 +24,14 @@ npx wrangler deploy
 - `ALLOWED_ORIGIN`：以逗號分隔、獲准呼叫此 Worker 的瀏覽器來源。
 - `DEEPSEEK_TIMEOUT_MS`：可選，上游請求 timeout，預設 15000 毫秒並限制於 1000–30000 毫秒。
 
-沒有使用者金鑰的請求會收到 `401`；來自 `ALLOWED_ORIGIN` 以外來源的瀏覽器
-請求會收到 `403`。
+`wrangler.toml` 亦設定 Cloudflare 原生 `AI_RATE_LIMITER` binding：每個
+`CF-Connecting-IP` 每分鐘最多 20 個 POST 請求。超出限制會收到 `429` 及
+`Retry-After: 60`；binding 缺失或失效時會 fail closed 並回傳 `503`。部署前應確認
+`namespace_id` 沒有與同一 Cloudflare 帳戶內其他 Rate Limiting binding 共用。
+
+沒有使用者金鑰的請求會收到 `401`；缺少 `Origin` 或來自 `ALLOWED_ORIGIN`
+以外來源的請求會收到 `403`。Origin allowlist 只是一層瀏覽器來源防護，不能取代
+Cloudflare Rate Limiting 或其他伺服器端濫用控制。
 
 DeepSeek 上游請求逾時會中止並回傳 `504`；上游 5xx 則轉為 `502`。
 

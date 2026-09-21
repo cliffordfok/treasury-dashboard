@@ -4,8 +4,8 @@
 
 ## 目前限制
 
-- TIPS 需要 CPI 指數比率、通脹調整後本金及通縮下限。現有 TIPS 記錄會保留及顯示，但不會計入估值、YTM、利息或損益；新增及匯入 TIPS 會被阻擋。
-- FRED CMT 曲線只用作獨立的理論淨價估算，不會覆寫使用者輸入的市場淨價；理論估值不應視為個別 CUSIP 的可成交報價。
+- TIPS 需要 CPI 指數比率、通脹調整後本金及通縮下限。現有及由備份還原的 TIPS 記錄會保留及顯示，但不會計入估值、YTM、利息或損益；介面仍會阻擋手動新增 TIPS。
+- FRED CMT 曲線只用作獨立的理論淨價估算，並以曲線共同觀察日作估值日，不會覆寫使用者輸入的市場淨價；理論估值不應視為個別 CUSIP 的可成交報價。
 - T-Note 及 T-Bond 按美國國債的半年派息慣例處理；新增及匯入資料不接受其他派息頻率。
 - 為兼容現有備份及 Firestore Schema，`tradeDate` 與 `closeDate` 保留舊欄位名稱，但其值分別代表買入／開倉及賣出／平倉的**交收日**。應按成交確認書填寫；程式不會自行推算 T+1。
 - 定價模型供個人記錄及估算，不應視為券商結單、稅務或投資建議的替代品。
@@ -27,7 +27,7 @@ FRED 資料由 `.github/workflows/deploy.yml` 在伺服器端取得，並只寫�
 
 交易的刪除操作會先要求確認，然後移至帳本內的「回收桶」。回收桶保留完整交易資料並可隨時復原，不會直接永久刪除 Firestore 文件。
 
-JSON 匯入每次上限為 1 MB／500 筆，並使用 Firestore 原子批次寫入；批次失敗時不會留下只匯入一部分的資料。重複判斷以交易 `id` 為準，允許同一 CUSIP、交收日期及面值的多筆真實成交。
+JSON 匯入每次上限為 1 MB／500 筆，並使用 Firestore 原子批次寫入；批次失敗時不會留下只匯入一部分的資料。備份會保留回收桶狀態及既有 TIPS，重複判斷以交易 `id` 為準，並允許同一 CUSIP、交收日期及面值的多筆真實成交。
 
 ## 驗證
 
@@ -48,7 +48,7 @@ npm run check
 
 ## Firebase 安全規則
 
-`firestore.rules` 只允許已登入使用者存取自己的 `users/{uid}/trades/{tradeId}`，並驗證文件欄位、型別、數值範圍、日期關係、平倉資料及 FRED 估值資料。規則拒絕用戶端永久刪除，只容許應用程式以 `deletedAt` 軟刪除及復原。新增 TIPS 會被拒絕，既有有效 TIPS 文件仍可保留及更新。
+`firestore.rules` 只允許已登入使用者存取自己的 `users/{uid}/trades/{tradeId}`，並驗證文件欄位、型別、數值範圍、真實日曆日期、日期關係、平倉資料及 FRED 估值資料。規則拒絕用戶端永久刪除，只容許應用程式以 `deletedAt` 軟刪除及復原。規則容許還原 Schema 有效的 TIPS 備份，但介面不會建立新 TIPS，亦不會將 TIPS 納入未支援的計算。
 
 `npm run test:rules` 會以 `demo-treasury-dashboard` 本機 Emulator 專案驗證擁有權、Schema、軟刪除、永久刪除防護及既有 TIPS 相容性，不會連接正式 Firebase 資源。正式環境規則部署是一個獨立批准步驟，不包含在 GitHub Pages 部署內。
 
@@ -89,7 +89,7 @@ Production Build 設定 `VITE_FIREBASE_APPCHECK_SITE_KEY` 後，會在 Auth／Fi
 - `VITE_FIREBASE_STORAGE_BUCKET`
 - `VITE_FIREBASE_MESSAGING_SENDER_ID`
 - `VITE_FIREBASE_APP_ID`
-- 可選的 `VITE_FIREBASE_APPCHECK_SITE_KEY`、`VITE_AI_PROXY_URL`、`VITE_STOCK_QUOTE_PROXY_URL`
+- 可選的 `VITE_FIREBASE_APPCHECK_SITE_KEY`、`VITE_AI_PROXY_URL`
 
 ## 授權
 

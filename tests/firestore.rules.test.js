@@ -99,6 +99,32 @@ describe('Firestore trade ledger rules', () => {
     await assertFails(setDoc(tradeRef(alice), makeTrade({ couponFrequency: 12 })));
   });
 
+  it('accepts leap days and rejects impossible calendar dates and timestamps', async () => {
+    const alice = testEnvironment.authenticatedContext('alice');
+    const reference = tradeRef(alice, 'alice', 'leap-trade');
+
+    await assertSucceeds(setDoc(reference, makeTrade({
+      id: 'leap-trade',
+      tradeDate: '2024-02-29',
+    })));
+    for (const tradeDate of ['2026-02-29', '2026-02-31', '2026-04-31']) {
+      const tradeId = `invalid-${tradeDate}`;
+      await assertFails(setDoc(
+        tradeRef(alice, 'alice', tradeId),
+        makeTrade({ id: tradeId, tradeDate }),
+      ));
+    }
+    await assertSucceeds(updateDoc(reference, {
+      deletedAt: '2024-02-29T23:59:59.999Z',
+    }));
+    await assertFails(updateDoc(reference, {
+      deletedAt: '2026-02-29T23:59:59.999Z',
+    }));
+    await assertFails(updateDoc(reference, {
+      deletedAt: '2024-02-29T24:00:00.000Z',
+    }));
+  });
+
   it('requires complete and internally consistent closed-position data', async () => {
     const alice = testEnvironment.authenticatedContext('alice');
     const reference = tradeRef(alice);
@@ -139,17 +165,16 @@ describe('Firestore trade ledger rules', () => {
     await assertSucceeds(updateDoc(reference, { couponFrequency: 2 }));
   });
 
-  it('preserves valid legacy TIPS records but prevents new TIPS creation', async () => {
+  it('allows valid TIPS backup restoration while keeping TIPS terms immutable', async () => {
     const alice = testEnvironment.authenticatedContext('alice');
     const reference = tradeRef(alice);
     const tipsTrade = makeTrade({ type: 'tips', accruedInterestPer100: 1.25 });
 
-    await assertFails(setDoc(reference, tipsTrade));
-    await testEnvironment.withSecurityRulesDisabled(async (context) => {
-      await setDoc(tradeRef(context), tipsTrade);
-    });
+    await assertSucceeds(setDoc(reference, tipsTrade));
     await assertSucceeds(updateDoc(reference, { currentMarketPrice: 100.5 }));
     await assertSucceeds(setDoc(reference, { ...tipsTrade, currentMarketPrice: 100.75 }));
     await assertFails(updateDoc(reference, { type: 't-note' }));
+    await assertFails(updateDoc(reference, { couponFrequency: 4 }));
+    await assertFails(updateDoc(reference, { couponRate: 2 }));
   });
 });

@@ -27,15 +27,21 @@ import {
   solveYTMFromPrice,
   toDateAtMidnight,
   toFiniteNumber,
-  yieldToPrice,
 } from './lib/treasuryMath.js';
 import {
   getFredPricingSignature,
+  getFredTheoreticalEstimate,
   hasCurrentFredEstimate,
   normalizeYieldCurve,
   shouldUpdateFredEstimate,
 } from './lib/yieldCurve.js';
-import { buildTradeBackup, markTradeDeleted, restoreDeletedTrade } from './lib/tradeLifecycle.js';
+import {
+  buildTradeBackup,
+  markTradeDeleted,
+  normalizeTradeBackupEntry,
+  partitionTradesByLifecycle,
+  restoreDeletedTrade,
+} from './lib/tradeLifecycle.js';
 
 const YieldCurveChart = lazy(() => import('./components/YieldCurveChart.jsx'));
 
@@ -239,6 +245,7 @@ export default function App() {
   const [yieldCurve, setYieldCurve] = useState(null);
   const [yieldCurveError, setYieldCurveError] = useState('');
   const [isFetchingCurve, setIsFetchingCurve] = useState(true);
+  const [todayObj, setTodayObj] = useState(() => toDateAtMidnight(new Date()));
 
   const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: formatDateOnly(new Date()), maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2, accruedInterestPer100: '' };
   const defaultYtmForm = { type: 't-note', tradeDate: formatDateOnly(new Date()), maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0, accruedInterestPer100: '' };
@@ -289,6 +296,15 @@ export default function App() {
       previouslyFocused?.focus?.();
     };
   }, [isCloseModalOpen, isFormOpen]);
+
+  useEffect(() => {
+    const refreshValuationDate = () => {
+      const currentDate = toDateAtMidnight(new Date());
+      setTodayObj((previousDate) => previousDate?.getTime() === currentDate?.getTime() ? previousDate : currentDate);
+    };
+    const timerId = window.setInterval(refreshValuationDate, 60_000);
+    return () => window.clearInterval(timerId);
+  }, []);
 
   const saveTradeToDB = useCallback(async (tradeData) => {
     if (!user) return;
@@ -342,7 +358,7 @@ export default function App() {
     const toUpdate = trades.filter(t =>
       isSupportedTreasuryType(t)
       && t.status !== 'closed'
-      && !isMatured(t.maturityDate)
+      && !isMatured(t.maturityDate, todayObj)
       && shouldUpdateFredEstimate(t, curveDate)
       && !priceUpdatesInFlightRef.current.has(t.id)
     );
@@ -350,21 +366,12 @@ export default function App() {
       priceUpdatesInFlightRef.current.add(trade.id);
       (async () => {
         try {
-          const valuationDate = toDateAtMidnight(new Date());
-          const days = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
-          if (!days || days <= 0) return;
-          const remainingYears = days / 365.25;
-          const marketYield = getMarketYTMFromCurve(yieldCurve, remainingYears);
-          if (marketYield == null) return;
-          const newMktPrice = yieldToPrice(trade, marketYield, valuationDate);
-          if (newMktPrice == null || !Number.isFinite(newMktPrice) || newMktPrice <= 0) return;
-          const accruedInterestPer100 = calculateAccruedInterestPer100(trade, valuationDate);
-          const cleanMarketPrice = isCouponTreasury(trade) ? newMktPrice - accruedInterestPer100 : newMktPrice;
-          if (!Number.isFinite(cleanMarketPrice) || cleanMarketPrice <= 0) return;
+          const estimate = getFredTheoreticalEstimate(trade, yieldCurve);
+          if (!estimate) return;
           await saveTradeToDB({
             ...trade,
-            fredEstimatedPrice: roundMarketPriceForStorage(cleanMarketPrice),
-            fredEstimatedAt: curveDate,
+            fredEstimatedPrice: roundMarketPriceForStorage(estimate.cleanPrice),
+            fredEstimatedAt: estimate.observationDate,
             fredPricingSignature: getFredPricingSignature(trade),
           });
         } catch (err) {
@@ -375,7 +382,7 @@ export default function App() {
         }
       })();
     }
-  }, [yieldCurve, trades, user, isDbReady, saveTradeToDB]);
+  }, [yieldCurve, trades, user, isDbReady, saveTradeToDB, todayObj]);
 
   const handleRefreshCurve = async () => {
     setIsFetchingCurve(true);
@@ -429,23 +436,16 @@ export default function App() {
   };
 
   // --- Derived Data ---
-  const activeTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && !isMatured(t.maturityDate)), [trades]);
-  const maturedTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && isMatured(t.maturityDate)), [trades]);
-  const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
+  const {
+    active: activeTrades,
+    matured: maturedTrades,
+    closed: closedTrades,
+  } = useMemo(() => partitionTradesByLifecycle(trades, todayObj), [trades, todayObj]);
   const unsupportedTips = useMemo(() => trades.filter(t => t.type === 'tips'), [trades]);
   const supportedActiveTrades = useMemo(() => activeTrades.filter(isSupportedTreasuryType), [activeTrades]);
   const supportedMaturedTrades = useMemo(() => maturedTrades.filter(isSupportedTreasuryType), [maturedTrades]);
   const supportedClosedTrades = useMemo(() => closedTrades.filter(isSupportedTreasuryType), [closedTrades]);
   const allCoupons = useMemo(() => trades.filter(isSupportedTreasuryType).flatMap(generateAllCoupons), [trades]);
-  const [todayObj, setTodayObj] = useState(() => toDateAtMidnight(new Date()));
-  useEffect(() => {
-    const refreshValuationDate = () => {
-      const currentDate = toDateAtMidnight(new Date());
-      setTodayObj((previousDate) => previousDate?.getTime() === currentDate?.getTime() ? previousDate : currentDate);
-    };
-    const timerId = window.setInterval(refreshValuationDate, 60_000);
-    return () => window.clearInterval(timerId);
-  }, []);
   const receivedCoupons = useMemo(() => allCoupons.filter(c => c.date <= todayObj), [allCoupons, todayObj]);
   const upcomingCouponsList = useMemo(() => allCoupons.filter(c => c.date > todayObj && c.date.getFullYear() === todayObj.getFullYear()), [allCoupons, todayObj]);
 
@@ -776,35 +776,20 @@ export default function App() {
         if (!Array.isArray(imported)) { alert('檔案格式錯誤：需要為交易陣列。'); return; }
         if (imported.length > MAX_IMPORT_TRADES) { alert(`每次最多匯入 ${MAX_IMPORT_TRADES} 筆交易。`); return; }
         const existingIds = new Set([...trades, ...deletedTrades].map(t => t.id));
-        const validTypes = new Set(['t-bill', 't-note', 't-bond']);
-        const validSides = new Set(['buy', 'sell']);
-        const validFreq = new Set([2]);
-        const validStatus = new Set(['active', 'closed', undefined, null, '']);
         const errors = [];
         const pendingTrades = [];
 
         for (let i = 0; i < imported.length; i++) {
           const prefix = `第 ${i + 1} 筆`;
           const rawTrade = imported[i];
-          if (!rawTrade || typeof rawTrade !== 'object' || Array.isArray(rawTrade)) { errors.push(`${prefix}：格式不是物件`); continue; }
-          const trade = normalizeTradeForStorage(rawTrade);
-          delete trade.deletedAt;
-          if (!trade.id || trade.id.length > 1500 || trade.id.includes('/')) { errors.push(`${prefix}：交易識別碼（id）無效`); continue; }
+          let trade;
+          try {
+            trade = normalizeTradeBackupEntry(rawTrade);
+          } catch (error) {
+            errors.push(`${prefix}：${error.message}`);
+            continue;
+          }
           if (existingIds.has(trade.id)) { errors.push(`${prefix}：交易識別碼（id）重複`); continue; }
-          if (trade.type === 'tips') { errors.push(`${prefix}：TIPS 暫未支援，資料未匯入`); continue; }
-          if (!validTypes.has(trade.type)) { errors.push(`${prefix}：債券類型（type）無效`); continue; }
-          if (!validSides.has(trade.side)) { errors.push(`${prefix}：交易方向（side）無效`); continue; }
-          if (!validStatus.has(imported[i]?.status)) { errors.push(`${prefix}：狀態（status）無效`); continue; }
-          if (!trade.cusip || trade.cusip.length > 120) { errors.push(`${prefix}：CUSIP／名稱無效`); continue; }
-          if (!isValidISODate(trade.tradeDate) || !isValidISODate(trade.maturityDate)) { errors.push(`${prefix}：日期格式或日期值無效`); continue; }
-          if (toDateAtMidnight(trade.maturityDate) <= toDateAtMidnight(trade.tradeDate)) { errors.push(`${prefix}：到期日（maturityDate）必須晚於交收日（legacy tradeDate）`); continue; }
-          if (!Number.isFinite(trade.faceValue) || trade.faceValue <= 0) { errors.push(`${prefix}：面值（faceValue）無效`); continue; }
-          if (!Number.isFinite(trade.cleanPrice) || trade.cleanPrice <= 0) { errors.push(`${prefix}：淨價（cleanPrice）無效`); continue; }
-          if (!Number.isFinite(trade.currentMarketPrice) || trade.currentMarketPrice <= 0) { errors.push(`${prefix}：目前市場價格（currentMarketPrice）無效`); continue; }
-          if (!Number.isFinite(trade.commission) || trade.commission < 0) { errors.push(`${prefix}：手續費（commission）無效`); continue; }
-          if (trade.type !== 't-bill' && (!Number.isFinite(trade.couponRate) || trade.couponRate < 0)) { errors.push(`${prefix}：票息率（couponRate）無效`); continue; }
-          if (trade.type !== 't-bill' && !validFreq.has(trade.couponFrequency)) { errors.push(`${prefix}：派息頻率（couponFrequency）無效`); continue; }
-          if (trade.status === 'closed' && (!isValidISODate(trade.closeDate) || toDateAtMidnight(trade.closeDate) < toDateAtMidnight(trade.tradeDate) || toDateAtMidnight(trade.closeDate) > toDateAtMidnight(trade.maturityDate) || !Number.isFinite(trade.closePrice) || trade.closePrice <= 0 || trade.closeCommission < 0)) { errors.push(`${prefix}：已平倉交易缺少有效 closeDate／closePrice`); continue; }
 
           existingIds.add(trade.id);
           pendingTrades.push(trade);
@@ -1277,7 +1262,7 @@ export default function App() {
               </thead>
               <tbody>
                 {displayedTrades.length === 0 ? <tr><td colSpan="8" className="p-8 text-center text-slate-400">無紀錄。</td></tr> : displayedTrades.map(trade => {
-                  const isMaturedBond = isMatured(trade.maturityDate) && trade.status !== 'closed';
+                  const isMaturedBond = isMatured(trade.maturityDate, todayObj) && trade.status !== 'closed';
                   const isUnsupported = !isSupportedTreasuryType(trade);
                   const pnl = calculateTradePricePnl(trade, todayObj);
                   const faceValue = toFiniteNumber(trade.faceValue);

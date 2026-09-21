@@ -8,12 +8,16 @@ service cloud.firestore {
 
     function isDate(value) {
       return value is string
-        && value.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
+        && (
+          value.matches('^[0-9]{4}-((0[13578]|1[02])-(0[1-9]|[12][0-9]|3[01])|(0[469]|11)-(0[1-9]|[12][0-9]|30)|02-(0[1-9]|1[0-9]|2[0-8]))$')
+          || value.matches('^([0-9]{2}(0[48]|[2468][048]|[13579][26])|([02468][048]|[13579][26])00)-02-29$')
+        );
     }
 
     function isTimestamp(value) {
       return value is string
-        && value.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{3}Z$');
+        && value.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9][.][0-9]{3}Z$')
+        && isDate(value.split('T')[0]);
     }
 
     function isNumberInRange(value, minimum, maximum) {
@@ -63,7 +67,8 @@ service cloud.firestore {
 
     function hasSupportedCouponTerms(data) {
       return (data.type == 't-bill' && data.couponRate == 0 && data.couponFrequency == 0)
-        || (data.type != 't-bill' && data.couponFrequency == 2);
+        || (data.type in ['t-note', 't-bond'] && data.couponFrequency == 2)
+        || (data.type == 'tips' && data.couponFrequency in [1, 2, 4, 12]);
     }
 
     function hasUnchangedLegacyCouponTerms(data) {
@@ -74,6 +79,20 @@ service cloud.firestore {
         && data.maturityDate == resource.data.maturityDate
         && data.couponRate == resource.data.couponRate
         && data.couponFrequency == resource.data.couponFrequency;
+    }
+
+    function hasUnchangedTipsTerms(data) {
+      return resource.data.type == 'tips'
+        && data.type == resource.data.type
+        && data.side == resource.data.side
+        && data.tradeDate == resource.data.tradeDate
+        && data.maturityDate == resource.data.maturityDate
+        && data.faceValue == resource.data.faceValue
+        && data.cleanPrice == resource.data.cleanPrice
+        && data.couponRate == resource.data.couponRate
+        && data.commission == resource.data.commission
+        && data.couponFrequency == resource.data.couponFrequency
+        && data.status == resource.data.status;
     }
 
     function hasValidOptionalValues(data) {
@@ -129,7 +148,13 @@ service cloud.firestore {
       return hasValidFields(data)
         && hasValidIdentity(data, tradeId)
         && hasValidBaseTerms(data)
-        && (hasSupportedCouponTerms(data) || hasUnchangedLegacyCouponTerms(data))
+        && (
+          (resource.data.type == 'tips' && hasUnchangedTipsTerms(data))
+          || (
+            resource.data.type != 'tips'
+            && (hasSupportedCouponTerms(data) || hasUnchangedLegacyCouponTerms(data))
+          )
+        )
         && hasValidOptionalValues(data)
         && hasValidClose(data)
         && hasValidFredEstimate(data);
@@ -139,7 +164,7 @@ service cloud.firestore {
       allow read: if isOwner(userId);
 
       allow create: if isOwner(userId)
-        && request.resource.data.type in ['t-bill', 't-note', 't-bond']
+        && request.resource.data.type in ['t-bill', 't-note', 't-bond', 'tips']
         && isValidTrade(request.resource.data, tradeId);
 
       allow update: if isOwner(userId)

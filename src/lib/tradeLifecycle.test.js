@@ -3,6 +3,7 @@ import {
   buildTradeBackup,
   markTradeDeleted,
   normalizeTradeBackupEntry,
+  partitionTradesByLifecycle,
   restoreDeletedTrade,
 } from './tradeLifecycle.js';
 
@@ -94,5 +95,21 @@ describe('recoverable trade deletion', () => {
       status: 'active',
       deletedAt: 'not-a-timestamp',
     })).toThrow('deletedAt');
+  });
+
+  it('moves an open trade to matured when the valuation date reaches maturity', () => {
+    const openTrade = { id: 'open-1', status: 'active', maturityDate: '2026-09-21' };
+    const closedTrade = { id: 'closed-1', status: 'closed', maturityDate: '2026-09-20' };
+
+    expect(partitionTradesByLifecycle([openTrade, closedTrade], '2026-09-20')).toEqual({
+      active: [openTrade],
+      matured: [],
+      closed: [closedTrade],
+    });
+    expect(partitionTradesByLifecycle([openTrade, closedTrade], '2026-09-21')).toEqual({
+      active: [],
+      matured: [openTrade],
+      closed: [closedTrade],
+    });
   });
 });

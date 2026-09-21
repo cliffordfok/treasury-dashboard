@@ -1,4 +1,14 @@
-import { isValidISODate } from './treasuryMath.js';
+import {
+  calculateAccruedInterestPer100,
+  calculateForwardDaysBetween,
+  getMarketYTMFromCurve,
+  isCouponTreasury,
+  isValidISODate,
+  toDateAtMidnight,
+  yieldToPrice,
+} from './treasuryMath.js';
+
+const FRED_PRICING_MODEL_VERSION = 'curve-date-v2';
 
 export const FRED_CURVE_SERIES = [
   { id: 'DGS1MO', years: 0.0833 },
@@ -115,11 +125,30 @@ export const normalizeYieldCurve = (data) => {
 };
 
 export const getFredPricingSignature = (trade) => [
+  FRED_PRICING_MODEL_VERSION,
   trade?.type || '',
   trade?.maturityDate || '',
   Number(trade?.couponRate) || 0,
   Number(trade?.couponFrequency) || 0,
 ].join('|');
+
+export const getFredTheoreticalEstimate = (trade, curve) => {
+  const observationDate = curve?.observationDate;
+  if (!curve?.points?.length || !isValidISODate(observationDate)) return null;
+  const valuationDate = toDateAtMidnight(observationDate);
+  const daysToMaturity = calculateForwardDaysBetween(valuationDate, trade?.maturityDate);
+  if (!daysToMaturity || daysToMaturity <= 0) return null;
+  const marketYield = getMarketYTMFromCurve(curve, daysToMaturity / 365.25);
+  if (marketYield == null) return null;
+  const dirtyPrice = yieldToPrice(trade, marketYield, valuationDate);
+  if (!Number.isFinite(dirtyPrice) || dirtyPrice <= 0) return null;
+  const accruedInterestPer100 = calculateAccruedInterestPer100(trade, valuationDate);
+  const cleanPrice = isCouponTreasury(trade)
+    ? dirtyPrice - accruedInterestPer100
+    : dirtyPrice;
+  if (!Number.isFinite(cleanPrice) || cleanPrice <= 0) return null;
+  return { cleanPrice, marketYield, observationDate };
+};
 
 export const hasCurrentFredEstimate = (trade) => (
   Number.isFinite(Number(trade?.fredEstimatedPrice))

@@ -27,10 +27,10 @@ import {
   solveYTMFromPrice,
   toDateAtMidnight,
   toFiniteNumber,
-  yieldToPrice,
 } from './lib/treasuryMath.js';
 import {
   getFredPricingSignature,
+  getFredTheoreticalEstimate,
   hasCurrentFredEstimate,
   normalizeYieldCurve,
   shouldUpdateFredEstimate,
@@ -39,6 +39,7 @@ import {
   buildTradeBackup,
   markTradeDeleted,
   normalizeTradeBackupEntry,
+  partitionTradesByLifecycle,
   restoreDeletedTrade,
 } from './lib/tradeLifecycle.js';
 
@@ -244,6 +245,7 @@ export default function App() {
   const [yieldCurve, setYieldCurve] = useState(null);
   const [yieldCurveError, setYieldCurveError] = useState('');
   const [isFetchingCurve, setIsFetchingCurve] = useState(true);
+  const [todayObj, setTodayObj] = useState(() => toDateAtMidnight(new Date()));
 
   const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: formatDateOnly(new Date()), maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2, accruedInterestPer100: '' };
   const defaultYtmForm = { type: 't-note', tradeDate: formatDateOnly(new Date()), maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0, accruedInterestPer100: '' };
@@ -294,6 +296,15 @@ export default function App() {
       previouslyFocused?.focus?.();
     };
   }, [isCloseModalOpen, isFormOpen]);
+
+  useEffect(() => {
+    const refreshValuationDate = () => {
+      const currentDate = toDateAtMidnight(new Date());
+      setTodayObj((previousDate) => previousDate?.getTime() === currentDate?.getTime() ? previousDate : currentDate);
+    };
+    const timerId = window.setInterval(refreshValuationDate, 60_000);
+    return () => window.clearInterval(timerId);
+  }, []);
 
   const saveTradeToDB = useCallback(async (tradeData) => {
     if (!user) return;
@@ -347,7 +358,7 @@ export default function App() {
     const toUpdate = trades.filter(t =>
       isSupportedTreasuryType(t)
       && t.status !== 'closed'
-      && !isMatured(t.maturityDate)
+      && !isMatured(t.maturityDate, todayObj)
       && shouldUpdateFredEstimate(t, curveDate)
       && !priceUpdatesInFlightRef.current.has(t.id)
     );
@@ -355,21 +366,12 @@ export default function App() {
       priceUpdatesInFlightRef.current.add(trade.id);
       (async () => {
         try {
-          const valuationDate = toDateAtMidnight(new Date());
-          const days = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
-          if (!days || days <= 0) return;
-          const remainingYears = days / 365.25;
-          const marketYield = getMarketYTMFromCurve(yieldCurve, remainingYears);
-          if (marketYield == null) return;
-          const newMktPrice = yieldToPrice(trade, marketYield, valuationDate);
-          if (newMktPrice == null || !Number.isFinite(newMktPrice) || newMktPrice <= 0) return;
-          const accruedInterestPer100 = calculateAccruedInterestPer100(trade, valuationDate);
-          const cleanMarketPrice = isCouponTreasury(trade) ? newMktPrice - accruedInterestPer100 : newMktPrice;
-          if (!Number.isFinite(cleanMarketPrice) || cleanMarketPrice <= 0) return;
+          const estimate = getFredTheoreticalEstimate(trade, yieldCurve);
+          if (!estimate) return;
           await saveTradeToDB({
             ...trade,
-            fredEstimatedPrice: roundMarketPriceForStorage(cleanMarketPrice),
-            fredEstimatedAt: curveDate,
+            fredEstimatedPrice: roundMarketPriceForStorage(estimate.cleanPrice),
+            fredEstimatedAt: estimate.observationDate,
             fredPricingSignature: getFredPricingSignature(trade),
           });
         } catch (err) {
@@ -380,7 +382,7 @@ export default function App() {
         }
       })();
     }
-  }, [yieldCurve, trades, user, isDbReady, saveTradeToDB]);
+  }, [yieldCurve, trades, user, isDbReady, saveTradeToDB, todayObj]);
 
   const handleRefreshCurve = async () => {
     setIsFetchingCurve(true);
@@ -434,23 +436,16 @@ export default function App() {
   };
 
   // --- Derived Data ---
-  const activeTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && !isMatured(t.maturityDate)), [trades]);
-  const maturedTrades = useMemo(() => trades.filter(t => t.status !== 'closed' && isMatured(t.maturityDate)), [trades]);
-  const closedTrades = useMemo(() => trades.filter(t => t.status === 'closed'), [trades]);
+  const {
+    active: activeTrades,
+    matured: maturedTrades,
+    closed: closedTrades,
+  } = useMemo(() => partitionTradesByLifecycle(trades, todayObj), [trades, todayObj]);
   const unsupportedTips = useMemo(() => trades.filter(t => t.type === 'tips'), [trades]);
   const supportedActiveTrades = useMemo(() => activeTrades.filter(isSupportedTreasuryType), [activeTrades]);
   const supportedMaturedTrades = useMemo(() => maturedTrades.filter(isSupportedTreasuryType), [maturedTrades]);
   const supportedClosedTrades = useMemo(() => closedTrades.filter(isSupportedTreasuryType), [closedTrades]);
   const allCoupons = useMemo(() => trades.filter(isSupportedTreasuryType).flatMap(generateAllCoupons), [trades]);
-  const [todayObj, setTodayObj] = useState(() => toDateAtMidnight(new Date()));
-  useEffect(() => {
-    const refreshValuationDate = () => {
-      const currentDate = toDateAtMidnight(new Date());
-      setTodayObj((previousDate) => previousDate?.getTime() === currentDate?.getTime() ? previousDate : currentDate);
-    };
-    const timerId = window.setInterval(refreshValuationDate, 60_000);
-    return () => window.clearInterval(timerId);
-  }, []);
   const receivedCoupons = useMemo(() => allCoupons.filter(c => c.date <= todayObj), [allCoupons, todayObj]);
   const upcomingCouponsList = useMemo(() => allCoupons.filter(c => c.date > todayObj && c.date.getFullYear() === todayObj.getFullYear()), [allCoupons, todayObj]);
 
@@ -1267,7 +1262,7 @@ export default function App() {
               </thead>
               <tbody>
                 {displayedTrades.length === 0 ? <tr><td colSpan="8" className="p-8 text-center text-slate-400">無紀錄。</td></tr> : displayedTrades.map(trade => {
-                  const isMaturedBond = isMatured(trade.maturityDate) && trade.status !== 'closed';
+                  const isMaturedBond = isMatured(trade.maturityDate, todayObj) && trade.status !== 'closed';
                   const isUnsupported = !isSupportedTreasuryType(trade);
                   const pnl = calculateTradePricePnl(trade, todayObj);
                   const faceValue = toFiniteNumber(trade.faceValue);

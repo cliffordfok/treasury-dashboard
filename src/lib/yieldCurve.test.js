@@ -3,6 +3,7 @@ import {
   buildCommonYieldCurve,
   FRED_CURVE_SERIES,
   getFredPricingSignature,
+  getFredTheoreticalEstimate,
   hasCurrentFredEstimate,
   normalizeYieldCurve,
   shouldUpdateFredEstimate,
@@ -109,5 +110,31 @@ describe('FRED theoretical estimate freshness', () => {
     expect(hasCurrentFredEstimate(pricedTrade)).toBe(true);
     expect(hasCurrentFredEstimate({ ...pricedTrade, maturityDate: '2031-07-15' })).toBe(false);
     expect(hasCurrentFredEstimate({ ...pricedTrade, fredEstimatedPrice: null })).toBe(false);
+  });
+
+  it('prices deterministically at the curve observation date', () => {
+    const curve = normalizeYieldCurve(makeCurve('2026-09-03'));
+    const estimate = getFredTheoreticalEstimate({
+      ...trade,
+      tradeDate: '2026-01-15',
+      faceValue: 1000,
+      cleanPrice: 100,
+      currentMarketPrice: 100,
+      side: 'buy',
+      commission: 0,
+      status: 'active',
+    }, curve);
+
+    expect(estimate.observationDate).toBe('2026-09-03');
+    expect(estimate.cleanPrice).toBeCloseTo(98.09343863, 7);
+    expect(estimate.marketYield).toBeCloseTo(4.54315537, 7);
+  });
+
+  it('invalidates estimates created by the previous pricing model', () => {
+    expect(shouldUpdateFredEstimate({
+      ...trade,
+      fredEstimatedAt: '2026-09-03',
+      fredPricingSignature: 't-note|2030-07-15|4|2',
+    }, '2026-09-03')).toBe(true);
   });
 });

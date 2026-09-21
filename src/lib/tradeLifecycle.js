@@ -1,4 +1,5 @@
 import {
+  isMatured,
   isValidISODate,
   normalizeTradeForStorage,
   toDateAtMidnight,
@@ -35,6 +36,16 @@ export const buildTradeBackup = (activeTrades, deletedTrades) => {
     throw new Error('備份交易集合無效');
   }
   return [...activeTrades, ...deletedTrades];
+};
+
+export const partitionTradesByLifecycle = (trades, valuationDate) => {
+  if (!Array.isArray(trades)) throw new Error('交易集合無效');
+  return trades.reduce((groups, trade) => {
+    if (trade.status === 'closed') groups.closed.push(trade);
+    else if (isMatured(trade.maturityDate, valuationDate)) groups.matured.push(trade);
+    else groups.active.push(trade);
+    return groups;
+  }, { active: [], matured: [], closed: [] });
 };
 
 export const normalizeTradeBackupEntry = (rawTrade) => {

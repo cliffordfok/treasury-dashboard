@@ -241,9 +241,45 @@ export const getMarketYTMFromCurve = (curve, years) => {
   return null;
 };
 
-export const getTBillInvestmentYield = (price, days) => {
-  if (!Number.isFinite(price) || price <= 0 || !days || days <= 0) return null;
-  return ((100 - price) / price) * (365 / days) * 100;
+export const getTBillYearBasis = (valuationDate) => {
+  const start = toDateAtMidnight(valuationDate);
+  if (!start) return null;
+  const oneYearLater = new Date(
+    start.getFullYear() + 1,
+    start.getMonth(),
+    start.getDate(),
+  );
+  return calculateForwardDaysBetween(start, oneYearLater);
+};
+
+export const getTBillInvestmentYield = (price, days, valuationDate = new Date()) => {
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(days) || days <= 0) return null;
+  const yearBasis = getTBillYearBasis(valuationDate);
+  if (!yearBasis) return null;
+
+  if (days <= yearBasis / 2) {
+    return ((100 - price) / price) * (yearBasis / days) * 100;
+  }
+
+  const a = (days / (2 * yearBasis)) - 0.25;
+  const b = days / yearBasis;
+  const c = (price - 100) / price;
+  const discriminant = (b * b) - (4 * a * c);
+  if (a <= 0 || discriminant < 0) return null;
+  const yieldDecimal = (-b + Math.sqrt(discriminant)) / (2 * a);
+  return Number.isFinite(yieldDecimal) ? yieldDecimal * 100 : null;
+};
+
+export const getTBillPriceFromInvestmentYield = (investmentYieldPercent, days, valuationDate = new Date()) => {
+  if (!Number.isFinite(investmentYieldPercent) || !Number.isFinite(days) || days <= 0) return null;
+  const yearBasis = getTBillYearBasis(valuationDate);
+  if (!yearBasis) return null;
+  const investmentYield = investmentYieldPercent / 100;
+  const denominator = days <= yearBasis / 2
+    ? 1 + (investmentYield * days / yearBasis)
+    : (1 + ((days - (yearBasis / 2)) * investmentYield / yearBasis))
+      * (1 + (investmentYield / 2));
+  return denominator > 0 ? 100 / denominator : null;
 };
 
 export const yieldToPrice = (trade, marketYieldPercent, valuationDate) => {
@@ -254,7 +290,9 @@ export const yieldToPrice = (trade, marketYieldPercent, valuationDate) => {
   if (!maturityDate || !valuation || !daysToMaturity || daysToMaturity <= 0) return null;
 
   const yieldDecimal = marketYieldPercent / 100;
-  if (trade.type === 't-bill') return 100 / (1 + yieldDecimal * (daysToMaturity / 365));
+  if (trade.type === 't-bill') {
+    return getTBillPriceFromInvestmentYield(marketYieldPercent, daysToMaturity, valuation);
+  }
   if (!isCouponTreasury(trade)) return null;
 
   const frequency = Number(trade.couponFrequency) || 2;
@@ -279,7 +317,9 @@ export const solveYTMFromPrice = (trade, targetPrice, valuationDate) => {
   if (!isSupportedTreasuryType(trade) || !Number.isFinite(targetPrice) || targetPrice <= 0) return null;
   const daysToMaturity = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
   if (!daysToMaturity || daysToMaturity <= 0) return null;
-  if (trade.type === 't-bill') return getTBillInvestmentYield(targetPrice, daysToMaturity);
+  if (trade.type === 't-bill') {
+    return getTBillInvestmentYield(targetPrice, daysToMaturity, valuationDate);
+  }
 
   let low = -50;
   let high = 100;
@@ -314,7 +354,9 @@ export const getTradeYTM = (trade, valuationDate) => {
   const cleanPrice = Number(trade.currentMarketPrice);
   const daysToMaturity = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
   if (!Number.isFinite(cleanPrice) || cleanPrice <= 0 || !daysToMaturity || daysToMaturity <= 0) return null;
-  if (trade.type === 't-bill') return getTBillInvestmentYield(cleanPrice, daysToMaturity);
+  if (trade.type === 't-bill') {
+    return getTBillInvestmentYield(cleanPrice, daysToMaturity, valuationDate);
+  }
 
   const accruedInterestPer100 = calculateAccruedInterestPer100(trade, valuationDate);
   const dirtyPrice = getDirtyPrice(cleanPrice, accruedInterestPer100);

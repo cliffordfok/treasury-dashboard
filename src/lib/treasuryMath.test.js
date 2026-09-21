@@ -10,11 +10,16 @@ import {
   generateAllCoupons,
   getCouponDates,
   getPurchaseAccruedInterestPer100,
+  getTBillInvestmentYield,
+  getTBillPriceFromInvestmentYield,
+  getTBillYearBasis,
   isMatured,
   isSupportedTreasuryType,
   isValidISODate,
   normalizeTradeForStorage,
+  solveYTMFromPrice,
   toDateAtMidnight,
+  yieldToPrice,
 } from './treasuryMath.js';
 
 const couponTrade = {
@@ -133,6 +138,33 @@ describe('accrued interest and PnL', () => {
     expect(quote.couponEstimate).toBe(20);
     expect(quote.maturityProfit).toBeCloseTo(0.1104972376, 8);
     expect(quote.breakevenPrice).toBeCloseTo(100.0110497238, 8);
+  });
+});
+
+describe('Treasury Bill investment yield', () => {
+  it('matches the Treasury 52-week bill quadratic example', () => {
+    const valuationDate = '1990-06-07';
+    const maturityDate = '1991-06-06';
+    const officialYield = 8.2373244;
+
+    expect(getTBillInvestmentYield(92.265, 364, valuationDate)).toBeCloseTo(officialYield, 7);
+    expect(getTBillPriceFromInvestmentYield(officialYield, 364, valuationDate)).toBeCloseTo(92.265, 6);
+    expect(yieldToPrice({ type: 't-bill', maturityDate }, officialYield, valuationDate)).toBeCloseTo(92.265, 6);
+    expect(solveYTMFromPrice({ type: 't-bill', maturityDate }, 92.265, valuationDate)).toBeCloseTo(officialYield, 7);
+  });
+
+  it('uses the simple Treasury formula for bills of not more than half a year', () => {
+    expect(getTBillInvestmentYield(99.559444, 20, '1990-06-01')).toBeCloseTo(8.076, 3);
+  });
+
+  it('uses a 366-day basis when the following year includes February 29', () => {
+    expect(getTBillYearBasis('2023-06-01')).toBe(366);
+    expect(getTBillYearBasis('2024-06-01')).toBe(365);
+
+    const expectedYield = ((100 - 98) / 98) * (366 / 90) * 100;
+    const investmentYield = getTBillInvestmentYield(98, 90, '2023-06-01');
+    expect(investmentYield).toBeCloseTo(expectedYield, 10);
+    expect(getTBillPriceFromInvestmentYield(investmentYield, 90, '2023-06-01')).toBeCloseTo(98, 10);
   });
 });
 

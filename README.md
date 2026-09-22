@@ -1,6 +1,6 @@
 # 美國國債帳本
 
-以 React、Firebase 與 FRED 收益率曲線資料建立的個人美國國債帳本。應用程式支援 T-Bill、T-Note、T-Bond、持倉估值、全價損益、派息日曆、YTM 試算、JSON 匯入／匯出及可選的 DeepSeek 自備金鑰交易解析。
+以 React、Firebase 與 FRED 收益率曲線資料建立的個人美國國債帳本。應用程式支援 T-Bill、T-Note、T-Bond、持倉估值、全價損益、派息日曆、YTM 試算及 JSON 匯入／匯出。
 
 ## 目前限制
 
@@ -44,7 +44,7 @@ npm run build
 npm run check
 ```
 
-回歸測試涵蓋 ISO 日期解析、夏令時間日數、到期日結算、月末派息時間表、應計利息、全價損益、到期現金流、FRED 曲線完整性、理論估值日期防倒退、可復原刪除、DeepSeek timeout 及 TIPS 防護。頁面跨午夜時會自動更新估值日，無需重新載入。
+回歸測試涵蓋 ISO 日期解析、夏令時間日數、到期日結算、月末派息時間表、應計利息、全價損益、到期現金流、FRED 曲線完整性、理論估值日期防倒退、可復原刪除及 TIPS 防護。頁面跨午夜時會自動更新估值日，無需重新載入。
 
 ## Firebase 安全規則
 
@@ -63,19 +63,6 @@ Production Build 設定 `VITE_FIREBASE_APPCHECK_SITE_KEY` 後，會在 Auth／Fi
 
 未設定 Site Key 時不會初始化 App Check。本機開發不會自動啟用 Production App Check；正式 Enforcement 後，應使用獨立開發專案或按 Firebase 官方方法設定 Debug Provider。
 
-## DeepSeek 自備金鑰代理服務
-
-`backend/deepseek-proxy` 是可選的 Cloudflare Worker。它只轉送使用者在當前頁面輸入的 DeepSeek 金鑰：
-
-- 金鑰只保留在頁面記憶體，重新載入後清除；
-- 解析時，使用者金鑰及貼上的交易文字會經已設定的代理服務傳送至 DeepSeek；
-- AI 只會採用單據明示的交收日；沒有交收日時會留空，讓使用者在儲存前確認；
-- Worker 沒有共用 `DEEPSEEK_API_KEY`，避免公開端點消耗專案擁有者餘額；
-- 瀏覽器來源必須符合 `ALLOWED_ORIGIN`；
-- 沒有金鑰的請求會收到 `401`。
-
-部署 Worker 後，把網址設為儲存庫密鑰 `VITE_AI_PROXY_URL`。未設定代理服務時，瀏覽器會以使用者提供的金鑰直接呼叫 DeepSeek API。
-
 ## 部署
 
 合併至 `main`、手動觸發或平日 UTC 22:00 排程時，GitHub Actions 會先取得完整 FRED 曲線，再執行 Lint、測試及建置，最後把同一個 artifact 部署至 GitHub Pages。FRED 擷取、資料完整性檢查、測試或 Build 任一步失敗，都不會執行部署。排程只改變 Pages artifact，不會改動受保護的 `main`。
@@ -89,7 +76,7 @@ Production Build 設定 `VITE_FIREBASE_APPCHECK_SITE_KEY` 後，會在 Auth／Fi
 - `VITE_FIREBASE_STORAGE_BUCKET`
 - `VITE_FIREBASE_MESSAGING_SENDER_ID`
 - `VITE_FIREBASE_APP_ID`
-- 可選的 `VITE_FIREBASE_APPCHECK_SITE_KEY`、`VITE_AI_PROXY_URL`
+- 可選的 `VITE_FIREBASE_APPCHECK_SITE_KEY`
 
 ## 授權
 

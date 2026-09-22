@@ -1175,11 +1175,6 @@ h3 {
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.ai-panel {
-  border: 1px solid rgba(79, 141, 247, 0.18);
-  background: linear-gradient(145deg, rgba(87, 148, 247, 0.105), rgba(87, 148, 247, 0.04));
-}
-
 @keyframes modal-enter {
   from {
     opacity: 0;

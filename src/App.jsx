@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Bot, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, KeyRound, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, RotateCcw } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
@@ -67,11 +67,6 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 
-// --- AI Proxy Configuration ---
-// The key is supplied by the signed-in user and kept in memory for this page session only.
-const aiProxyUrl = import.meta.env.VITE_AI_PROXY_URL || import.meta.env.VITE_GEMINI_PROXY_URL || "";
-const AI_ANALYSIS_MODEL = 'deepseek-v4-pro';
-const DEEPSEEK_CHAT_API_URL = 'https://api.deepseek.com/chat/completions';
 const MAX_IMPORT_BYTES = 1_000_000;
 const MAX_IMPORT_TRADES = 500;
 
@@ -81,133 +76,6 @@ const fetchYieldCurve = async ({ bypassCache = false } = {}) => {
   const res = await fetch(`${base}yield-curve.json${suffix}`, { cache: bypassCache ? 'no-store' : 'default' });
   if (!res.ok) throw new Error(`收益率曲線資料請求失敗（HTTP ${res.status}）`);
   return normalizeYieldCurve(await res.json());
-};
-
-const fetchWithRetry = async (url, options, retries = 3, timeoutMs = 15000) => {
-  const delays = [1000, 2000, 4000];
-  for (let i = 0; i < retries; i++) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const response = await fetch(url, { ...options, signal: controller.signal });
-      if (!response.ok) {
-        const error = new Error(`HTTP error! status: ${response.status}`);
-        // Respect an explicit rate limit instead of multiplying rejected requests.
-        error.retryable = response.status >= 500;
-        throw error;
-      }
-      return await response.json();
-    } catch (e) {
-      if (i === retries - 1 || e.retryable === false) throw e;
-      await new Promise(res => setTimeout(res, delays[i]));
-    } finally {
-      clearTimeout(timeoutId);
-    }
-  }
-};
-
-const getAiRequestHeaders = (userApiKey = '') => {
-  const headers = { 'Content-Type': 'application/json' };
-  const key = String(userApiKey || '').trim();
-  if (key) headers['X-DeepSeek-API-Key'] = key;
-  return headers;
-};
-
-const stripCodeFence = (text) =>
-  String(text || '')
-    .trim()
-    .replace(/^```(?:json)?/i, '')
-    .replace(/```$/i, '')
-    .trim();
-
-const parseJsonObject = (text) => {
-  const cleaned = stripCodeFence(text);
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('人工智能回應未包含 JSON');
-    return JSON.parse(match[0]);
-  }
-};
-
-const buildTradeExtractionPrompt = (rawText) => `Extract one US Treasury trade from the text.
-
-Return only valid JSON with these fields:
-{
-  "cusip": string,
-  "type": "t-bill" | "t-note" | "t-bond",
-  "side": "buy" | "sell",
-  "tradeDate": "YYYY-MM-DD" | "",
-  "maturityDate": "YYYY-MM-DD",
-  "faceValue": number,
-  "cleanPrice": number,
-  "couponRate": number,
-  "couponFrequency": number,
-  "commission": number,
-  "accruedInterestPer100": number | ""
-}
-
-Rules:
-- Use "buy" unless the text clearly says sell/short.
-- The legacy field "tradeDate" stores the settlement date used for calculations, not the execution date.
-- Use an explicitly stated settlement/settle date. If none is stated, return an empty string and do not infer T+1.
-- Use clean price, not dirty price, when both are present.
-- T-Bill couponRate must be 0 and couponFrequency must be 0.
-- For T-Note/T-Bond, default couponFrequency to 2 when not stated.
-- Use an empty string for unknown optional accruedInterestPer100.
-- Do not include markdown or explanatory text.
-
-Trade text:
-${rawText}`;
-
-const callDeepSeekDirect = async ({ messages, userApiKey, temperature = 0.2, responseFormat }) => {
-  const key = String(userApiKey || '').trim();
-  if (!key) throw new Error('未設定 DeepSeek API Key');
-
-  const payload = {
-    model: AI_ANALYSIS_MODEL,
-    messages,
-    temperature,
-  };
-  if (responseFormat) payload.response_format = responseFormat;
-
-  const result = await fetchWithRetry(DEEPSEEK_CHAT_API_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${key}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const text = result?.choices?.[0]?.message?.content;
-  if (!text) throw new Error('DeepSeek 沒有回傳內容');
-  return text;
-};
-
-const extractTradeData = async (rawText, userApiKey = '') => {
-  if (!aiProxyUrl && String(userApiKey || '').trim()) {
-    const text = await callDeepSeekDirect({
-      userApiKey,
-      messages: [
-        { role: 'system', content: 'Extract structured Treasury trade data. Return JSON only.' },
-        { role: 'user', content: buildTradeExtractionPrompt(String(rawText || '')) },
-      ],
-      temperature: 0,
-      responseFormat: { type: 'json_object' },
-    });
-    return parseJsonObject(text);
-  }
-  if (aiProxyUrl) {
-    const result = await fetchWithRetry(aiProxyUrl, {
-      method: 'POST',
-      headers: getAiRequestHeaders(userApiKey),
-      body: JSON.stringify({ task: 'extractTradeData', rawText }),
-    });
-    return result.trade || result.data || result;
-  }
-  throw new Error('未提供 DeepSeek API Key');
 };
 
 const roundMarketPriceForStorage = (price) => Math.round(price * 1000) / 1000;
@@ -225,7 +93,6 @@ export default function App() {
   
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingTradeId, setEditingTradeId] = useState(null);
-  const [smartInputMode, setSmartInputMode] = useState(false);
   
   const [isCloseModalOpen, setIsCloseModalOpen] = useState(false);
   const [closingTradeId, setClosingTradeId] = useState(null);
@@ -234,12 +101,6 @@ export default function App() {
   
   const [editingPriceId, setEditingPriceId] = useState(null);
   const [newPrice, setNewPrice] = useState('');
-
-  const [rawTradeText, setRawTradeText] = useState('');
-  const [isParsing, setIsParsing] = useState(false);
-  const [userDeepSeekApiKey, setUserDeepSeekApiKey] = useState('');
-  const [apiKeyDraft, setApiKeyDraft] = useState('');
-  const [isApiKeyOpen, setIsApiKeyOpen] = useState(false);
 
   // --- FRED Yield Curve ---
   const [yieldCurve, setYieldCurve] = useState(null);
@@ -254,8 +115,6 @@ export default function App() {
   const [closeData, setCloseData] = useState({ closeDate: formatDateOnly(new Date()), closePrice: '', closeCommission: 0, closeAccruedInterestPer100: '' });
   const [selectedBenchmark, setSelectedBenchmark] = useState('UST10Y');
   const [importAuditLog, setImportAuditLog] = useState([]);
-  const hasUserDeepSeekApiKey = Boolean(userDeepSeekApiKey.trim());
-  const hasAiTransport = hasUserDeepSeekApiKey;
 
   useEffect(() => {
     const dialog = isCloseModalOpen ? closeDialogRef.current : isFormOpen ? tradeDialogRef.current : null;
@@ -710,35 +569,6 @@ export default function App() {
     const trade = trades.find(t => t.id === id);
     if (trade && !await saveTradeWithFeedback({ ...trade, currentMarketPrice: roundMarketPriceForStorage(n) }, '更新市場價格')) return;
     setEditingPriceId(null);
-  };
-
-  const openApiKeySettings = () => {
-    setApiKeyDraft(userDeepSeekApiKey);
-    setIsApiKeyOpen(true);
-  };
-
-  const handleSaveApiKey = () => {
-    const key = apiKeyDraft.trim();
-    setUserDeepSeekApiKey(key);
-    setIsApiKeyOpen(false);
-  };
-
-  const handleClearApiKey = () => {
-    setUserDeepSeekApiKey('');
-    setApiKeyDraft('');
-    setIsApiKeyOpen(false);
-  };
-
-  const handleSmartParse = async () => {
-    if (!rawTradeText.trim()) return;
-    if (!hasAiTransport) { alert("請先按「設定 API Key」輸入 DeepSeek 金鑰。"); return; }
-    setIsParsing(true);
-    try {
-      const parsedData = await extractTradeData(rawTradeText, userDeepSeekApiKey);
-      if (!isSupportedTreasuryType(parsedData)) throw new Error('暫未支援 TIPS');
-      setFormData({ ...defaultForm, ...parsedData });
-      setSmartInputMode(false); setRawTradeText('');
-    } catch { alert("無法解析文字，請檢查格式。"); } finally { setIsParsing(false); }
   };
 
   // --- 匯出 / 匯入 ---
@@ -1354,37 +1184,8 @@ export default function App() {
         <div className="modal-backdrop fixed inset-0 flex items-center justify-center p-3 sm:p-4 z-50">
           <div ref={tradeDialogRef} role="dialog" aria-modal="true" aria-labelledby="trade-dialog-title" className="modal-panel rounded-2xl w-full max-w-md overflow-hidden">
             <div className="modal-header p-5 flex justify-between items-center"><h2 id="trade-dialog-title" className="text-lg font-bold">{editingTradeId ? '編輯交易' : '新增債券交易'}</h2><button onClick={() => setIsFormOpen(false)} className="modal-close text-xl font-bold" aria-label="關閉">&times;</button></div>
-            {!editingTradeId && (<div className="px-5 pt-4"><div className="flex bg-slate-100 p-1 rounded-lg"><button type="button" onClick={() => setSmartInputMode(false)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${!smartInputMode ? 'bg-white shadow text-slate-800' : 'text-slate-500'}`}>手動輸入</button><button type="button" onClick={() => setSmartInputMode(true)} className={`flex-1 py-1.5 text-sm font-medium rounded-md ${smartInputMode ? 'bg-indigo-500 text-white shadow' : 'text-slate-500'}`}>✨ 智能貼上</button></div></div>)}
             <div className="p-5 overflow-y-auto max-h-[60vh]">
-              {smartInputMode && !editingTradeId ? (
-                <div className="space-y-4">
-                  <div className="ai-panel rounded-lg p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-800">人工智能交易單據解析</p>
-                        <p className="text-xs text-slate-500 mt-0.5">只用於把債券交易文字轉成目前債券表單格式。</p>
-                      </div>
-                      <button type="button" onClick={openApiKeySettings} className={`border px-3 py-2 rounded-lg text-xs font-semibold transition-colors flex items-center ${hasUserDeepSeekApiKey ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-white border-indigo-200 text-indigo-700'}`}>
-                        <KeyRound size={14} className="mr-1.5" /> {hasUserDeepSeekApiKey ? '個人金鑰已設定' : '設定 API Key'}
-                      </button>
-                    </div>
-                    {isApiKeyOpen && (
-                      <div className="mt-3 space-y-2">
-                        <input aria-label="DeepSeek API Key" type="password" value={apiKeyDraft} onChange={(e) => setApiKeyDraft(e.target.value)} placeholder="貼上你的 DeepSeek API Key" className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-200" autoComplete="off" />
-                        <div className="flex flex-wrap gap-2">
-                          <button type="button" onClick={handleSaveApiKey} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-xs font-semibold">儲存</button>
-                          {hasUserDeepSeekApiKey && <button type="button" onClick={handleClearApiKey} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg text-xs font-semibold">清除</button>}
-                          <button type="button" onClick={() => setIsApiKeyOpen(false)} className="bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 px-3 py-2 rounded-lg text-xs font-semibold">取消</button>
-                        </div>
-                        <p className="text-[11px] text-slate-500">金鑰只保留在目前頁面的記憶體，不會寫入 Firestore 或備份檔。解析時，金鑰及貼上的交易文字會傳送至已設定的代理服務及 DeepSeek。</p>
-                      </div>
-                    )}
-                  </div>
-                  <textarea aria-label="債券交易單據文字" value={rawTradeText} onChange={(e) => setRawTradeText(e.target.value)} placeholder="貼上債券交易單據..." className="w-full h-32 p-3 border rounded-lg text-sm" />
-                  <button type="button" onClick={handleSmartParse} disabled={isParsing || !rawTradeText.trim() || !hasAiTransport} className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-center">{isParsing ? <Loader2 size={16} className="animate-spin mr-2" /> : <Bot size={16} className="mr-2" />} 讀取單據</button>
-                </div>
-              ) : (<>
-                <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4">
+              <form id="tradeForm" onSubmit={handleSaveTrade} className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="col-span-2">
                       <label htmlFor="trade-cusip" className="block text-xs font-medium text-slate-500 mb-1">CUSIP／名稱</label>
@@ -1432,16 +1233,15 @@ export default function App() {
                       </div>
                     </>)}
                   </div>
-                </form>
-                {isCouponTreasury(formData) && (
-                  <div className="mt-4">
-                    <label htmlFor="trade-accrued-interest" className="block text-xs font-medium text-slate-500 mb-1">每 100 元面值的應計利息（可選）</label>
-                    <input id="trade-accrued-interest" type="number" min="0" step="0.001" value={formData.accruedInterestPer100 || ''} onChange={(e)=>setFormData({...formData, accruedInterestPer100: e.target.value})} placeholder="自動計算" className="w-full p-2 border rounded-lg text-sm" />
-                  </div>
-                )}
-              </>)}
+              </form>
+              {isCouponTreasury(formData) && (
+                <div className="mt-4">
+                  <label htmlFor="trade-accrued-interest" className="block text-xs font-medium text-slate-500 mb-1">每 100 元面值的應計利息（可選）</label>
+                  <input id="trade-accrued-interest" type="number" min="0" step="0.001" value={formData.accruedInterestPer100 || ''} onChange={(e)=>setFormData({...formData, accruedInterestPer100: e.target.value})} placeholder="自動計算" className="w-full p-2 border rounded-lg text-sm" />
+                </div>
+              )}
             </div>
-            <div className="modal-footer p-5 flex justify-end space-x-3"><button onClick={() => setIsFormOpen(false)} className="secondary-button px-4 py-2 text-sm font-medium rounded-lg">取消</button>{!smartInputMode && <button type="submit" form="tradeForm" className="primary-button px-4 py-2 text-sm font-medium rounded-lg">儲存交易</button>}</div>
+            <div className="modal-footer p-5 flex justify-end space-x-3"><button onClick={() => setIsFormOpen(false)} className="secondary-button px-4 py-2 text-sm font-medium rounded-lg">取消</button><button type="submit" form="tradeForm" className="primary-button px-4 py-2 text-sm font-medium rounded-lg">儲存交易</button></div>
           </div>
         </div>
       )}

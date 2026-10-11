@@ -31,6 +31,28 @@ export const restoreDeletedTrade = (trade) => {
   return restoredTrade;
 };
 
+export const REMOVED_FIELD = Symbol('removed-field');
+
+// Fields the add/edit form owns; an edit never writes anything else.
+export const TRADE_FORM_FIELDS = [
+  'cusip', 'type', 'side', 'tradeDate', 'maturityDate', 'faceValue', 'cleanPrice',
+  'couponRate', 'commission', 'couponFrequency', 'accruedInterestPer100',
+];
+
+// Diff two versions of a stored trade so an update only writes the fields the
+// action changed; concurrent edits to other fields (e.g. from another device) survive.
+export const buildTradePatch = (currentTrade, nextTrade) => {
+  const before = normalizeTradeForStorage(currentTrade);
+  const after = normalizeTradeForStorage(nextTrade);
+  if (before.id !== after.id) throw new Error('交易識別碼不一致');
+  const patch = {};
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (!(key in after)) patch[key] = REMOVED_FIELD;
+    else if (!Object.is(before[key], after[key])) patch[key] = after[key];
+  }
+  return patch;
+};
+
 export const buildTradeBackup = (activeTrades, deletedTrades) => {
   if (!Array.isArray(activeTrades) || !Array.isArray(deletedTrades)) {
     throw new Error('備份交易集合無效');

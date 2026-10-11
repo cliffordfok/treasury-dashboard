@@ -483,6 +483,29 @@ h3 {
   color: #fde68a;
 }
 
+.status-banner--offline {
+  border-color: rgba(57, 135, 229, 0.32);
+  background: rgba(17, 37, 67, 0.72);
+  color: #c7dcfa;
+}
+
+.banner-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 8px;
+  color: inherit;
+  opacity: 0.8;
+}
+
+.banner-dismiss:hover {
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 1;
+}
+
 .primary-tabs {
   width: 100%;
   max-width: 760px;

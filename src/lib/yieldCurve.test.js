@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  calculateAccruedInterestPer100,
+  calculateForwardDaysBetween,
+  getMarketYTMFromCurve,
+  yieldToPrice,
+} from './treasuryMath.js';
+import {
+  bootstrapDiscountFactors,
   buildCommonYieldCurve,
   FRED_CURVE_SERIES,
   getFredPricingSignature,
@@ -126,9 +133,10 @@ describe('FRED theoretical estimate freshness', () => {
     }, curve);
 
     expect(estimate.observationDate).toBe('2026-09-03');
-    // Street convention; matches an independent implementation to 1e-8.
-    expect(estimate.cleanPrice).toBeCloseTo(98.09036519, 7);
-    expect(estimate.marketYield).toBeCloseTo(4.54315537, 7);
+    // Zero-curve pricing; matches an independent bootstrap to 1e-10.
+    expect(estimate.cleanPrice).toBeCloseTo(98.0880666934, 9);
+    // Yield implied by the zero-curve price (street convention).
+    expect(estimate.marketYield).toBeCloseTo(4.54381797, 7);
   });
 
   it('invalidates estimates created by the previous pricing model', () => {
@@ -142,5 +150,47 @@ describe('FRED theoretical estimate freshness', () => {
       fredEstimatedAt: '2026-09-03',
       fredPricingSignature: 'curve-date-v2|t-note|2030-07-15|4|2',
     }, '2026-09-03')).toBe(true);
+    expect(shouldUpdateFredEstimate({
+      ...trade,
+      fredEstimatedAt: '2026-09-03',
+      fredPricingSignature: 'curve-date-v3|t-note|2030-07-15|4|2',
+    }, '2026-09-03')).toBe(true);
+  });
+});
+
+describe('bootstrapped zero curve', () => {
+  const flatCurve = normalizeYieldCurve({
+    points: FRED_CURVE_SERIES.map((point) => ({ ...point, yield: 4, date: '2026-09-03' })),
+  });
+  const upwardCurve = normalizeYieldCurve(makeCurve('2026-09-03'));
+
+  it('turns a flat par curve into the same semiannual zero rate', () => {
+    const factors = bootstrapDiscountFactors(flatCurve);
+    for (const step of [1, 2, 10, 60]) {
+      expect(factors[step]).toBeCloseTo(1.02 ** -step, 12);
+    }
+  });
+
+  it('reprices every par bond on the half-year grid at 100', () => {
+    const factors = bootstrapDiscountFactors(upwardCurve);
+    let annuity = 0;
+    for (let step = 1; step <= 60; step += 1) {
+      annuity += factors[step];
+      const coupon = getMarketYTMFromCurve(upwardCurve, step / 2) / 200;
+      expect(coupon * annuity + factors[step]).toBeCloseTo(1, 12);
+    }
+  });
+
+  it('prices low-coupon long bonds below the single par-yield shortcut', () => {
+    const lowCoupon = { type: 't-bond', maturityDate: '2050-05-15', couponRate: 1.25, couponFrequency: 2 };
+    const zeroCurvePrice = getFredTheoreticalEstimate(lowCoupon, upwardCurve).cleanPrice;
+    // Independent bootstrap reference.
+    expect(zeroCurvePrice).toBeCloseTo(48.4230927858, 9);
+
+    const years = calculateForwardDaysBetween('2026-09-03', lowCoupon.maturityDate) / 365.25;
+    const parYieldShortcut = yieldToPrice(lowCoupon, getMarketYTMFromCurve(upwardCurve, years), '2026-09-03')
+      - calculateAccruedInterestPer100(lowCoupon, '2026-09-03');
+    // The coupon effect is material here: about 0.4 points on this curve.
+    expect(parYieldShortcut - zeroCurvePrice).toBeGreaterThan(0.3);
   });
 });

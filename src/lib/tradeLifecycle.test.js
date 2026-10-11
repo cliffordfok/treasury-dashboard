@@ -78,6 +78,50 @@ describe('recoverable trade deletion', () => {
     expect(restoredTrades[1].deletedAt).toBe('2026-09-06T04:00:00.000Z');
   });
 
+  it('rejects closed trades whose backup omits the close terms', () => {
+    const closedWithoutTerms = {
+      id: 'closed-1',
+      cusip: '91282ABC1',
+      type: 't-note',
+      side: 'buy',
+      tradeDate: '2025-01-15',
+      maturityDate: '2027-01-15',
+      faceValue: 1000,
+      cleanPrice: 99,
+      couponRate: 4,
+      commission: 0,
+      couponFrequency: 2,
+      currentMarketPrice: 101,
+      status: 'closed',
+    };
+    expect(() => normalizeTradeBackupEntry(closedWithoutTerms)).toThrow('closeDate');
+    expect(() => normalizeTradeBackupEntry({ ...closedWithoutTerms, closeDate: '2026-01-15' })).toThrow('closePrice');
+    expect(normalizeTradeBackupEntry({
+      ...closedWithoutTerms,
+      closeDate: '2026-01-15',
+      closePrice: 100.5,
+    })).toMatchObject({ closeDate: '2026-01-15', closePrice: 100.5, closeCommission: 0 });
+  });
+
+  it.each(['.', '..', '__reserved__', 'x'.repeat(1501), '債'.repeat(501)])(
+    'rejects document id %s that Firestore cannot store',
+    (id) => {
+      expect(() => normalizeTradeBackupEntry({
+        id,
+        cusip: '91282ABC1',
+        type: 't-bill',
+        side: 'buy',
+        tradeDate: '2026-01-15',
+        maturityDate: '2026-07-15',
+        faceValue: 1000,
+        cleanPrice: 99,
+        commission: 0,
+        currentMarketPrice: 99,
+        status: 'active',
+      })).toThrow('id');
+    },
+  );
+
   it('rejects an invalid deletion marker instead of restoring it as an active trade', () => {
     expect(() => normalizeTradeBackupEntry({
       id: 'deleted-1',

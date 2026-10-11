@@ -13,6 +13,10 @@ import {
   getTBillInvestmentYield,
   getTBillPriceFromInvestmentYield,
   getTBillYearBasis,
+  getMarketPriceAgeDays,
+  getMarketPriceAsOf,
+  getTradeYTM,
+  isMarketPriceStale,
   isMatured,
   isSupportedTreasuryType,
   isValidISODate,
@@ -250,6 +254,62 @@ describe('trade normalization', () => {
     expect(trade.fredEstimatedPrice).toBe(99.75);
     expect(trade.fredEstimatedAt).toBe('2026-09-03');
     expect(trade.deletedAt).toBe('2026-09-06T04:00:00.000Z');
+  });
+
+  it('does not invent close terms for a closed trade', () => {
+    const trade = normalizeTradeForStorage({ ...couponTrade, status: 'closed' });
+    expect(trade.closeDate).toBe('');
+    expect(trade.closePrice).toBeNaN();
+    expect(trade.closeCommission).toBe(0);
+  });
+});
+
+describe('market price quote date', () => {
+  const bill = {
+    id: 'bill-1',
+    type: 't-bill',
+    side: 'buy',
+    tradeDate: '2026-01-08',
+    maturityDate: '2027-01-07',
+    faceValue: 100000,
+    cleanPrice: 98,
+    currentMarketPrice: 98,
+    couponRate: 0,
+    couponFrequency: 0,
+    commission: 0,
+    status: 'active',
+  };
+
+  it('keeps the yield of an unchanged quote stable instead of drifting towards maturity', () => {
+    const atPurchase = getTradeYTM(bill, '2026-01-08');
+    expect(atPurchase).toBeCloseTo(getTBillInvestmentYield(98, 364, '2026-01-08'), 10);
+    expect(getTradeYTM(bill, '2026-12-20')).toBeCloseTo(atPurchase, 10);
+  });
+
+  it('values an updated quote on its own quote date', () => {
+    const updated = { ...bill, currentMarketPrice: 99.5, priceUpdatedAt: '2026-10-01' };
+    expect(getTradeYTM(updated, '2026-10-11')).toBeCloseTo(
+      getTBillInvestmentYield(99.5, 98, '2026-10-01'),
+      10,
+    );
+  });
+
+  it('stops quoting a yield once the position has matured', () => {
+    expect(getTradeYTM(bill, '2027-01-07')).toBeNull();
+  });
+
+  it('dates legacy quotes only when the price is still the purchase price', () => {
+    expect(getMarketPriceAsOf(bill)).toBe('2026-01-08');
+    expect(getMarketPriceAsOf({ ...bill, currentMarketPrice: 99 })).toBeNull();
+    expect(getMarketPriceAsOf({ ...bill, currentMarketPrice: 99, priceUpdatedAt: '2026-09-30' })).toBe('2026-09-30');
+  });
+
+  it('flags quotes older than a week or without a known date', () => {
+    const quoted = { ...bill, currentMarketPrice: 99, priceUpdatedAt: '2026-10-01' };
+    expect(getMarketPriceAgeDays(quoted, '2026-10-08')).toBe(7);
+    expect(isMarketPriceStale(quoted, '2026-10-08')).toBe(false);
+    expect(isMarketPriceStale(quoted, '2026-10-09')).toBe(true);
+    expect(isMarketPriceStale({ ...bill, currentMarketPrice: 99 }, '2026-10-09')).toBe(true);
   });
 });
 

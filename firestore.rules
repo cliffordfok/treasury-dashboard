@@ -2,8 +2,20 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    // 只供個人使用時，把自己的 Firebase Auth UID 加入清單，例如 ['abc123']。
+    // 清單留空代表任何已登入的 Google 帳號都可以使用各自獨立的帳本。
+    function allowedUserIds() {
+      return [];
+    }
+
+    function isAllowedUser() {
+      return allowedUserIds().size() == 0 || request.auth.uid in allowedUserIds();
+    }
+
     function isOwner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+      return request.auth != null
+        && request.auth.uid == userId
+        && isAllowedUser();
     }
 
     function isDate(value) {

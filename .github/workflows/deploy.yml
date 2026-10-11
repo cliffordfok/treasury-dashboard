@@ -33,7 +33,8 @@ jobs:
 
       - name: Fetch complete FRED yield curve
         env:
-          FRED_API_KEY: ${{ secrets.VITE_FRED_API_KEY }}
+          # 建議改用 FRED_API_KEY；舊的 VITE_FRED_API_KEY 只作過渡後備。
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY || secrets.VITE_FRED_API_KEY }}
         run: node scripts/fetch-yield-curve.mjs
 
       - name: Lint

@@ -97,6 +97,8 @@ describe('Firestore trade ledger rules', () => {
     await assertFails(setDoc(tradeRef(alice), makeTrade({ maturityDate: '2025-12-31' })));
     await assertFails(setDoc(tradeRef(alice), makeTrade({ faceValue: -1 })));
     await assertFails(setDoc(tradeRef(alice), makeTrade({ couponFrequency: 12 })));
+    await assertFails(setDoc(tradeRef(alice), makeTrade({ priceUpdatedAt: '2026-02-30' })));
+    await assertSucceeds(setDoc(tradeRef(alice), makeTrade({ priceUpdatedAt: '2026-09-30' })));
   });
 
   it('accepts leap days and rejects impossible calendar dates and timestamps', async () => {
@@ -176,5 +178,43 @@ describe('Firestore trade ledger rules', () => {
     await assertFails(updateDoc(reference, { type: 't-note' }));
     await assertFails(updateDoc(reference, { couponFrequency: 4 }));
     await assertFails(updateDoc(reference, { couponRate: 2 }));
+  });
+});
+
+describe('Firestore personal-use allowlist', () => {
+  let testEnvironment;
+
+  beforeAll(async () => {
+    const allowlistedRules = RULES.replace(
+      /function allowedUserIds\(\) \{\s*return \[\];\s*\}/,
+      "function allowedUserIds() { return ['alice']; }",
+    );
+    if (allowlistedRules === RULES) throw new Error('allowedUserIds() not found in firestore.rules');
+    testEnvironment = await initializeTestEnvironment({
+      projectId: PROJECT_ID,
+      firestore: {
+        host: '127.0.0.1',
+        port: 8080,
+        rules: allowlistedRules,
+      },
+    });
+  });
+
+  beforeEach(async () => {
+    await testEnvironment.clearFirestore();
+  });
+
+  afterAll(async () => {
+    await testEnvironment.cleanup();
+  });
+
+  it('only admits listed accounts once the allowlist is configured', async () => {
+    const alice = testEnvironment.authenticatedContext('alice');
+    const bob = testEnvironment.authenticatedContext('bob');
+
+    await assertSucceeds(setDoc(doc(alice.firestore(), 'users', 'alice', 'trades', 'trade-1'), makeTrade()));
+    await assertSucceeds(getDoc(doc(alice.firestore(), 'users', 'alice', 'trades', 'trade-1')));
+    await assertFails(setDoc(doc(bob.firestore(), 'users', 'bob', 'trades', 'trade-1'), makeTrade()));
+    await assertFails(getDoc(doc(bob.firestore(), 'users', 'bob', 'trades', 'trade-1')));
   });
 });

@@ -241,14 +241,12 @@ export const getMarketYTMFromCurve = (curve, years) => {
   return null;
 };
 
+// Treasury uses 366 days only when the year following the date contains
+// 29 February; from 29 February itself that year ends on 28 February.
 export const getTBillYearBasis = (valuationDate) => {
   const start = toDateAtMidnight(valuationDate);
   if (!start) return null;
-  const oneYearLater = new Date(
-    start.getFullYear() + 1,
-    start.getMonth(),
-    start.getDate(),
-  );
+  const oneYearLater = addMonthsClamped(start, 12, start.getDate(), false);
   return calculateForwardDaysBetween(start, oneYearLater);
 };
 
@@ -300,16 +298,27 @@ export const yieldToPrice = (trade, marketYieldPercent, valuationDate) => {
   const yieldPerPeriod = yieldDecimal / frequency;
   if (yieldPerPeriod <= -1) return null;
 
-  const paymentDates = getCouponDates(trade).filter((date) => date > valuation);
-  if (paymentDates.length === 0) return null;
-  const daysPerPeriod = 365.25 / frequency;
-  let price = 0;
-  for (const paymentDate of paymentDates) {
-    const days = calculateForwardDaysBetween(valuation, paymentDate);
-    price += couponPerPeriod / Math.pow(1 + yieldPerPeriod, days / daysPerPeriod);
+  // Street convention: discount in whole coupon periods, with the first one
+  // pro-rated by its actual length (DSC / E) rather than a fixed 365.25 / f days.
+  const couponWindow = getPreviousNextCouponDates(trade, valuation);
+  if (!couponWindow) return null;
+  const remainingPayments = getCouponDates(trade).filter((date) => date > valuation).length;
+  const daysInPeriod = calculateForwardDaysBetween(couponWindow.previous, couponWindow.next);
+  const daysToNextCoupon = calculateForwardDaysBetween(valuation, couponWindow.next);
+  if (remainingPayments === 0 || !daysInPeriod || daysInPeriod <= 0) return null;
+  const firstPeriodFraction = daysToNextCoupon / daysInPeriod;
+
+  // In the final coupon period the market quotes a simple (money-market) yield.
+  if (remainingPayments === 1) {
+    const discount = 1 + (yieldPerPeriod * firstPeriodFraction);
+    return discount > 0 ? (100 + couponPerPeriod) / discount : null;
   }
-  const maturityDays = calculateForwardDaysBetween(valuation, maturityDate);
-  price += 100 / Math.pow(1 + yieldPerPeriod, maturityDays / daysPerPeriod);
+
+  let price = 0;
+  for (let period = 0; period < remainingPayments; period += 1) {
+    price += couponPerPeriod / Math.pow(1 + yieldPerPeriod, firstPeriodFraction + period);
+  }
+  price += 100 / Math.pow(1 + yieldPerPeriod, firstPeriodFraction + remainingPayments - 1);
   return price;
 };
 

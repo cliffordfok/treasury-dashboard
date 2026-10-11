@@ -8,7 +8,8 @@ import {
   yieldToPrice,
 } from './treasuryMath.js';
 
-const FRED_PRICING_MODEL_VERSION = 'curve-date-v2';
+// Bump when the pricing formula changes so stored estimates are recalculated.
+const FRED_PRICING_MODEL_VERSION = 'curve-date-v3';
 
 export const FRED_CURVE_SERIES = [
   { id: 'DGS1MO', years: 0.0833 },

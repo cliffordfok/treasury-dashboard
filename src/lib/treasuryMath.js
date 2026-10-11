@@ -349,18 +349,51 @@ export const solveYTMFromPrice = (trade, targetPrice, valuationDate) => {
   return (low + high) / 2;
 };
 
+export const STALE_MARKET_PRICE_DAYS = 7;
+
+export const getMarketPriceAsOf = (trade) => {
+  if (isValidISODate(trade?.priceUpdatedAt)) return trade.priceUpdatedAt;
+  // Records saved before priceUpdatedAt existed still hold the purchase quote
+  // when the market price was never edited; that quote is as of settlement.
+  if (
+    Number(trade?.currentMarketPrice) === Number(trade?.cleanPrice)
+    && isValidISODate(trade?.tradeDate)
+  ) return trade.tradeDate;
+  return null;
+};
+
+export const getMarketPriceAgeDays = (trade, valuationDate) => {
+  const asOf = getMarketPriceAsOf(trade);
+  const days = asOf ? calculateForwardDaysBetween(asOf, valuationDate) : null;
+  return days == null ? null : Math.max(0, days);
+};
+
+export const isMarketPriceStale = (trade, valuationDate) => {
+  const ageDays = getMarketPriceAgeDays(trade, valuationDate);
+  return ageDays == null || ageDays > STALE_MARKET_PRICE_DAYS;
+};
+
 export const getTradeYTM = (trade, valuationDate) => {
   if (!isSupportedTreasuryType(trade)) return null;
   const cleanPrice = Number(trade.currentMarketPrice);
   const daysToMaturity = calculateForwardDaysBetween(valuationDate, trade.maturityDate);
   if (!Number.isFinite(cleanPrice) || cleanPrice <= 0 || !daysToMaturity || daysToMaturity <= 0) return null;
+
+  // A quote only implies a yield at its own date. Re-solving an old price with
+  // fewer days left would make the yield drift upwards (a T-Bill bought at 98
+  // would show 40%+ near maturity), so value the price on the day it was quoted.
+  const priceAsOf = toDateAtMidnight(getMarketPriceAsOf(trade));
+  const quoteDate = priceAsOf && priceAsOf < toDateAtMidnight(trade.maturityDate)
+    ? priceAsOf
+    : valuationDate;
+  const quoteDaysToMaturity = calculateForwardDaysBetween(quoteDate, trade.maturityDate);
   if (trade.type === 't-bill') {
-    return getTBillInvestmentYield(cleanPrice, daysToMaturity, valuationDate);
+    return getTBillInvestmentYield(cleanPrice, quoteDaysToMaturity, quoteDate);
   }
 
-  const accruedInterestPer100 = calculateAccruedInterestPer100(trade, valuationDate);
+  const accruedInterestPer100 = calculateAccruedInterestPer100(trade, quoteDate);
   const dirtyPrice = getDirtyPrice(cleanPrice, accruedInterestPer100);
-  return solveYTMFromPrice(trade, dirtyPrice, valuationDate);
+  return solveYTMFromPrice(trade, dirtyPrice, quoteDate);
 };
 
 export const generateAllCoupons = (trade) => {
@@ -423,8 +456,10 @@ export const normalizeTradeForStorage = (trade) => {
   else delete normalized.accruedInterestPer100;
 
   if (status === 'closed') {
-    normalized.closeDate = trade.closeDate || trade.maturityDate;
-    normalized.closePrice = toFiniteNumber(trade.closePrice, normalized.currentMarketPrice);
+    // Never invent close terms: missing values must fail validation rather than
+    // silently become a maturity-date close at the last market price.
+    normalized.closeDate = isValidISODate(trade.closeDate) ? trade.closeDate : '';
+    normalized.closePrice = toFiniteNumber(trade.closePrice, Number.NaN);
     normalized.closeCommission = toFiniteNumber(trade.closeCommission);
     const closeAccrued = getStoredAccruedInterest(trade.closeAccruedInterestPer100);
     if (preservesStoredAccruedInterest && closeAccrued != null) normalized.closeAccruedInterestPer100 = closeAccrued;

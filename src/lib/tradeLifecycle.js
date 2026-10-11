@@ -54,7 +54,14 @@ export const normalizeTradeBackupEntry = (rawTrade) => {
   }
 
   const rawId = String(rawTrade.id || '');
-  if (!rawId || rawId.length > 1500 || rawId.includes('/')) {
+  if (
+    !rawId
+    || new TextEncoder().encode(rawId).length > 1500
+    || rawId.includes('/')
+    || rawId === '.'
+    || rawId === '..'
+    || /^__.*__$/.test(rawId)
+  ) {
     throw new Error('交易識別碼（id）無效');
   }
 

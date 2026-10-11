@@ -2,23 +2,24 @@ import { lazy, Suspense, useState, useMemo, useEffect, useRef, useCallback } fro
 import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, RotateCcw } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, doc, setDoc, writeBatch } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, connectAuthEmulator } from 'firebase/auth';
+import { getFirestore, collection, onSnapshot, doc, setDoc, writeBatch, connectFirestoreEmulator } from 'firebase/firestore';
 import {
+  STALE_MARKET_PRICE_DAYS,
   calculateAccruedInterestPer100,
-  calculateActiveUnrealizedPnl,
-  calculateClosedTradePricePnl,
   calculateDaysBetween,
   calculateForwardDaysBetween,
   calculateHoldToMaturityQuote,
-  calculateMaturedTradePricePnl,
   calculateTradePricePnl,
   formatDateOnly,
   generateAllCoupons,
   getDirtyPrice,
+  getMarketPriceAgeDays,
+  getMarketPriceAsOf,
   getMarketYTMFromCurve,
   getTradeYTM,
   isCouponTreasury,
+  isMarketPriceStale,
   isMatured,
   isSupportedTreasuryType,
   isValidISODate,
@@ -28,6 +29,8 @@ import {
   toDateAtMidnight,
   toFiniteNumber,
 } from './lib/treasuryMath.js';
+import { calculatePortfolioMetrics } from './lib/portfolio.js';
+import { describeFirestoreError } from './lib/firestoreErrors.js';
 import {
   getFredPricingSignature,
   getFredTheoreticalEstimate,
@@ -45,8 +48,16 @@ import {
 
 const YieldCurveChart = lazy(() => import('./components/YieldCurveChart.jsx'));
 
+// 本機開發可連接 Firebase Emulator；Production Build 永遠不會啟用。
+const useFirebaseEmulators = import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true';
+
 // --- 真實環境 Firebase 設定 (使用環境變數) ---
-const firebaseConfig = {
+const firebaseConfig = useFirebaseEmulators ? {
+  apiKey: 'demo-api-key',
+  authDomain: '127.0.0.1',
+  projectId: 'demo-treasury-dashboard',
+  appId: 'demo-app',
+} : {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
@@ -65,6 +76,10 @@ if (import.meta.env.PROD && appCheckSiteKey) {
 }
 const auth = getAuth(app);
 const db = getFirestore(app);
+if (useFirebaseEmulators) {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+}
 const googleProvider = new GoogleAuthProvider();
 
 const MAX_IMPORT_BYTES = 1_000_000;
@@ -79,6 +94,28 @@ const fetchYieldCurve = async ({ bypassCache = false } = {}) => {
 };
 
 const roundMarketPriceForStorage = (price) => Math.round(price * 1000) / 1000;
+
+const formatUsd = (value, fractionDigits = 2) => Number(value || 0).toLocaleString(undefined, {
+  minimumFractionDigits: fractionDigits,
+  maximumFractionDigits: fractionDigits,
+});
+
+const formatSignedUsd = (value) => {
+  const cents = Math.round(value * 100) / 100;
+  return `${cents >= 0 ? '+' : '-'}$${formatUsd(Math.abs(cents))}`;
+};
+
+const downloadJson = (data, filename) => {
+  const url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Revoking synchronously can cancel the download in some browsers.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -178,7 +215,7 @@ export default function App() {
       return true;
     } catch (error) {
       console.error(`${actionLabel}失敗：`, tradeData.id, error);
-      alert(`${actionLabel}失敗，資料沒有變更。請檢查網絡後重試。`);
+      alert(`${actionLabel}失敗，資料沒有變更。${describeFirestoreError(error)}`);
       return false;
     }
   }, [saveTradeToDB]);
@@ -234,8 +271,8 @@ export default function App() {
             fredPricingSignature: getFredPricingSignature(trade),
           });
         } catch (err) {
-          console.error('更新市場價格失敗：', trade.id, err);
-          setDbError('FRED 理論估值未能儲存；使用者市場價沒有被修改。請檢查網絡後重試。');
+          console.error('更新 FRED 理論估值失敗：', trade.id, err);
+          setDbError(`FRED 理論估值未能儲存；使用者市場價沒有被修改。${describeFirestoreError(err)}`);
         } finally {
           priceUpdatesInFlightRef.current.delete(trade.id);
         }
@@ -268,7 +305,9 @@ export default function App() {
       setDbError('');
     }, (error) => {
       console.error("Firestore 錯誤：", error);
-      setDbError('無法同步 Firestore。請檢查網絡、Firebase 設定及安全規則後重試。');
+      setDbError(error?.code === 'permission-denied'
+        ? '此帳號未獲授權讀取帳本，或 Firestore 安全規則拒絕存取。'
+        : `無法同步 Firestore。${describeFirestoreError(error)}`);
       setIsDbReady(true);
     });
     return () => unsubscribe();
@@ -309,45 +348,17 @@ export default function App() {
   const upcomingCouponsList = useMemo(() => allCoupons.filter(c => c.date > todayObj && c.date.getFullYear() === todayObj.getFullYear()), [allCoupons, todayObj]);
 
   // --- PnL Calculations ---
-  const portfolioMetrics = useMemo(() => {
-    let totalMarketValue = 0; let totalUnrealizedPnL = 0; let totalWeightYTM = 0; let totalFace = 0; let totalAccruedInterest = 0; let totalYtmMarketValue = 0; let totalRealizedPnL = 0; let annualCouponIncome = 0;
-    receivedCoupons.forEach(c => totalRealizedPnL += c.amount);
-    supportedClosedTrades.forEach(t => { totalRealizedPnL += calculateClosedTradePricePnl(t) ?? 0; });
-    supportedMaturedTrades.forEach(t => { totalRealizedPnL += calculateMaturedTradePricePnl(t) ?? 0; });
-    supportedActiveTrades.forEach(trade => {
-      const price = Number(trade.currentMarketPrice);
-      if (!Number.isFinite(price) || price <= 0) return;
-      const faceValue = Number(trade.faceValue) || 0;
-      const mult = trade.side === 'sell' ? -1 : 1;
-      const marketVal = ((price * faceValue) / 100) * mult;
-      const accruedInterestPer100 = calculateAccruedInterestPer100(trade, todayObj);
-      const accruedValue = ((accruedInterestPer100 * faceValue) / 100) * mult;
-      totalMarketValue += marketVal;
-      totalAccruedInterest += accruedValue;
-      totalUnrealizedPnL += calculateActiveUnrealizedPnl(trade, todayObj) ?? 0;
-      totalFace += faceValue * mult;
-      if (isCouponTreasury(trade) && trade.couponRate) {
-        annualCouponIncome += (faceValue * (Number(trade.couponRate) / 100)) * mult;
-      }
-    });
-    const totalFullMarketValue = totalMarketValue + totalAccruedInterest;
-    supportedActiveTrades.forEach(trade => {
-      const cleanPrice = Number(trade.currentMarketPrice);
-      if (!Number.isFinite(cleanPrice) || cleanPrice <= 0) return;
-      const mult = trade.side === 'sell' ? -1 : 1;
-      const accruedInterestPer100 = calculateAccruedInterestPer100(trade, todayObj);
-      const dirtyPrice = isCouponTreasury(trade) ? getDirtyPrice(cleanPrice, accruedInterestPer100) : cleanPrice;
-      if (!Number.isFinite(dirtyPrice) || dirtyPrice <= 0) return;
-      const marketVal = ((dirtyPrice * (Number(trade.faceValue) || 0)) / 100) * mult;
-      const ytm = getTradeYTM(trade, todayObj);
-      if (ytm == null) return;
-      const absoluteMarketVal = Math.abs(marketVal);
-      totalWeightYTM += ytm * absoluteMarketVal;
-      totalYtmMarketValue += absoluteMarketVal;
-    });
-    totalWeightYTM = totalYtmMarketValue > 0 ? totalWeightYTM / totalYtmMarketValue : null;
-    return { totalMarketValue, totalUnrealizedPnL, totalWeightYTM, totalFace, totalAccruedInterest, totalFullMarketValue, totalRealizedPnL, monthlyAvgIncome: annualCouponIncome / 12 };
-  }, [supportedActiveTrades, supportedMaturedTrades, supportedClosedTrades, receivedCoupons, todayObj]);
+  const portfolioMetrics = useMemo(() => calculatePortfolioMetrics({
+    activeTrades: supportedActiveTrades,
+    maturedTrades: supportedMaturedTrades,
+    closedTrades: supportedClosedTrades,
+    receivedCoupons,
+    valuationDate: todayObj,
+  }), [supportedActiveTrades, supportedMaturedTrades, supportedClosedTrades, receivedCoupons, todayObj]);
+  const stalePriceTrades = useMemo(
+    () => supportedActiveTrades.filter((trade) => isMarketPriceStale(trade, todayObj)),
+    [supportedActiveTrades, todayObj],
+  );
 
   // --- Chart Data ---
   const yieldCurveChartData = useMemo(() => {
@@ -466,6 +477,7 @@ export default function App() {
       commission: ytmForm.commission,
       accruedInterestPer100: ytmForm.accruedInterestPer100,
       currentMarketPrice: ytmForm.cleanPrice,
+      priceUpdatedAt: ytmForm.tradeDate,
       status: 'active',
     });
     if (!await saveTradeWithFeedback(tradeData, '加入帳本')) return;
@@ -479,7 +491,7 @@ export default function App() {
       await saveTradeToDB(markTradeDeleted(trade));
     } catch (error) {
       console.error('移至回收桶失敗：', trade.id, error);
-      alert('未能刪除交易，資料沒有變更。請檢查網絡後重試。');
+      alert(`未能刪除交易，資料沒有變更。${describeFirestoreError(error)}`);
     }
   };
 
@@ -488,7 +500,7 @@ export default function App() {
       await saveTradeToDB(restoreDeletedTrade(trade));
     } catch (error) {
       console.error('復原交易失敗：', trade.id, error);
-      alert('未能復原交易，請檢查網絡後重試。');
+      alert(`未能復原交易。${describeFirestoreError(error)}`);
     }
   };
 
@@ -516,6 +528,17 @@ export default function App() {
       return;
     }
     const existingTrade = editingTradeId ? trades.find(t => t.id === editingTradeId) : null;
+    if (editingTradeId && !existingTrade) {
+      alert('這筆交易已不在帳本（可能已在其他裝置移至回收桶），資料沒有變更。');
+      return;
+    }
+    if (
+      existingTrade?.status === 'closed'
+      && (formData.tradeDate > existingTrade.closeDate || formData.maturityDate < existingTrade.closeDate)
+    ) {
+      alert(`平倉交收日（${existingTrade.closeDate}）必須介乎開倉交收日與到期日之間，請調整日期。`);
+      return;
+    }
     const tradeData = normalizeTradeForStorage({
       ...existingTrade,
       ...formData,
@@ -524,9 +547,12 @@ export default function App() {
     if (!editingTradeId) {
       tradeData.id = makeTradeId();
       tradeData.currentMarketPrice = tradeData.cleanPrice;
+      tradeData.priceUpdatedAt = tradeData.tradeDate;
     } else {
       tradeData.id = editingTradeId;
-      tradeData.currentMarketPrice = toFiniteNumber(existingTrade?.currentMarketPrice, tradeData.cleanPrice);
+      tradeData.currentMarketPrice = toFiniteNumber(existingTrade.currentMarketPrice, tradeData.cleanPrice);
+      if (isValidISODate(existingTrade.priceUpdatedAt)) tradeData.priceUpdatedAt = existingTrade.priceUpdatedAt;
+      else delete tradeData.priceUpdatedAt;
     }
     if (!await saveTradeWithFeedback(tradeData, '儲存交易')) return;
     setIsFormOpen(false); setEditingTradeId(null);
@@ -555,6 +581,7 @@ export default function App() {
       closeCommission: closeData.closeCommission,
       closeAccruedInterestPer100: closeData.closeAccruedInterestPer100,
       currentMarketPrice: closeData.closePrice,
+      priceUpdatedAt: closeData.closeDate,
     });
     if (!await saveTradeWithFeedback(updatedTrade, '平倉')) return;
     setIsCloseModalOpen(false);
@@ -567,22 +594,28 @@ export default function App() {
       return;
     }
     const trade = trades.find(t => t.id === id);
-    if (trade && !await saveTradeWithFeedback({ ...trade, currentMarketPrice: roundMarketPriceForStorage(n) }, '更新市場價格')) return;
+    if (trade && !await saveTradeWithFeedback({
+      ...trade,
+      currentMarketPrice: roundMarketPriceForStorage(n),
+      priceUpdatedAt: formatDateOnly(todayObj),
+    }, '更新市場價格')) return;
     setEditingPriceId(null);
+  };
+
+  const handleAdoptFredPrice = async (trade) => {
+    if (!hasCurrentFredEstimate(trade)) return;
+    await saveTradeWithFeedback({
+      ...trade,
+      currentMarketPrice: Number(trade.fredEstimatedPrice),
+      priceUpdatedAt: trade.fredEstimatedAt,
+    }, '採用 FRED 理論價');
   };
 
   // --- 匯出 / 匯入 ---
   const handleExport = () => {
     const backupTrades = buildTradeBackup(trades, deletedTrades);
     if (backupTrades.length === 0) return;
-    const data = JSON.stringify(backupTrades, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `treasury-backup-${formatDateOnly(new Date())}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadJson(JSON.stringify(backupTrades, null, 2), `treasury-backup-${formatDateOnly(new Date())}.json`);
   };
 
   const handleImport = () => {
@@ -634,7 +667,7 @@ export default function App() {
             await batch.commit();
           } catch (error) {
             console.error('批次匯入 Firestore 失敗：', error);
-            alert('匯入失敗，沒有任何交易寫入。請檢查網絡後重試。');
+            alert(`匯入失敗，沒有任何交易寫入。${describeFirestoreError(error)}`);
             return;
           }
         }
@@ -690,25 +723,25 @@ export default function App() {
       <div className="hero-card rounded-2xl p-5 sm:p-6 text-white relative overflow-hidden">
         <div className="absolute -top-2 -right-2 opacity-15 pointer-events-none"><Landmark size={140} /></div>
         <p className="hero-kicker text-xs sm:text-sm font-medium mb-1.5">美債累計已實現利潤</p>
-        <p className={`hero-value font-bold tracking-tight ${portfolioMetrics.totalRealizedPnL >= 0 ? 'is-positive' : 'is-negative'}`}>{portfolioMetrics.totalRealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalRealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+        <p className={`hero-value font-bold tracking-tight ${portfolioMetrics.totalRealizedPnL >= 0 ? 'is-positive' : 'is-negative'}`}>{formatSignedUsd(portfolioMetrics.totalRealizedPnL)}</p>
         <span className="hero-chip inline-block text-[11px] sm:text-xs px-2.5 py-1 rounded-md mt-2.5">已包含所有平倉、到期結算及歷史收息</span>
       </div>
       <div className="stats-grid grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
           <div className="stat-icon stat-icon--cool p-2.5 sm:p-3 rounded-lg flex-shrink-0"><DollarSign size={20} className="sm:hidden" /><DollarSign size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債淨價市值</p><p className="metric-value text-base sm:text-xl font-bold text-slate-800">${portfolioMetrics.totalMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p><p className="metric-detail text-[10px] text-slate-400">全價 ${portfolioMetrics.totalFullMarketValue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} · 應計利息 ${portfolioMetrics.totalAccruedInterest.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債淨價市值</p><p className="metric-value text-base sm:text-xl font-bold text-slate-800">${formatUsd(portfolioMetrics.totalMarketValue)}</p><p className="metric-detail text-[10px] text-slate-400">全價 ${formatUsd(portfolioMetrics.totalFullMarketValue)} · 應計利息 ${formatUsd(portfolioMetrics.totalAccruedInterest)}</p></div>
         </div>
         <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
           <div className={`stat-icon p-2.5 sm:p-3 rounded-lg flex-shrink-0 ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'stat-icon--gain' : 'stat-icon--loss'}`}><Activity size={20} className="sm:hidden" /><Activity size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債未實現盈虧</p><p className={`metric-value text-base sm:text-xl font-bold ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>{portfolioMetrics.totalUnrealizedPnL >= 0 ? '+' : ''}${portfolioMetrics.totalUnrealizedPnL.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債未實現盈虧</p><p className={`metric-value text-base sm:text-xl font-bold ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatSignedUsd(portfolioMetrics.totalUnrealizedPnL)}</p></div>
         </div>
         <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
           <div className="stat-icon stat-icon--gold p-2.5 sm:p-3 rounded-lg flex-shrink-0"><TrendingUp size={20} className="sm:hidden" /><TrendingUp size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債加權平均 YTM</p><p className={`metric-value text-base sm:text-xl font-bold ${portfolioMetrics.totalWeightYTM == null ? 'text-slate-400' : 'text-slate-800'}`}>{portfolioMetrics.totalWeightYTM == null ? '--' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`}</p></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium" title="按全價市值加權；賣空倉位以負收益計入">美債加權平均 YTM</p><p className={`metric-value text-base sm:text-xl font-bold ${portfolioMetrics.totalWeightYTM == null ? 'text-slate-400' : 'text-slate-800'}`}>{portfolioMetrics.totalWeightYTM == null ? '--' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`}</p></div>
         </div>
         <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
           <div className="stat-icon stat-icon--gain p-2.5 sm:p-3 rounded-lg flex-shrink-0"><Wallet size={20} className="sm:hidden" /><Wallet size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">平均每月利息</p><p className="metric-value text-base sm:text-xl font-bold text-emerald-600">${portfolioMetrics.monthlyAvgIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p></div>
+          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">平均每月利息</p><p className="metric-value text-base sm:text-xl font-bold text-emerald-600">${formatUsd(portfolioMetrics.monthlyAvgIncome)}</p></div>
         </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
@@ -773,7 +806,7 @@ export default function App() {
               <div key={c.id} className="payment-card p-3 rounded-lg">
                 <p className="text-[10px] font-semibold text-emerald-700 tracking-wide">{c.dateStr}</p>
                 <p className="text-[11px] text-slate-500 truncate mt-0.5">{c.cusip}</p>
-                <p className={`font-bold text-sm sm:text-base mt-1 ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</p>
+                <p className={`font-bold text-sm sm:text-base mt-1 ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{formatSignedUsd(c.amount)}</p>
               </div>
             ))}
           </div>
@@ -782,7 +815,7 @@ export default function App() {
       <div className="glass-panel p-4 sm:p-6 rounded-xl">
         <div className="panel-heading flex justify-between items-center mb-4 pb-3">
           <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Calendar className="mr-2 text-emerald-500" size={18}/> 年度收息日曆 · {todayObj.getFullYear()}</h3>
-          <span className="text-[11px] text-slate-400 font-medium">${couponCalendar.reduce((s, v) => s + v, 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
+          <span className="text-[11px] text-slate-400 font-medium">${formatUsd(couponCalendar.reduce((s, v) => s + v, 0), 0)}</span>
         </div>
         <div className="month-grid grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2">
           {['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'].map((label, m) => {
@@ -794,7 +827,7 @@ export default function App() {
               <div key={m} className={`month-cell p-2.5 sm:p-3 rounded-lg text-center ${has ? 'month-cell--funded' : ''} ${past ? 'month-cell--past' : ''} ${current ? 'month-cell--current' : ''}`}>
                 <p className={`text-[10px] font-semibold uppercase tracking-wide ${current ? 'text-blue-600' : 'text-slate-400'}`}>{label}</p>
                 <p className={`text-sm font-bold mt-1 ${has ? (total >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-slate-300'}`}>
-                  {has ? `$${Math.abs(total).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : '—'}
+                  {has ? `$${formatUsd(Math.abs(total), 0)}` : '—'}
                 </p>
               </div>
             );
@@ -805,7 +838,7 @@ export default function App() {
         <div className="panel-heading flex flex-wrap justify-between items-center gap-2 mb-4 pb-3">
           <div>
             <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={18}/> 債券到期倒數</h3>
-            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-1">現時 YTM 以目前市場淨價加應計利息計算，並以今日作為估值日。</p>
+            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-1">現價 YTM 以自訂市場淨價加應計利息，按該價格的報價日計算；價格超過 {STALE_MARKET_PRICE_DAYS} 日未更新會在帳本標示。</p>
           </div>
           <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-500">
             {yieldCurve?.observationDate && <span className="bg-slate-100 px-2 py-0.5 rounded-md">FRED 觀察日 · {yieldCurve.observationDate}</span>}
@@ -907,7 +940,6 @@ export default function App() {
 
   const renderYtmCalculator = () => {
     const update = (field, value) => setYtmForm(prev => ({ ...prev, [field]: value }));
-    const money = (value) => Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const pct = (value) => value == null || !Number.isFinite(value) ? '--' : `${value.toFixed(3)}%`;
 
     return (
@@ -1021,15 +1053,15 @@ export default function App() {
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
                       <p className="text-[11px] text-slate-500 font-semibold">總成本</p>
-                      <p className="font-bold text-slate-800">${money(ytmQuote.totalCost)}</p>
+                      <p className="font-bold text-slate-800">${formatUsd(ytmQuote.totalCost)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
                       <p className="text-[11px] text-slate-500 font-semibold">到期估算利潤</p>
-                      <p className={`font-bold ${ytmQuote.maturityProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{ytmQuote.maturityProfit >= 0 ? '+' : ''}${money(ytmQuote.maturityProfit)}</p>
+                      <p className={`font-bold ${ytmQuote.maturityProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatSignedUsd(ytmQuote.maturityProfit)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
                       <p className="text-[11px] text-slate-500 font-semibold">估算票息收入</p>
-                      <p className="font-bold text-slate-800">${money(ytmQuote.couponEstimate)}</p>
+                      <p className="font-bold text-slate-800">${formatUsd(ytmQuote.couponEstimate)}</p>
                     </div>
                     <div className="p-3 rounded-lg border bg-white">
                       <p className="text-[11px] text-slate-500 font-semibold">打和價格</p>
@@ -1079,7 +1111,7 @@ export default function App() {
         </div>
         <div id="ledger-panel" role="tabpanel" aria-labelledby={`ledger-tab-${ledgerSubTab}`} className="table-shell">
           {ledgerSubTab === 'coupons' ? (
-             <table className="data-table coupon-table w-full text-left text-sm whitespace-nowrap"><thead><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP／類型</th><th className="p-4 text-right">派息金額（美元）</th></tr></thead><tbody>{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id}><td data-label="DATE" className="p-4 font-medium text-slate-700">{c.dateStr}</td><td data-label="CUSIP" className="p-4 text-slate-600">{c.cusip}</td><td data-label="AMOUNT" className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{c.amount >= 0 ? '+' : ''}${c.amount.toLocaleString(undefined, {minimumFractionDigits:2})}</td></tr>))}</tbody></table>
+             <table className="data-table coupon-table w-full text-left text-sm whitespace-nowrap"><thead><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP／類型</th><th className="p-4 text-right">派息金額（美元）</th></tr></thead><tbody>{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id}><td data-label="DATE" className="p-4 font-medium text-slate-700">{c.dateStr}</td><td data-label="CUSIP" className="p-4 text-slate-600">{c.cusip}</td><td data-label="AMOUNT" className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{formatSignedUsd(c.amount)}</td></tr>))}</tbody></table>
           ) : ledgerSubTab === 'deleted' ? (
             <table className="data-table holdings-table w-full text-left text-sm whitespace-nowrap">
               <thead><tr><th className="p-4">CUSIP</th><th className="p-4">類型</th><th className="p-4 text-right">面值</th><th className="p-4">刪除時間</th><th className="p-4 text-center">操作</th></tr></thead>
@@ -1100,6 +1132,12 @@ export default function App() {
                   const marketPrice = toFiniteNumber(trade.currentMarketPrice, cleanPrice);
                   const fredEstimateIsCurrent = hasCurrentFredEstimate(trade);
                   const fredEstimatedPrice = fredEstimateIsCurrent ? Number(trade.fredEstimatedPrice) : NaN;
+                  const priceAsOf = getMarketPriceAsOf(trade);
+                  const priceAgeDays = getMarketPriceAgeDays(trade, todayObj);
+                  const priceIsStale = isMarketPriceStale(trade, todayObj);
+                  const canAdoptFredPrice = fredEstimateIsCurrent && !isUnsupported
+                    && (!priceAsOf || trade.fredEstimatedAt > priceAsOf)
+                    && Math.abs(fredEstimatedPrice - marketPrice) >= 0.0005;
                   const accruedInterestPer100 = calculateAccruedInterestPer100(trade, todayObj);
                   const dirtyPrice = getDirtyPrice(marketPrice, accruedInterestPer100) || marketPrice;
                   const closePrice = toFiniteNumber(trade.closePrice, marketPrice);
@@ -1109,9 +1147,9 @@ export default function App() {
                       <td data-label="TYPE" className="p-4"><span className={`trade-side ${trade.side === 'sell' ? 'trade-side--sell' : 'trade-side--buy'} px-2 py-0.5 rounded text-[10px] font-bold mr-1`}>{trade.side === 'sell' ? '賣空' : '買入'}</span><span className={`treasury-badge treasury-badge--${trade.type} px-2 py-0.5 rounded text-[10px] font-bold`}>{{ 't-bill': '短期國庫券', 't-note': '中期國庫券', 't-bond': '長期國庫券', tips: '通脹保值國債' }[trade.type] || trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉（{trade.closeDate}）</div>}</td>
                       <td data-label="FACE" className="p-4 text-right">${faceValue.toLocaleString()}</td><td data-label="COST" className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
                       {ledgerSubTab === 'active' ? (
-                        <><td data-label="MARKET" className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}</div>)}</td><td data-label="FRED ESTIMATE" className="p-4 text-right"><div className="font-medium text-violet-600">{Number.isFinite(fredEstimatedPrice) && fredEstimatedPrice > 0 ? fredEstimatedPrice.toFixed(3) : '--'}</div>{fredEstimateIsCurrent && <div className="text-[10px] text-slate-400">觀察日 {trade.fredEstimatedAt}</div>}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
+                        <><td data-label="MARKET" className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}<div className={`text-[10px] ${priceIsStale ? 'text-amber-600 font-semibold' : 'text-slate-400'}`}>{priceAsOf ? `報價日 ${priceAsOf}${priceAgeDays > 0 ? `（${priceAgeDays} 日前）` : ''}` : '報價日未記錄'}</div></div>)}</td><td data-label="FRED ESTIMATE" className="p-4 text-right"><div className="font-medium text-violet-600">{Number.isFinite(fredEstimatedPrice) && fredEstimatedPrice > 0 ? fredEstimatedPrice.toFixed(3) : '--'}</div>{fredEstimateIsCurrent && <div className="text-[10px] text-slate-400">觀察日 {trade.fredEstimatedAt}</div>}{canAdoptFredPrice && <button type="button" onClick={() => handleAdoptFredPrice(trade)} title="以 FRED 理論淨價作為自訂市場淨價，報價日為 FRED 觀察日" className="text-[10px] text-violet-600 font-semibold underline underline-offset-2 mt-0.5">採用為市場價</button>}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : formatSignedUsd(pnl)}</td></>
                       ) : (
-                        <><td data-label="CLOSE" className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000（面值）'}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : <>{pnl>=0?'+':''}${pnl.toLocaleString(undefined,{minimumFractionDigits:2})}</>}</td></>
+                        <><td data-label="CLOSE" className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000（面值）'}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : formatSignedUsd(pnl)}</td></>
                       )}
                       <td data-label="ACTIONS" className="p-4 text-center"><div className="flex items-center justify-center space-x-2"><button aria-label="編輯交易" title="編輯交易" onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="icon-button text-blue-500 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button aria-label="平倉" onClick={()=>{setClosingTradeId(trade.id); setCloseData({ closeDate: formatDateOnly(new Date()), closePrice: trade.currentMarketPrice, closeCommission: 0, closeAccruedInterestPer100: '' }); setIsCloseModalOpen(true);}} className="icon-button text-orange-500 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button aria-label="移至回收桶" title="移至回收桶" onClick={() => handleDeleteTrade(trade)} className="icon-button text-red-500 p-1 rounded"><Trash2 size={16} /></button></div></td>
                     </tr>
@@ -1135,7 +1173,7 @@ export default function App() {
           </div>
           {user && (
             <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-              <span className="text-xs text-slate-300 hidden lg:inline truncate max-w-[160px]">{user.email}</span>
+              <span className="text-xs text-slate-300 hidden lg:inline truncate max-w-[160px]" title={`UID：${user.uid}`}>{user.email}</span>
               <button onClick={handleExport} disabled={trades.length + deletedTrades.length === 0} className="nav-action text-xs sm:text-sm px-2.5 py-1.5 rounded-md flex items-center gap-1" title="匯出資料">
                 <Download size={14}/><span className="hidden sm:inline">匯出</span>
               </button>
@@ -1154,6 +1192,15 @@ export default function App() {
           <div role="alert" className="status-banner status-banner--danger mb-4 rounded-xl px-4 py-3 text-sm flex items-start gap-2">
             <AlertCircle size={17} className="mt-0.5 flex-shrink-0" />
             <span>{dbError}</span>
+          </div>
+        )}
+        {stalePriceTrades.length > 0 && (
+          <div role="status" className="status-banner status-banner--warning mb-4 rounded-xl px-4 py-3 text-sm flex flex-wrap items-start gap-2">
+            <AlertCircle size={17} className="mt-0.5 flex-shrink-0" />
+            <span className="flex-1 min-w-[200px]">有 {stalePriceTrades.length} 筆持倉的自訂市場價超過 {STALE_MARKET_PRICE_DAYS} 日未更新或沒有報價日期。YTM 會按報價日計算，但市值及未實現損益仍沿用舊價。</span>
+            {(activeTab !== 'trades' || ledgerSubTab !== 'active') && (
+              <button type="button" onClick={() => { setActiveTab('trades'); setLedgerSubTab('active'); }} className="text-xs font-semibold underline underline-offset-2">前往帳本更新</button>
+            )}
           </div>
         )}
         {unsupportedTips.length > 0 && (

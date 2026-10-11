@@ -5,7 +5,9 @@
 ## 目前限制
 
 - TIPS 需要 CPI 指數比率、通脹調整後本金及通縮下限。現有及由備份還原的 TIPS 記錄會保留及顯示，但不會計入估值、YTM、利息或損益；介面仍會阻擋手動新增 TIPS。
-- FRED CMT 曲線只用作獨立的理論淨價估算，並以曲線共同觀察日作估值日，不會覆寫使用者輸入的市場淨價；理論估值不應視為個別 CUSIP 的可成交報價。
+- FRED CMT 曲線只用作獨立的理論淨價估算，並以曲線共同觀察日作估值日，不會自動覆寫使用者輸入的市場淨價；理論估值不應視為個別 CUSIP 的可成交報價。帳本可按「採用為市場價」手動採用，報價日會記為 FRED 觀察日。
+- 自訂市場淨價會記錄報價日（`priceUpdatedAt`）。現價 YTM 按該報價日計算，避免舊價格隨到期日接近而令 YTM 虛高；市值及未實現損益仍沿用使用者輸入的價格。報價超過 7 日未更新或沒有報價日期時，介面會顯示提示。
+- 組合加權平均 YTM 按全價市值加權，賣空倉位以負收益計入（代表需支付的收益）。
 - T-Note 及 T-Bond 按美國國債的半年派息慣例處理；新增及匯入資料不接受其他派息頻率。
 - 為兼容現有備份及 Firestore Schema，`tradeDate` 與 `closeDate` 保留舊欄位名稱，但其值分別代表買入／開倉及賣出／平倉的**交收日**。應按成交確認書填寫；程式不會自行推算 T+1。
 - 定價模型供個人記錄及估算，不應視為券商結單、稅務或投資建議的替代品。
@@ -22,6 +24,18 @@ npm run dev
 ```
 
 在 `.env` 填寫 Firebase 網頁應用程式設定。Firebase Web API Key 是用戶端設定，不應把管理員憑證或服務供應商密鑰寫入任何 `VITE_` 變數。
+
+### 使用 Firebase Emulator 開發
+
+毋須連接正式 Firebase 專案，亦可在本機完整測試登入及帳本：
+
+```bash
+npm run emulators            # 另開終端機執行，啟動 Auth 及 Firestore Emulator
+# 在 .env 設定 VITE_USE_FIREBASE_EMULATORS=true
+npm run dev
+```
+
+Emulator 模式只在 `npm run dev` 生效，Production Build 會忽略此設定；Vite 開發伺服器亦只會在此模式下把 Emulator 位址加入 CSP。
 
 FRED 資料由 `.github/workflows/deploy.yml` 在伺服器端取得，並只寫入當次 GitHub Pages artifact；工作流程不會再由 bot 直接 Push `main`。每次 `main` 部署、手動部署及平日排程部署都會重新擷取資料，只發布 11 個指定年期均有數值的最近共同觀察日。瀏覽器及 Vite 建置程序不會收到 FRED API Key，前端亦會再次驗證點數、年期及觀察日期。
 
@@ -44,13 +58,17 @@ npm run build
 npm run check
 ```
 
-回歸測試涵蓋 ISO 日期解析、夏令時間日數、到期日結算、月末派息時間表、應計利息、全價損益、到期現金流、FRED 曲線完整性、理論估值日期防倒退、可復原刪除及 TIPS 防護。頁面跨午夜時會自動更新估值日，無需重新載入。
+回歸測試涵蓋 ISO 日期解析、夏令時間日數、到期日結算、月末派息時間表、應計利息、全價損益、到期現金流、FRED 曲線完整性、理論估值日期防倒退、按報價日計算 YTM、賣空倉位的組合收益、匯入時拒絕缺少平倉資料或無效文件 ID、Firestore 錯誤訊息、可復原刪除及 TIPS 防護。頁面跨午夜時會自動更新估值日，無需重新載入。
 
 ## Firebase 安全規則
 
 `firestore.rules` 只允許已登入使用者存取自己的 `users/{uid}/trades/{tradeId}`，並驗證文件欄位、型別、數值範圍、真實日曆日期、日期關係、平倉資料及 FRED 估值資料。規則拒絕用戶端永久刪除，只容許應用程式以 `deletedAt` 軟刪除及復原。規則容許還原 Schema 有效的 TIPS 備份，但介面不會建立新 TIPS，亦不會將 TIPS 納入未支援的計算。
 
-`npm run test:rules` 會以 `demo-treasury-dashboard` 本機 Emulator 專案驗證擁有權、Schema、軟刪除、永久刪除防護及既有 TIPS 相容性，不會連接正式 Firebase 資源。正式環境規則部署是一個獨立批准步驟，不包含在 GitHub Pages 部署內。
+### 只限個人帳號使用
+
+預設情況下，任何 Google 帳號登入後都可以使用各自獨立的帳本。如只供自己使用，可在 `firestore.rules` 的 `allowedUserIds()` 填入自己的 Firebase Auth UID，例如 `return ['你的UID'];`，然後部署規則；清單以外的帳號會被拒絕讀寫。UID 可在 Firebase Console 的 Authentication → Users 查看，或在應用程式右上角電郵位置以滑鼠停留查看。
+
+`npm run test:rules` 會以 `demo-treasury-dashboard` 本機 Emulator 專案驗證擁有權、Schema、軟刪除、永久刪除防護、帳號白名單及既有 TIPS 相容性，不會連接正式 Firebase 資源。正式環境規則部署是一個獨立批准步驟，不包含在 GitHub Pages 部署內。
 
 ## Firebase App Check
 
@@ -63,13 +81,15 @@ Production Build 設定 `VITE_FIREBASE_APPCHECK_SITE_KEY` 後，會在 Auth／Fi
 
 未設定 Site Key 時不會初始化 App Check。本機開發不會自動啟用 Production App Check；正式 Enforcement 後，應使用獨立開發專案或按 Firebase 官方方法設定 Debug Provider。
 
+`index.html` 的 Content Security Policy 已容許 `https://apis.google.com`，這是 Firebase Auth Google 彈出式登入必需載入的腳本；移除後新登入會出現 `auth/internal-error`。
+
 ## 部署
 
 合併至 `main`、手動觸發或平日 UTC 22:00 排程時，GitHub Actions 會先取得完整 FRED 曲線，再執行 Lint、測試及建置，最後把同一個 artifact 部署至 GitHub Pages。FRED 擷取、資料完整性檢查、測試或 Build 任一步失敗，都不會執行部署。排程只改變 Pages artifact，不會改動受保護的 `main`。
 
 部署需要以下 Repository Secrets：
 
-- `VITE_FRED_API_KEY`
+- `FRED_API_KEY`（舊名稱 `VITE_FRED_API_KEY` 仍可作過渡後備；建議改用新名稱，避免 `VITE_` 前綴令人誤以為可放入前端）
 - `VITE_FIREBASE_API_KEY`
 - `VITE_FIREBASE_AUTH_DOMAIN`
 - `VITE_FIREBASE_PROJECT_ID`

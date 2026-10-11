@@ -1,12 +1,27 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig({
+const FIREBASE_EMULATOR_ORIGINS = 'http://127.0.0.1:9099 http://127.0.0.1:8080'
+
+// The production CSP only allows HTTPS; the dev server alone may reach the
+// local Auth/Firestore emulators when VITE_USE_FIREBASE_EMULATORS=true.
+const firebaseEmulatorCsp = (enabled) => ({
+  name: 'firebase-emulator-csp',
+  apply: 'serve',
+  transformIndexHtml: (html) => (enabled
+    ? html
+      .replace("connect-src 'self'", `connect-src 'self' ${FIREBASE_EMULATOR_ORIGINS}`)
+      .replace('frame-src https:', `frame-src https: ${FIREBASE_EMULATOR_ORIGINS}`)
+    : html),
+})
+
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     tailwindcss(),
+    firebaseEmulatorCsp(loadEnv(mode, process.cwd(), 'VITE_').VITE_USE_FIREBASE_EMULATORS === 'true'),
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
@@ -64,4 +79,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "test": "vitest run --exclude tests/firestore.rules.test.js",
     "test:rules": "firebase emulators:exec --only firestore --project demo-treasury-dashboard \"vitest run tests/firestore.rules.test.js\"",
+    "emulators": "firebase emulators:start --only auth,firestore --project demo-treasury-dashboard",
     "check": "npm run lint && npm test && npm run build"
   },
   "dependencies": {
@@ -20,8 +21,7 @@
     "lucide-react": "^1.47.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "recharts": "^3.10.1",
-    "vite-plugin-pwa": "^1.3.0"
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -35,6 +35,7 @@
     "globals": "^17.12.0",
     "tailwindcss": "^4.3.3",
     "vite": "^8.3.0",
+    "vite-plugin-pwa": "^1.3.0",
     "vitest": "^5.0.1"
   },
   "overrides": {

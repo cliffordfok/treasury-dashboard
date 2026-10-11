@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, DollarSign, Activity, Calendar, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, Activity, Calendar, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, RotateCcw } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, connectAuthEmulator } from 'firebase/auth';
@@ -45,8 +45,16 @@ import {
   partitionTradesByLifecycle,
   restoreDeletedTrade,
 } from './lib/tradeLifecycle.js';
+import CouponCalendar from './components/CouponCalendar.jsx';
 
 const YieldCurveChart = lazy(() => import('./components/YieldCurveChart.jsx'));
+
+const TREASURY_TYPE_LABELS = {
+  't-bill': '短期國庫券',
+  't-note': '中期國庫券',
+  't-bond': '長期國庫券',
+  tips: '通脹保值國債',
+};
 
 // 本機開發可連接 Firebase Emulator；Production Build 永遠不會啟用。
 const useFirebaseEmulators = import.meta.env.DEV && import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true';
@@ -396,7 +404,6 @@ export default function App() {
       curvePoints,
       bondDots,
       spread2s10s: Number.isFinite(twoYearYield) && Number.isFinite(tenYearYield) ? tenYearYield - twoYearYield : null,
-      spreadPoints: sourceCurvePoints.filter(p => p.years === 2 || p.years === 10),
     };
   }, [yieldCurve, supportedActiveTrades, todayObj]);
 
@@ -718,225 +725,194 @@ export default function App() {
   // --- 主畫面 UI ---
   if (!isDbReady) return <div className="app-loading min-h-screen flex items-center justify-center"><Loader2 className="animate-spin" size={42}/></div>;
 
-  const renderDashboard = () => (
-    <div className="dashboard-view space-y-4 sm:space-y-6">
-      <div className="hero-card rounded-2xl p-5 sm:p-6 text-white relative overflow-hidden">
-        <div className="absolute -top-2 -right-2 opacity-15 pointer-events-none"><Landmark size={140} /></div>
-        <p className="hero-kicker text-xs sm:text-sm font-medium mb-1.5">美債累計已實現利潤</p>
-        <p className={`hero-value font-bold tracking-tight ${portfolioMetrics.totalRealizedPnL >= 0 ? 'is-positive' : 'is-negative'}`}>{formatSignedUsd(portfolioMetrics.totalRealizedPnL)}</p>
-        <span className="hero-chip inline-block text-[11px] sm:text-xs px-2.5 py-1 rounded-md mt-2.5">已包含所有平倉、到期結算及歷史收息</span>
-      </div>
-      <div className="stats-grid grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
-          <div className="stat-icon stat-icon--cool p-2.5 sm:p-3 rounded-lg flex-shrink-0"><DollarSign size={20} className="sm:hidden" /><DollarSign size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債淨價市值</p><p className="metric-value text-base sm:text-xl font-bold text-slate-800">${formatUsd(portfolioMetrics.totalMarketValue)}</p><p className="metric-detail text-[10px] text-slate-400">全價 ${formatUsd(portfolioMetrics.totalFullMarketValue)} · 應計利息 ${formatUsd(portfolioMetrics.totalAccruedInterest)}</p></div>
-        </div>
-        <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
-          <div className={`stat-icon p-2.5 sm:p-3 rounded-lg flex-shrink-0 ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'stat-icon--gain' : 'stat-icon--loss'}`}><Activity size={20} className="sm:hidden" /><Activity size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">美債未實現盈虧</p><p className={`metric-value text-base sm:text-xl font-bold ${portfolioMetrics.totalUnrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatSignedUsd(portfolioMetrics.totalUnrealizedPnL)}</p></div>
-        </div>
-        <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
-          <div className="stat-icon stat-icon--gold p-2.5 sm:p-3 rounded-lg flex-shrink-0"><TrendingUp size={20} className="sm:hidden" /><TrendingUp size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium" title="按全價市值加權；賣空倉位以負收益計入">美債加權平均 YTM</p><p className={`metric-value text-base sm:text-xl font-bold ${portfolioMetrics.totalWeightYTM == null ? 'text-slate-400' : 'text-slate-800'}`}>{portfolioMetrics.totalWeightYTM == null ? '--' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`}</p></div>
-        </div>
-        <div className="stat-card p-4 sm:p-5 rounded-xl flex items-center gap-3 sm:gap-4">
-          <div className="stat-icon stat-icon--gain p-2.5 sm:p-3 rounded-lg flex-shrink-0"><Wallet size={20} className="sm:hidden" /><Wallet size={24} className="hidden sm:block" /></div>
-          <div className="min-w-0"><p className="text-[11px] sm:text-xs text-slate-500 font-medium">平均每月利息</p><p className="metric-value text-base sm:text-xl font-bold text-emerald-600">${formatUsd(portfolioMetrics.monthlyAvgIncome)}</p></div>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4">
-        <div className="glass-panel p-4 sm:p-5 rounded-xl">
-          <h3 className="text-sm sm:text-base font-bold text-slate-800 mb-3 flex items-center"><TrendingUp size={16} className="mr-2 text-blue-500"/> 基準對比</h3>
-          <div className="flex items-center gap-2 mb-3">
-            <select value={selectedBenchmark} onChange={(e) => setSelectedBenchmark(e.target.value)} className="text-xs sm:text-sm border rounded-md px-2 py-1">
-              <option value="UST10Y">UST 10 年</option>
-              <option value="SGOV">SGOV（約 3 個月）</option>
-              <option value="SHY">SHY（約 2 年）</option>
-              <option value="IEF">IEF（約 7 年）</option>
-              <option value="TLT">TLT（約 20 年）</option>
-            </select>
-            <span className="text-[11px] text-slate-500">曲線年期：{benchmarkMetrics.benchmarkYears} 年</span>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <div className="micro-stat p-3 rounded-lg"><p className="text-[11px] text-slate-500">美債組合 YTM</p><p className={`font-bold ${benchmarkMetrics.portfolioYield == null ? 'text-slate-400' : ''}`}>{benchmarkMetrics.portfolioYield == null ? '--' : `${benchmarkMetrics.portfolioYield.toFixed(2)}%`}</p></div>
-            <div className="micro-stat p-3 rounded-lg"><p className="text-[11px] text-slate-500">基準 YTM</p><p className="font-bold">{benchmarkMetrics.benchmarkYield == null ? '—' : `${benchmarkMetrics.benchmarkYield.toFixed(2)}%`}</p></div>
-            <div className="micro-stat p-3 rounded-lg"><p className="text-[11px] text-slate-500">利差</p><p className={`font-bold ${benchmarkMetrics.spread == null ? 'text-slate-400' : benchmarkMetrics.spread >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{benchmarkMetrics.spread == null ? '—' : `${benchmarkMetrics.spread >= 0 ? '+' : ''}${benchmarkMetrics.spread.toFixed(2)}%`}</p></div>
-          </div>
-        </div>
-        <div className="glass-panel p-4 sm:p-5 rounded-xl">
-          <h3 className="text-sm sm:text-base font-bold text-slate-800 mb-3 flex items-center"><History size={16} className="mr-2 text-slate-600"/> 匯入稽核記錄</h3>
-          {importAuditLog.length === 0 ? <p className="text-sm text-slate-500 bg-slate-50 rounded-lg p-3">尚未有匯入記錄。</p> : (
-            <div className="space-y-2">
-              {importAuditLog.map(log => (
-                <div key={log.id} className="text-xs border rounded-lg p-2.5 bg-slate-50">
-                  <p className="font-semibold text-slate-700">{new Date(log.ts).toLocaleString()} · 新增 {log.added} / {log.total}</p>
-                  {log.skipped > 0 && <p className="text-amber-700">略過 {log.skipped} 筆（詳見驗證規則）</p>}
-                  {log.errors?.length > 0 && <p className="text-slate-500 truncate" title={log.errors.join(' | ')}>例子：{log.errors[0]}</p>}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-      {yieldCurveChartData && (
-        <div className="glass-panel chart-panel p-4 sm:p-6 rounded-xl">
-          <div className="panel-heading flex justify-between items-center mb-4 pb-3">
-            <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><TrendingUp className="mr-2 text-blue-500" size={18}/> 美債收益率曲線</h3>
-            <div className="chart-legend flex items-center gap-3 text-[10px]">
-              {yieldCurveChartData.spread2s10s != null && <span className="spread-chip">10Y–2Y {yieldCurveChartData.spread2s10s >= 0 ? '+' : ''}{yieldCurveChartData.spread2s10s.toFixed(2)}%</span>}
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>買入</span>
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-400 inline-block"></span>賣空</span>
-            </div>
-          </div>
-          <div className="yield-chart" aria-label="美債收益率曲線圖；移動滑鼠或觸控曲線可查看年期及收益率">
-            <Suspense fallback={<div className="h-full flex items-center justify-center text-xs text-slate-400" role="status">正在載入收益率曲線…</div>}>
-              <YieldCurveChart {...yieldCurveChartData} />
-            </Suspense>
-          </div>
-        </div>
-      )}
-      <div className="glass-panel p-4 sm:p-6 rounded-xl">
-        <div className="panel-heading flex justify-between items-center mb-4 pb-3">
-          <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Wallet className="mr-2 text-emerald-500" size={18}/> 今年剩餘應收派息</h3>
-          {upcomingCouponsList.length > 0 && <span className="text-[11px] text-slate-400 font-medium">{upcomingCouponsList.length} 筆</span>}
-        </div>
-        {upcomingCouponsList.length === 0 ? <p className="text-sm text-slate-500 py-6 text-center bg-slate-50 rounded-lg">今年內暫無剩餘派息。</p> : (
-          <div className="payment-grid grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 sm:gap-3">
-            {upcomingCouponsList.map(c => (
-              <div key={c.id} className="payment-card p-3 rounded-lg">
-                <p className="text-[10px] font-semibold text-emerald-700 tracking-wide">{c.dateStr}</p>
-                <p className="text-[11px] text-slate-500 truncate mt-0.5">{c.cusip}</p>
-                <p className={`font-bold text-sm sm:text-base mt-1 ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{formatSignedUsd(c.amount)}</p>
+  const renderDashboard = () => {
+    const year = todayObj.getFullYear();
+    const sortedActiveTrades = [...activeTrades].sort((a, b) => String(a.maturityDate).localeCompare(String(b.maturityDate)));
+    const maxDays = Math.max(...sortedActiveTrades.map(t => calculateDaysBetween(todayObj, t.maturityDate) ?? 0), 1);
+    const receivedThisYear = receivedCoupons.filter(c => c.date.getFullYear() === year).reduce((sum, c) => sum + c.amount, 0);
+    const upcomingThisYear = upcomingCouponsList.reduce((sum, c) => sum + c.amount, 0);
+    const formatCountdown = (d) => {
+      if (d < 30) return `${d} 天`;
+      if (d < 365) return `${Math.floor(d / 30)} 個月 ${d % 30} 天`;
+      return `${Math.floor(d / 365)} 年 ${Math.floor((d % 365) / 30)} 個月`;
+    };
+    const valueTone = (value) => (value >= 0 ? 'value-gain' : 'value-loss');
+
+    return (
+      <div className="dashboard-view space-y-4 sm:space-y-5">
+        <section className="summary-grid" aria-label="組合摘要">
+          <div className="hero-card rounded-2xl">
+            <p className="hero-kicker">美債組合市值（全價）</p>
+            <p className="hero-value">${formatUsd(portfolioMetrics.totalFullMarketValue)}</p>
+            <p className="hero-detail">淨價 ${formatUsd(portfolioMetrics.totalMarketValue)} · 應計利息 ${formatUsd(portfolioMetrics.totalAccruedInterest)} · {supportedActiveTrades.length} 筆活躍持倉</p>
+            <dl className="hero-figures">
+              <div>
+                <dt>未實現盈虧</dt>
+                <dd className={valueTone(portfolioMetrics.totalUnrealizedPnL)}>{formatSignedUsd(portfolioMetrics.totalUnrealizedPnL)}</dd>
               </div>
-            ))}
+              <div>
+                <dt>累計已實現利潤</dt>
+                <dd className={valueTone(portfolioMetrics.totalRealizedPnL)}>{formatSignedUsd(portfolioMetrics.totalRealizedPnL)}</dd>
+                <dd className="hero-figure-note">包括平倉、到期結算及已收派息</dd>
+              </div>
+            </dl>
           </div>
-        )}
-      </div>
-      <div className="glass-panel p-4 sm:p-6 rounded-xl">
-        <div className="panel-heading flex justify-between items-center mb-4 pb-3">
-          <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Calendar className="mr-2 text-emerald-500" size={18}/> 年度收息日曆 · {todayObj.getFullYear()}</h3>
-          <span className="text-[11px] text-slate-400 font-medium">${formatUsd(couponCalendar.reduce((s, v) => s + v, 0), 0)}</span>
-        </div>
-        <div className="month-grid grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2">
-          {['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'].map((label, m) => {
-            const total = couponCalendar[m];
-            const has = total !== 0;
-            const past = m < todayObj.getMonth();
-            const current = m === todayObj.getMonth();
-            return (
-              <div key={m} className={`month-cell p-2.5 sm:p-3 rounded-lg text-center ${has ? 'month-cell--funded' : ''} ${past ? 'month-cell--past' : ''} ${current ? 'month-cell--current' : ''}`}>
-                <p className={`text-[10px] font-semibold uppercase tracking-wide ${current ? 'text-blue-600' : 'text-slate-400'}`}>{label}</p>
-                <p className={`text-sm font-bold mt-1 ${has ? (total >= 0 ? 'text-emerald-600' : 'text-red-500') : 'text-slate-300'}`}>
-                  {has ? `$${formatUsd(Math.abs(total), 0)}` : '—'}
+          <div className="summary-side">
+            <div className="stat-card">
+              <p className="stat-label" title="按全價市值加權；賣空倉位以負收益計入">美債加權平均 YTM</p>
+              <p className="stat-value">{portfolioMetrics.totalWeightYTM == null ? '--' : `${portfolioMetrics.totalWeightYTM.toFixed(2)}%`}</p>
+              <div className="benchmark-row">
+                <label htmlFor="benchmark-select" className="sr-only">對比基準</label>
+                <select id="benchmark-select" value={selectedBenchmark} onChange={(e) => setSelectedBenchmark(e.target.value)} className="compact-select">
+                  <option value="UST10Y">對比 UST 10 年</option>
+                  <option value="SGOV">對比 SGOV（約 3 個月）</option>
+                  <option value="SHY">對比 SHY（約 2 年）</option>
+                  <option value="IEF">對比 IEF（約 7 年）</option>
+                  <option value="TLT">對比 TLT（約 20 年）</option>
+                </select>
+                <p className="stat-detail">
+                  <span className="whitespace-nowrap">基準 {benchmarkMetrics.benchmarkYield == null ? '--' : `${benchmarkMetrics.benchmarkYield.toFixed(2)}%`}</span>
+                  {' · '}
+                  <span className="whitespace-nowrap">利差 <span className={benchmarkMetrics.spread == null ? '' : valueTone(benchmarkMetrics.spread)}>
+                    {benchmarkMetrics.spread == null ? '--' : `${benchmarkMetrics.spread >= 0 ? '+' : '−'}${Math.abs(benchmarkMetrics.spread).toFixed(2)}%`}
+                  </span></span>
                 </p>
               </div>
-            );
-          })}
-        </div>
-      </div>
-      <div className="glass-panel p-4 sm:p-6 rounded-xl">
-        <div className="panel-heading flex flex-wrap justify-between items-center gap-2 mb-4 pb-3">
-          <div>
-            <h3 className="text-base sm:text-lg font-bold text-slate-800 flex items-center"><Clock className="mr-2 text-blue-500" size={18}/> 債券到期倒數</h3>
-            <p className="text-[10px] sm:text-[11px] text-slate-400 mt-1">現價 YTM 以自訂市場淨價加應計利息，按該價格的報價日計算；價格超過 {STALE_MARKET_PRICE_DAYS} 日未更新會在帳本標示。</p>
+            </div>
+            <div className="stat-card">
+              <p className="stat-label">平均每月利息</p>
+              <p className="stat-value">${formatUsd(portfolioMetrics.monthlyAvgIncome)}</p>
+              <p className="stat-detail">按活躍持倉票息年化後平均</p>
+            </div>
           </div>
-          <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-500">
-            {yieldCurve?.observationDate && <span className="bg-slate-100 px-2 py-0.5 rounded-md">FRED 觀察日 · {yieldCurve.observationDate}</span>}
-            {yieldCurveError && <span className="text-red-500 flex items-center max-w-[180px] truncate" title={yieldCurveError}><AlertCircle size={11} className="mr-1 flex-shrink-0"/>{yieldCurveError}</span>}
-            <button onClick={handleRefreshCurve} disabled={isFetchingCurve} title="重新讀取市場收益率" aria-label="重新讀取市場收益率" className="p-1.5 hover:bg-slate-100 rounded-md disabled:opacity-40 transition-colors">
-              {isFetchingCurve ? <Loader2 size={14} className="animate-spin"/> : <RefreshCw size={14}/>}
-            </button>
+        </section>
+
+        <section className="glass-panel chart-panel rounded-xl" aria-labelledby="yield-curve-title">
+          <div className="panel-heading">
+            <div className="min-w-0">
+              <h3 id="yield-curve-title"><TrendingUp size={18} /> 美債收益率曲線</h3>
+              <p className="panel-subtitle">
+                {yieldCurve?.observationDate ? `FRED 觀察日 ${yieldCurve.observationDate}` : 'FRED 收益率曲線'}
+                {yieldCurveChartData?.spread2s10s != null && ` · 10Y–2Y ${yieldCurveChartData.spread2s10s >= 0 ? '+' : '−'}${Math.abs(yieldCurveChartData.spread2s10s).toFixed(2)}%`}
+              </p>
+            </div>
+            <div className="panel-actions">
+              <ul className="chart-legend" aria-label="圖例">
+                <li><span className="legend-line" aria-hidden="true" />收益率曲線</li>
+                <li><span className="legend-dot legend-dot--buy" aria-hidden="true" />買入持倉</li>
+                <li><span className="legend-dot legend-dot--sell" aria-hidden="true" />賣空持倉</li>
+              </ul>
+              <button type="button" onClick={handleRefreshCurve} disabled={isFetchingCurve} title="重新讀取市場收益率" aria-label="重新讀取市場收益率" className="icon-button icon-button--small">
+                {isFetchingCurve ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+              </button>
+            </div>
           </div>
-        </div>
-        {activeTrades.length === 0 ? <p className="text-sm text-slate-500 py-4 text-center bg-slate-50 rounded">暫無活躍持倉。</p> : (() => {
-          const sorted = [...activeTrades].sort((a, b) => String(a.maturityDate).localeCompare(String(b.maturityDate)));
-          const maxDays = Math.max(...sorted.map(t => calculateDaysBetween(todayObj, t.maturityDate)), 1);
-          const formatCountdown = (d) => {
-            if (d < 30) return `${d} 天`;
-            if (d < 365) return `${Math.floor(d/30)} 個月 ${d%30} 天`;
-            return `${Math.floor(d/365)} 年 ${Math.floor((d%365)/30)} 個月`;
-          };
-          const getColor = (d) => {
-            if (d < 30) return 'danger';
-            if (d < 90) return 'warning';
-            if (d < 365) return 'cool';
-            return 'gain';
-          };
-          return (
-            <div className="countdown-list space-y-2.5">
-              {sorted.map(trade => {
+          {yieldCurveError && <p className="inline-error" role="alert"><AlertCircle size={14} />{yieldCurveError}</p>}
+          {yieldCurveChartData ? (
+            <div className="yield-chart" aria-label="美債收益率曲線圖；移動滑鼠或觸控曲線可查看年期、收益率及附近持倉">
+              <Suspense fallback={<div className="chart-placeholder" role="status">正在載入收益率曲線…</div>}>
+                <YieldCurveChart {...yieldCurveChartData} />
+              </Suspense>
+            </div>
+          ) : (
+            <div className="chart-placeholder" role="status">{isFetchingCurve ? '正在載入收益率曲線…' : '暫時未有收益率曲線資料。'}</div>
+          )}
+        </section>
+
+        <section className="income-grid">
+          <div className="glass-panel rounded-xl" aria-labelledby="coupon-calendar-title">
+            <div className="panel-heading">
+              <div className="min-w-0">
+                <h3 id="coupon-calendar-title"><Calendar size={18} /> {year} 年度派息</h3>
+                <p className="panel-subtitle">全年 ${formatUsd(couponCalendar.reduce((sum, value) => sum + value, 0))} · 已收 ${formatUsd(receivedThisYear)} · 尚餘 ${formatUsd(upcomingThisYear)}</p>
+              </div>
+              <ul className="chart-legend" aria-label="圖例">
+                <li><span className="legend-swatch" aria-hidden="true" />已收／本月</li>
+                <li><span className="legend-swatch legend-swatch--expected" aria-hidden="true" />預計</li>
+              </ul>
+            </div>
+            <CouponCalendar monthlyTotals={couponCalendar} currentMonth={todayObj.getMonth()} />
+          </div>
+          <div className="glass-panel rounded-xl" aria-labelledby="upcoming-coupons-title">
+            <div className="panel-heading">
+              <h3 id="upcoming-coupons-title"><Wallet size={18} /> 今年尚餘派息</h3>
+              {upcomingCouponsList.length > 0 && <span className="panel-count">{upcomingCouponsList.length} 筆</span>}
+            </div>
+            {upcomingCouponsList.length === 0 ? <p className="empty-note">今年內暫無剩餘派息。</p> : (
+              <ul className="coupon-list">
+                {upcomingCouponsList.map(c => (
+                  <li key={c.id}>
+                    <span className="coupon-date">{c.dateStr.slice(5).replace('-', '/')}</span>
+                    <span className="coupon-cusip">{c.cusip}</span>
+                    <strong className={valueTone(c.amount)}>{formatSignedUsd(c.amount)}</strong>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+
+        <section className="glass-panel rounded-xl" aria-labelledby="maturity-title">
+          <div className="panel-heading">
+            <div className="min-w-0">
+              <h3 id="maturity-title"><Clock size={18} /> 持倉到期概覽</h3>
+              <p className="panel-subtitle">現價 YTM 以自訂市場淨價加應計利息，按該價格的報價日計算；曲線 YTM 為 FRED 曲線於相同剩餘年期的插值。</p>
+            </div>
+          </div>
+          {sortedActiveTrades.length === 0 ? <p className="empty-note">暫無活躍持倉。</p> : (
+            <ul className="maturity-list">
+              {sortedActiveTrades.map(trade => {
                 const days = calculateDaysBetween(todayObj, trade.maturityDate);
                 const forwardDays = calculateForwardDaysBetween(todayObj, trade.maturityDate);
                 const ytm = getTradeYTM(trade, todayObj);
-                const pct = Math.min((days / maxDays) * 100, 100);
-                const color = getColor(days);
                 const marketYtm = forwardDays && forwardDays > 0 ? getMarketYTMFromCurve(yieldCurve, forwardDays / 365.25) : null;
                 const delta = marketYtm != null && ytm != null ? ytm - marketYtm : null;
+                const tone = days < 30 ? 'critical' : days < 90 ? 'warning' : 'normal';
                 return (
-                  <div key={trade.id} className="countdown-row p-2.5 sm:p-0 rounded-lg space-y-2 sm:space-y-0 sm:flex sm:items-center sm:gap-3">
-                    {/* Mobile：上排為 CUSIP + YTM/Market；Desktop 保持橫向 */}
-                    <div className="flex items-center justify-between sm:w-32 sm:flex-shrink-0 sm:block">
-                      <div className="min-w-0">
-                        <p className="text-xs font-bold text-slate-800 truncate">{trade.cusip || trade.type.toUpperCase()}</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">{trade.maturityDate}</p>
-                      </div>
-                      {/* Mobile-only YTM / Market 顯示喺右上 */}
-                      <div className="flex items-center gap-3 sm:hidden">
-                        <div className="text-right">
-                          <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">現價 YTM</p>
-                          <p className={`text-xs font-bold ${ytm == null ? 'text-slate-300' : 'text-amber-600'}`}>{ytm == null ? '--' : `${ytm.toFixed(2)}%`}</p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide leading-none mb-0.5">曲線 YTM</p>
-                          {marketYtm != null ? (
-                            <p className="text-xs font-bold text-slate-700 whitespace-nowrap">
-                              {marketYtm.toFixed(2)}%
-                              {delta != null && (
-                                <span className={`ml-1 text-[10px] ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                                  {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
-                                </span>
-                              )}
-                            </p>
-                          ) : (
-                            <p className="text-xs text-slate-300">—</p>
-                          )}
-                        </div>
-                      </div>
+                  <li key={trade.id} className="maturity-row">
+                    <div className="maturity-id">
+                      <p className="maturity-cusip">{trade.cusip || trade.type.toUpperCase()}</p>
+                      <p className="maturity-meta">{TREASURY_TYPE_LABELS[trade.type] || trade.type} · {trade.maturityDate} 到期</p>
                     </div>
-                    {/* 倒數 bar：mobile 全寬，desktop flex-1 */}
-                    <div className={`countdown-track countdown-track--${color} w-full sm:flex-1 h-7 rounded-md overflow-hidden relative`}>
-                      <progress className="countdown-progress" max="100" value={pct} aria-label={`${trade.cusip || trade.type} 到期進度`} />
-                      <span className="absolute inset-0 flex items-center px-3 text-xs font-bold">{formatCountdown(days)}</span>
+                    <div className={`maturity-time maturity-time--${tone}`}>
+                      <span className="maturity-countdown">{formatCountdown(days)}{tone !== 'normal' && <em>即將到期</em>}</span>
+                      <progress max="100" value={Math.min((days / maxDays) * 100, 100)} aria-label={`${trade.cusip || trade.type} 剩餘年期`} />
                     </div>
-                    {/* Desktop-only YTM / Market columns */}
-                    <div className="hidden sm:block w-16 flex-shrink-0 text-right">
-                      <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">現價 YTM</p>
-                      <p className={`text-xs font-bold ${ytm == null ? 'text-slate-300' : 'text-amber-600'}`}>{ytm == null ? '--' : `${ytm.toFixed(2)}%`}</p>
+                    <div className="maturity-yield">
+                      <span>現價 YTM</span>
+                      <strong>{ytm == null ? '--' : `${ytm.toFixed(2)}%`}</strong>
                     </div>
-                    <div className="hidden sm:block w-24 flex-shrink-0 text-right">
-                      <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wide">曲線 YTM</p>
-                      {marketYtm != null ? (
-                        <p className="text-xs font-bold text-slate-700">
-                          {marketYtm.toFixed(2)}%
-                          {delta != null && (
-                            <span className={`ml-1 text-[10px] ${delta >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                              {delta >= 0 ? '+' : ''}{delta.toFixed(2)}
-                            </span>
-                          )}
-                        </p>
-                      ) : (
-                        <p className="text-xs text-slate-300">—</p>
-                      )}
+                    <div className="maturity-yield">
+                      <span>曲線 YTM</span>
+                      <strong>{marketYtm == null ? '--' : `${marketYtm.toFixed(2)}%`}</strong>
+                      {delta != null && <em className={valueTone(delta)}>{delta >= 0 ? '+' : '−'}{Math.abs(delta).toFixed(2)}</em>}
                     </div>
-                  </div>
+                  </li>
                 );
               })}
+            </ul>
+          )}
+        </section>
+
+        {importAuditLog.length > 0 && (
+          <section className="glass-panel rounded-xl" aria-labelledby="import-audit-title">
+            <div className="panel-heading">
+              <h3 id="import-audit-title"><History size={18} /> 匯入稽核記錄</h3>
             </div>
-          );
-        })()}
+            <ul className="audit-list">
+              {importAuditLog.map(log => (
+                <li key={log.id}>
+                  <p className="audit-title">{new Date(log.ts).toLocaleString('zh-HK')} · 新增 {log.added} / {log.total}</p>
+                  {log.skipped > 0 && <p className="audit-warning">略過 {log.skipped} 筆（詳見驗證規則）</p>}
+                  {log.errors?.length > 0 && <p className="audit-detail" title={log.errors.join(' | ')}>例子：{log.errors[0]}</p>}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderYtmCalculator = () => {
     const update = (field, value) => setYtmForm(prev => ({ ...prev, [field]: value }));
@@ -1013,68 +989,36 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  <div className="quote-grid grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    <div className="quote-card quote-card--primary p-3 rounded-lg">
-                      <p className="text-[11px] text-blue-700 font-semibold">扣除結算成本後 YTM</p>
-                      <p className="text-xl font-bold text-blue-700 mt-1">{pct(ytmQuote.netYtm)}</p>
+                  <div className="quote-hero">
+                    <div>
+                      <p className="quote-hero-label">扣除結算成本後 YTM</p>
+                      <p className="quote-hero-value">{pct(ytmQuote.netYtm)}</p>
                     </div>
-                    <div className="quote-card p-3 rounded-lg">
-                      <p className="text-[11px] text-slate-500 font-semibold">淨價參考 YTM</p>
-                      <p className="text-xl font-bold text-slate-800 mt-1">{pct(ytmQuote.grossYtm)}</p>
-                    </div>
-                    <div className="quote-card quote-card--gain p-3 rounded-lg">
-                      <p className="text-[11px] text-emerald-700 font-semibold">曲線息差</p>
-                      <p className={`text-xl font-bold mt-1 ${ytmQuote.spreadToCurve == null ? 'text-slate-400' : ytmQuote.spreadToCurve >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-                        {ytmQuote.spreadToCurve == null ? '--' : `${ytmQuote.spreadToCurve >= 0 ? '+' : ''}${ytmQuote.spreadToCurve.toFixed(3)}%`}
-                      </p>
-                    </div>
+                    <dl className="quote-hero-side">
+                      <div><dt>未計手續費 YTM</dt><dd>{pct(ytmQuote.grossYtm)}</dd></div>
+                      <div>
+                        <dt>對比 FRED 曲線</dt>
+                        <dd className={ytmQuote.spreadToCurve == null ? '' : ytmQuote.spreadToCurve >= 0 ? 'value-gain' : 'value-loss'}>
+                          {ytmQuote.spreadToCurve == null ? '--' : `${ytmQuote.spreadToCurve >= 0 ? '+' : '−'}${Math.abs(ytmQuote.spreadToCurve).toFixed(3)}%`}
+                        </dd>
+                      </div>
+                    </dl>
                   </div>
-
-                  <div className="calculator-details grid grid-cols-2 gap-3 text-sm">
-                    <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">淨價</p>
-                      <p className="font-bold text-slate-800">{ytmQuote.cleanPrice.toFixed(3)}</p>
-                    </div>
-                    <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">每 100 元面值的應計利息</p>
-                      <p className="font-bold text-slate-800">{ytmQuote.accruedInterestPer100.toFixed(3)}</p>
-                    </div>
-                    <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">全價</p>
-                      <p className="font-bold text-slate-800">{ytmQuote.dirtyPrice.toFixed(3)}</p>
-                    </div>
-                    <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">每 100 元面值的全價連手續費</p>
-                      <p className="font-bold text-slate-800">{ytmQuote.priceWithCommission.toFixed(3)}</p>
-                    </div>
-                    <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">距離到期</p>
-                      <p className="font-bold text-slate-800">{ytmQuote.days.toLocaleString()} 日</p>
-                    </div>
-                    <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">總成本</p>
-                      <p className="font-bold text-slate-800">${formatUsd(ytmQuote.totalCost)}</p>
-                    </div>
-                    <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">到期估算利潤</p>
-                      <p className={`font-bold ${ytmQuote.maturityProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatSignedUsd(ytmQuote.maturityProfit)}</p>
-                    </div>
-                    <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">估算票息收入</p>
-                      <p className="font-bold text-slate-800">${formatUsd(ytmQuote.couponEstimate)}</p>
-                    </div>
-                    <div className="p-3 rounded-lg border bg-white">
-                      <p className="text-[11px] text-slate-500 font-semibold">打和價格</p>
-                      <p className="font-bold text-slate-800">{ytmQuote.breakevenPrice.toFixed(3)}</p>
-                    </div>
-                  </div>
-
                   {ytmQuote.marketYield != null && (
-                    <div className="curve-strip p-3 rounded-lg text-white text-sm flex flex-wrap justify-between gap-2">
-                      <span className="text-slate-300">FRED 曲線插值（{ytmQuote.years.toFixed(2)} 年）</span>
-                      <span className="font-bold">{ytmQuote.marketYield.toFixed(3)}%</span>
-                    </div>
+                    <p className="quote-curve-note">FRED 曲線於 {ytmQuote.years.toFixed(2)} 年的插值收益率為 {ytmQuote.marketYield.toFixed(3)}%</p>
                   )}
+
+                  <dl className="quote-list">
+                    <div><dt>淨價</dt><dd>{ytmQuote.cleanPrice.toFixed(3)}</dd></div>
+                    <div><dt>每 100 元面值應計利息</dt><dd>{ytmQuote.accruedInterestPer100.toFixed(3)}</dd></div>
+                    <div><dt>全價</dt><dd>{ytmQuote.dirtyPrice.toFixed(3)}</dd></div>
+                    <div><dt>全價連手續費（每 100 元面值）</dt><dd>{ytmQuote.priceWithCommission.toFixed(3)}</dd></div>
+                    <div><dt>距離到期</dt><dd>{ytmQuote.days.toLocaleString()} 日</dd></div>
+                    <div><dt>總成本</dt><dd>${formatUsd(ytmQuote.totalCost)}</dd></div>
+                    <div><dt>估算票息收入</dt><dd>${formatUsd(ytmQuote.couponEstimate)}</dd></div>
+                    <div><dt>到期估算利潤</dt><dd className={ytmQuote.maturityProfit >= 0 ? 'value-gain' : 'value-loss'}>{formatSignedUsd(ytmQuote.maturityProfit)}</dd></div>
+                    <div><dt>打和淨價</dt><dd>{ytmQuote.breakevenPrice.toFixed(3)}</dd></div>
+                  </dl>
 
                   <button
                     type="button"
@@ -1111,16 +1055,16 @@ export default function App() {
         </div>
         <div id="ledger-panel" role="tabpanel" aria-labelledby={`ledger-tab-${ledgerSubTab}`} className="table-shell">
           {ledgerSubTab === 'coupons' ? (
-             <table className="data-table coupon-table w-full text-left text-sm whitespace-nowrap"><thead><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP／類型</th><th className="p-4 text-right">派息金額（美元）</th></tr></thead><tbody>{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id}><td data-label="DATE" className="p-4 font-medium text-slate-700">{c.dateStr}</td><td data-label="CUSIP" className="p-4 text-slate-600">{c.cusip}</td><td data-label="AMOUNT" className={`p-4 text-right font-bold ${c.amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>{formatSignedUsd(c.amount)}</td></tr>))}</tbody></table>
+             <table className="data-table coupon-table w-full text-left text-sm whitespace-nowrap"><thead><tr><th className="p-4">派息日期</th><th className="p-4">CUSIP／類型</th><th className="p-4 text-right">派息金額（美元）</th></tr></thead><tbody>{receivedCoupons.length === 0 ? <tr><td colSpan="3" className="p-8 text-center text-slate-400">尚未有派息紀錄。</td></tr> : [...receivedCoupons].sort((a,b) => b.date - a.date).map(c => (<tr key={c.id}><td data-label="派息日期" className="p-4 font-medium text-slate-700">{c.dateStr}</td><td data-label="CUSIP" className="cell-primary p-4 text-slate-600">{c.cusip}</td><td data-label="金額" className={`p-4 text-right font-bold ${c.amount >= 0 ? 'value-gain' : 'value-loss'}`}>{formatSignedUsd(c.amount)}</td></tr>))}</tbody></table>
           ) : ledgerSubTab === 'deleted' ? (
             <table className="data-table holdings-table w-full text-left text-sm whitespace-nowrap">
               <thead><tr><th className="p-4">CUSIP</th><th className="p-4">類型</th><th className="p-4 text-right">面值</th><th className="p-4">刪除時間</th><th className="p-4 text-center">操作</th></tr></thead>
-              <tbody>{deletedTrades.length === 0 ? <tr><td colSpan="5" className="p-8 text-center text-slate-400">回收桶沒有交易。</td></tr> : [...deletedTrades].sort((a,b) => String(b.deletedAt).localeCompare(String(a.deletedAt))).map(trade => (<tr key={trade.id}><td data-label="CUSIP" className="p-4 font-medium">{trade.cusip || '--'}</td><td data-label="TYPE" className="p-4">{{ 't-bill': '短期國庫券', 't-note': '中期國庫券', 't-bond': '長期國庫券', tips: '通脹保值國債' }[trade.type] || trade.type}</td><td data-label="FACE" className="p-4 text-right">${toFiniteNumber(trade.faceValue).toLocaleString()}</td><td data-label="DELETED" className="p-4">{new Date(trade.deletedAt).toLocaleString('zh-HK')}</td><td data-label="ACTIONS" className="p-4 text-center"><button type="button" onClick={() => handleRestoreTrade(trade)} className="secondary-button px-3 py-2 text-xs font-semibold rounded-lg inline-flex items-center gap-1"><RotateCcw size={14}/> 復原</button></td></tr>))}</tbody>
+              <tbody>{deletedTrades.length === 0 ? <tr><td colSpan="5" className="p-8 text-center text-slate-400">回收桶沒有交易。</td></tr> : [...deletedTrades].sort((a,b) => String(b.deletedAt).localeCompare(String(a.deletedAt))).map(trade => (<tr key={trade.id}><td data-label="CUSIP" className="cell-primary p-4 font-medium">{trade.cusip || '--'}</td><td data-label="類型" className="p-4">{TREASURY_TYPE_LABELS[trade.type] || trade.type}</td><td data-label="面值" className="p-4 text-right">${toFiniteNumber(trade.faceValue).toLocaleString()}</td><td data-label="刪除時間" className="p-4">{new Date(trade.deletedAt).toLocaleString('zh-HK')}</td><td data-label="操作" className="cell-actions p-4 text-center"><button type="button" onClick={() => handleRestoreTrade(trade)} className="secondary-button px-3 py-2 text-xs font-semibold rounded-lg inline-flex items-center gap-1"><RotateCcw size={14}/> 復原</button></td></tr>))}</tbody>
             </table>
           ) : (
             <table className="data-table holdings-table w-full text-left text-sm whitespace-nowrap">
               <thead>
-                <tr><th className="p-4">CUSIP</th><th className="p-4">方向／類型</th><th className="p-4 text-right">面值</th><th className="p-4 text-right">成本（淨價）</th>{ledgerSubTab === 'active' ? <><th className="p-4 text-right text-blue-600">自訂市場淨價</th><th className="p-4 text-right text-violet-600">FRED 理論淨價</th><th className="p-4 text-right">未實現損益</th></> : <><th className="p-4 text-right">平倉價</th><th className="p-4 text-right text-emerald-600">已實現損益</th></>}<th className="p-4 text-center">操作</th></tr>
+                <tr><th className="p-4">CUSIP</th><th className="p-4">方向／類型</th><th className="p-4 text-right">面值</th><th className="p-4 text-right">成本（淨價）</th>{ledgerSubTab === 'active' ? <><th className="p-4 text-right">自訂市場淨價</th><th className="p-4 text-right">FRED 理論淨價</th><th className="p-4 text-right">未實現損益</th></> : <><th className="p-4 text-right">平倉價</th><th className="p-4 text-right text-emerald-600">已實現損益</th></>}<th className="p-4 text-center">操作</th></tr>
               </thead>
               <tbody>
                 {displayedTrades.length === 0 ? <tr><td colSpan="8" className="p-8 text-center text-slate-400">無紀錄。</td></tr> : displayedTrades.map(trade => {
@@ -1143,15 +1087,15 @@ export default function App() {
                   const closePrice = toFiniteNumber(trade.closePrice, marketPrice);
                   return (
                     <tr key={trade.id}>
-                      <td data-label="CUSIP" className="p-4 font-medium">{trade.cusip || '--'}<div className="text-[10px] text-slate-400">到期：{trade.maturityDate}</div></td>
-                      <td data-label="TYPE" className="p-4"><span className={`trade-side ${trade.side === 'sell' ? 'trade-side--sell' : 'trade-side--buy'} px-2 py-0.5 rounded text-[10px] font-bold mr-1`}>{trade.side === 'sell' ? '賣空' : '買入'}</span><span className={`treasury-badge treasury-badge--${trade.type} px-2 py-0.5 rounded text-[10px] font-bold`}>{{ 't-bill': '短期國庫券', 't-note': '中期國庫券', 't-bond': '長期國庫券', tips: '通脹保值國債' }[trade.type] || trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉（{trade.closeDate}）</div>}</td>
-                      <td data-label="FACE" className="p-4 text-right">${faceValue.toLocaleString()}</td><td data-label="COST" className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
+                      <td data-label="CUSIP" className="cell-primary p-4 font-medium">{trade.cusip || '--'}<div className="text-[10px] text-slate-400">到期：{trade.maturityDate}</div></td>
+                      <td data-label="類型" className="p-4"><span className={`trade-side ${trade.side === 'sell' ? 'trade-side--sell' : 'trade-side--buy'} px-2 py-0.5 rounded text-[10px] font-bold mr-1`}>{trade.side === 'sell' ? '賣空' : '買入'}</span><span className={`treasury-badge treasury-badge--${trade.type} px-2 py-0.5 rounded text-[10px] font-bold`}>{TREASURY_TYPE_LABELS[trade.type] || trade.type}</span>{isUnsupported && <div className="text-[10px] text-red-600 mt-1 font-bold">暫不支援計算</div>}{isMaturedBond && <div className="text-[10px] text-amber-600 mt-1 font-bold">已到期</div>}{trade.status === 'closed' && <div className="text-[10px] text-slate-500 mt-1">已平倉（{trade.closeDate}）</div>}</td>
+                      <td data-label="面值" className="p-4 text-right">${faceValue.toLocaleString()}</td><td data-label="成本淨價" className="p-4 text-right">{cleanPrice.toFixed(3)}</td>
                       {ledgerSubTab === 'active' ? (
-                        <><td data-label="MARKET" className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}<div className={`text-[10px] ${priceIsStale ? 'text-amber-600 font-semibold' : 'text-slate-400'}`}>{priceAsOf ? `報價日 ${priceAsOf}${priceAgeDays > 0 ? `（${priceAgeDays} 日前）` : ''}` : '報價日未記錄'}</div></div>)}</td><td data-label="FRED ESTIMATE" className="p-4 text-right"><div className="font-medium text-violet-600">{Number.isFinite(fredEstimatedPrice) && fredEstimatedPrice > 0 ? fredEstimatedPrice.toFixed(3) : '--'}</div>{fredEstimateIsCurrent && <div className="text-[10px] text-slate-400">觀察日 {trade.fredEstimatedAt}</div>}{canAdoptFredPrice && <button type="button" onClick={() => handleAdoptFredPrice(trade)} title="以 FRED 理論淨價作為自訂市場淨價，報價日為 FRED 觀察日" className="text-[10px] text-violet-600 font-semibold underline underline-offset-2 mt-0.5">採用為市場價</button>}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-green-600':'text-red-600'}`}>{pnl == null ? '--' : formatSignedUsd(pnl)}</td></>
+                        <><td data-label="市場淨價" className="p-4 text-right">{editingPriceId === trade.id ? (<div className="flex items-center justify-end"><input aria-label="新市場價格" type="number" step="0.001" className="w-20 border rounded px-1 text-right" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/><button onClick={()=>handleUpdatePrice(trade.id)} className="text-green-600 text-xs ml-1 font-bold">儲存</button></div>) : (<div className="text-right"><button type="button" className="text-blue-600 font-medium flex items-center justify-end ml-auto" onClick={()=>{setEditingPriceId(trade.id); setNewPrice(marketPrice);}}>{marketPrice.toFixed(3)} <Edit2 size={12} className="ml-1 opacity-50"/></button>{isCouponTreasury(trade) && <div className="text-[10px] text-slate-400">應計利息 {accruedInterestPer100.toFixed(3)} · 全價 {dirtyPrice.toFixed(3)}</div>}<div className={`text-[10px] ${priceIsStale ? 'text-amber-600 font-semibold' : 'text-slate-400'}`}>{priceAsOf ? `報價日 ${priceAsOf}${priceAgeDays > 0 ? `（${priceAgeDays} 日前）` : ''}` : '報價日未記錄'}</div></div>)}</td><td data-label="FRED 理論淨價" className="p-4 text-right"><div className="font-medium text-slate-700">{Number.isFinite(fredEstimatedPrice) && fredEstimatedPrice > 0 ? fredEstimatedPrice.toFixed(3) : '--'}</div>{fredEstimateIsCurrent && <div className="text-[10px] text-slate-400">觀察日 {trade.fredEstimatedAt}</div>}{canAdoptFredPrice && <button type="button" onClick={() => handleAdoptFredPrice(trade)} title="以 FRED 理論淨價作為自訂市場淨價，報價日為 FRED 觀察日" className="text-[10px] text-amber-600 font-semibold underline underline-offset-2 mt-0.5">採用為市場價</button>}</td><td data-label="損益" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'value-gain':'value-loss'}`}>{pnl == null ? '--' : formatSignedUsd(pnl)}</td></>
                       ) : (
-                        <><td data-label="CLOSE" className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000（面值）'}</td><td data-label="P&L" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'text-emerald-600':'text-red-600'}`}>{pnl == null ? '--' : formatSignedUsd(pnl)}</td></>
+                        <><td data-label="平倉價" className="p-4 text-right font-medium">{trade.status === 'closed' ? closePrice.toFixed(3) : '100.000（面值）'}</td><td data-label="損益" className={`p-4 text-right font-bold ${pnl == null ? 'text-slate-400' : pnl>=0?'value-gain':'value-loss'}`}>{pnl == null ? '--' : formatSignedUsd(pnl)}</td></>
                       )}
-                      <td data-label="ACTIONS" className="p-4 text-center"><div className="flex items-center justify-center space-x-2"><button aria-label="編輯交易" title="編輯交易" onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="icon-button text-blue-500 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button aria-label="平倉" onClick={()=>{setClosingTradeId(trade.id); setCloseData({ closeDate: formatDateOnly(new Date()), closePrice: trade.currentMarketPrice, closeCommission: 0, closeAccruedInterestPer100: '' }); setIsCloseModalOpen(true);}} className="icon-button text-orange-500 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button aria-label="移至回收桶" title="移至回收桶" onClick={() => handleDeleteTrade(trade)} className="icon-button text-red-500 p-1 rounded"><Trash2 size={16} /></button></div></td>
+                      <td data-label="操作" className="cell-actions p-4 text-center"><div className="flex items-center justify-center space-x-2"><button aria-label="編輯交易" title="編輯交易" onClick={()=>{setFormData(trade); setEditingTradeId(trade.id); setIsFormOpen(true);}} className="icon-button text-blue-500 p-1 rounded"><Edit2 size={16} /></button>{ledgerSubTab === 'active' && <button aria-label="平倉" onClick={()=>{setClosingTradeId(trade.id); setCloseData({ closeDate: formatDateOnly(new Date()), closePrice: trade.currentMarketPrice, closeCommission: 0, closeAccruedInterestPer100: '' }); setIsCloseModalOpen(true);}} className="icon-button text-orange-500 p-1 rounded" title="平倉"><LogOut size={16} /></button>}<button aria-label="移至回收桶" title="移至回收桶" onClick={() => handleDeleteTrade(trade)} className="icon-button text-red-500 p-1 rounded"><Trash2 size={16} /></button></div></td>
                     </tr>
                   );
                 })}

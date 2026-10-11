@@ -126,7 +126,8 @@ describe('FRED theoretical estimate freshness', () => {
     }, curve);
 
     expect(estimate.observationDate).toBe('2026-09-03');
-    expect(estimate.cleanPrice).toBeCloseTo(98.09343863, 7);
+    // Street convention; matches an independent implementation to 1e-8.
+    expect(estimate.cleanPrice).toBeCloseTo(98.09036519, 7);
     expect(estimate.marketYield).toBeCloseTo(4.54315537, 7);
   });
 
@@ -135,6 +136,11 @@ describe('FRED theoretical estimate freshness', () => {
       ...trade,
       fredEstimatedAt: '2026-09-03',
       fredPricingSignature: 't-note|2030-07-15|4|2',
+    }, '2026-09-03')).toBe(true);
+    expect(shouldUpdateFredEstimate({
+      ...trade,
+      fredEstimatedAt: '2026-09-03',
+      fredPricingSignature: 'curve-date-v2|t-note|2030-07-15|4|2',
     }, '2026-09-03')).toBe(true);
   });
 });

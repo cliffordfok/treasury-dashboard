@@ -164,11 +164,49 @@ describe('Treasury Bill investment yield', () => {
   it('uses a 366-day basis when the following year includes February 29', () => {
     expect(getTBillYearBasis('2023-06-01')).toBe(366);
     expect(getTBillYearBasis('2024-06-01')).toBe(365);
+    expect(getTBillYearBasis('2028-02-28')).toBe(366);
+    // The year after 29 February ends on 28 February and holds no leap day.
+    expect(getTBillYearBasis('2028-02-29')).toBe(365);
 
     const expectedYield = ((100 - 98) / 98) * (366 / 90) * 100;
     const investmentYield = getTBillInvestmentYield(98, 90, '2023-06-01');
     expect(investmentYield).toBeCloseTo(expectedYield, 10);
     expect(getTBillPriceFromInvestmentYield(investmentYield, 90, '2023-06-01')).toBeCloseTo(98, 10);
+  });
+});
+
+describe('street-convention coupon yields', () => {
+  const note = (maturityDate, couponRate) => ({ type: 't-note', maturityDate, couponRate, couponFrequency: 2 });
+
+  it('prices a note at par on a coupon date when the yield equals the coupon', () => {
+    // Periods alternate between 181 and 184 days; a fixed 182.625-day period would miss par.
+    expect(yieldToPrice(note('2028-11-15', 4.125), 4.125, '2026-11-15')).toBeCloseTo(100, 10);
+  });
+
+  it('discounts with the actual length of the current coupon period', () => {
+    // Reference values from an independent street-convention implementation.
+    expect(yieldToPrice(note('2027-02-28', 0.5), 4.3, '2026-08-28')).toBeCloseTo(98.3558716951, 9);
+    expect(yieldToPrice(note('2036-08-15', 4.25), 4.1, '2026-10-11')).toBeCloseTo(101.8587697645, 9);
+  });
+
+  it('uses a simple money-market yield in the final coupon period', () => {
+    const finalPeriodNote = note('2027-02-28', 4);
+    expect(yieldToPrice(finalPeriodNote, 4.3, '2026-12-28')).toBeCloseTo(101.2542984539, 9);
+    // y = ((redemption + coupon) / dirty - 1) * f * E / DSC with E = 181 and DSC = 62 days.
+    const expectedYield = ((102 / 101.4) - 1) * 2 * (181 / 62) * 100;
+    expect(solveYTMFromPrice(finalPeriodNote, 101.4, toDateAtMidnight('2026-12-28'))).toBeCloseTo(expectedYield, 8);
+  });
+
+  it('round-trips yields through prices across maturities', () => {
+    for (const [maturityDate, couponRate, settlement] of [
+      ['2026-11-30', 4.25, '2026-10-11'],
+      ['2028-11-15', 4.125, '2026-10-11'],
+      ['2045-05-15', 4.625, '2026-03-02'],
+    ]) {
+      const bond = note(maturityDate, couponRate);
+      const price = yieldToPrice(bond, 4.4, settlement);
+      expect(solveYTMFromPrice(bond, price, toDateAtMidnight(settlement))).toBeCloseTo(4.4, 8);
+    }
   });
 });
 

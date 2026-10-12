@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  REMOVED_FIELD,
   buildTradeBackup,
+  buildTradePatch,
   markTradeDeleted,
   normalizeTradeBackupEntry,
   partitionTradesByLifecycle,
@@ -155,5 +157,45 @@ describe('recoverable trade deletion', () => {
       matured: [openTrade],
       closed: [closedTrade],
     });
+  });
+});
+
+describe('partial trade updates', () => {
+  const stored = {
+    id: 'trade-1',
+    cusip: '91282ABC1',
+    type: 't-note',
+    side: 'buy',
+    tradeDate: '2026-01-15',
+    maturityDate: '2031-01-15',
+    faceValue: 1000,
+    cleanPrice: 99,
+    couponRate: 4,
+    commission: 0,
+    couponFrequency: 2,
+    currentMarketPrice: 100,
+    status: 'active',
+    fredEstimatedPrice: 98.5,
+    fredEstimatedAt: '2026-09-03',
+    fredPricingSignature: 'zero-curve-v1|t-note|2031-01-15|4|2',
+  };
+
+  it('writes only the fields an action changes', () => {
+    expect(buildTradePatch(stored, { ...stored, currentMarketPrice: 100.25, priceUpdatedAt: '2026-10-11' }))
+      .toEqual({ currentMarketPrice: 100.25, priceUpdatedAt: '2026-10-11' });
+    expect(buildTradePatch(stored, markTradeDeleted(stored, '2026-10-11T01:00:00Z')))
+      .toEqual({ deletedAt: '2026-10-11T01:00:00.000Z' });
+  });
+
+  it('marks removed fields instead of rewriting the whole document', () => {
+    const deleted = { ...stored, deletedAt: '2026-10-11T01:00:00.000Z' };
+    expect(buildTradePatch(deleted, restoreDeletedTrade(deleted))).toEqual({ deletedAt: REMOVED_FIELD });
+    expect(buildTradePatch({ ...stored, accruedInterestPer100: 0.5 }, { ...stored, accruedInterestPer100: '' }))
+      .toEqual({ accruedInterestPer100: REMOVED_FIELD });
+  });
+
+  it('returns an empty patch when nothing changed and refuses to switch documents', () => {
+    expect(buildTradePatch(stored, { ...stored })).toEqual({});
+    expect(() => buildTradePatch(stored, { ...stored, id: 'trade-2' })).toThrow();
   });
 });

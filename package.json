@@ -11,8 +11,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "test": "vitest run --exclude tests/firestore.rules.test.js",
+    "test": "vitest run --exclude tests/firestore.rules.test.js --exclude 'e2e/**'",
     "test:rules": "firebase emulators:exec --only firestore --project demo-treasury-dashboard \"vitest run tests/firestore.rules.test.js\"",
+    "test:e2e": "firebase emulators:exec --only auth,firestore --project demo-treasury-dashboard \"playwright test\"",
     "emulators": "firebase emulators:start --only auth,firestore --project demo-treasury-dashboard",
     "check": "npm run lint && npm test && npm run build"
   },
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@firebase/rules-unit-testing": "^5.0.2",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "eslint": "^10.10.0",

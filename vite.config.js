@@ -57,7 +57,11 @@ export default defineConfig(({ mode }) => ({
     }),
   ],
   base: '/treasury-dashboard/',
+  // End-to-end runs toggle network emulation, which would make the HMR client reload the page.
+  server: { hmr: process.env.E2E_NO_HMR !== '1' },
   build: {
+    // The Firestore SDK with IndexedDB persistence is one ~540 kB vendor chunk.
+    chunkSizeWarningLimit: 600,
     rolldownOptions: {
       output: {
         codeSplitting: {

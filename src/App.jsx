@@ -1,9 +1,23 @@
 import { lazy, Suspense, useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Plus, Trash2, Edit2, TrendingUp, Activity, Calendar, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, RotateCcw } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, Activity, Calendar, Loader2, AlertCircle, Archive, Wallet, Clock, LogOut, History, Landmark, Download, Upload, RefreshCw, Calculator, RotateCcw, WifiOff, X } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, connectAuthEmulator } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, doc, setDoc, writeBatch, connectFirestoreEmulator } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithCredential, signOut, onAuthStateChanged, connectAuthEmulator } from 'firebase/auth';
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  collection,
+  onSnapshot,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteField,
+  writeBatch,
+  terminate,
+  clearIndexedDbPersistence,
+  connectFirestoreEmulator,
+} from 'firebase/firestore';
 import {
   STALE_MARKET_PRICE_DAYS,
   calculateAccruedInterestPer100,
@@ -39,7 +53,10 @@ import {
   shouldUpdateFredEstimate,
 } from './lib/yieldCurve.js';
 import {
+  REMOVED_FIELD,
+  TRADE_FORM_FIELDS,
   buildTradeBackup,
+  buildTradePatch,
   markTradeDeleted,
   normalizeTradeBackupEntry,
   partitionTradesByLifecycle,
@@ -83,10 +100,19 @@ if (import.meta.env.PROD && appCheckSiteKey) {
   });
 }
 const auth = getAuth(app);
-const db = getFirestore(app);
+// Keep a copy of the ledger in IndexedDB so the app opens offline and writes made
+// offline are queued until the connection returns.
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+});
 if (useFirebaseEmulators) {
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  // End-to-end tests sign in with an emulator credential instead of Google's popup.
+  window.__signInForTests = (uid, email = `${uid}@example.com`) => signInWithCredential(
+    auth,
+    GoogleAuthProvider.credential(JSON.stringify({ sub: uid, email, email_verified: true })),
+  );
 }
 const googleProvider = new GoogleAuthProvider();
 
@@ -102,6 +128,10 @@ const fetchYieldCurve = async ({ bypassCache = false } = {}) => {
 };
 
 const roundMarketPriceForStorage = (price) => Math.round(price * 1000) / 1000;
+
+const pickFields = (source, fields) => Object.fromEntries(
+  fields.filter((field) => field in source).map((field) => [field, source[field]]),
+);
 
 const formatUsd = (value, fractionDigits = 2) => Number(value || 0).toLocaleString(undefined, {
   minimumFractionDigits: fractionDigits,
@@ -132,6 +162,9 @@ export default function App() {
   const [deletedTrades, setDeletedTrades] = useState([]);
   const [isDbReady, setIsDbReady] = useState(false);
   const [dbError, setDbError] = useState('');
+  const [writeError, setWriteError] = useState('');
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
+  const [pendingWriteCount, setPendingWriteCount] = useState(0);
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [ledgerSubTab, setLedgerSubTab] = useState('active'); 
@@ -210,23 +243,59 @@ export default function App() {
     return () => window.clearInterval(timerId);
   }, []);
 
-  const saveTradeToDB = useCallback(async (tradeData) => {
+  const createTradeInDB = useCallback(async (tradeData) => {
     if (!user) return;
     const normalizedTrade = normalizeTradeForStorage(tradeData);
-    const tradeRef = doc(db, 'users', user.uid, 'trades', normalizedTrade.id);
-    await setDoc(tradeRef, normalizedTrade);
+    await setDoc(doc(db, 'users', user.uid, 'trades', normalizedTrade.id), normalizedTrade);
   }, [user]);
 
-  const saveTradeWithFeedback = useCallback(async (tradeData, actionLabel) => {
+  // Writes only the fields an action changed, so edits from another device survive.
+  const updateTradeInDB = useCallback(async (currentTrade, nextTrade) => {
+    if (!user) return;
+    const patch = buildTradePatch(currentTrade, nextTrade);
+    if (Object.keys(patch).length === 0) return;
+    const firestorePatch = Object.fromEntries(Object.entries(patch).map(
+      ([field, value]) => [field, value === REMOVED_FIELD ? deleteField() : value],
+    ));
+    await updateDoc(doc(db, 'users', user.uid, 'trades', currentTrade.id), firestorePatch);
+  }, [user]);
+
+  const runWrite = useCallback(async (write, actionLabel) => {
+    let pending;
     try {
-      await saveTradeToDB(tradeData);
-      return true;
+      pending = write();
     } catch (error) {
-      console.error(`${actionLabel}失敗：`, tradeData.id, error);
+      console.error(`${actionLabel}失敗：`, error);
       alert(`${actionLabel}失敗，資料沒有變更。${describeFirestoreError(error)}`);
       return false;
     }
-  }, [saveTradeToDB]);
+    if (!navigator.onLine) {
+      // Firestore applies the change locally and syncs it when the connection returns.
+      pending.catch((error) => {
+        console.error(`${actionLabel}未能同步：`, error);
+        setWriteError(`離線時的「${actionLabel}」未能同步，伺服器沒有接受這項變更。${describeFirestoreError(error)}`);
+      });
+      return true;
+    }
+    try {
+      await pending;
+      return true;
+    } catch (error) {
+      console.error(`${actionLabel}失敗：`, error);
+      alert(`${actionLabel}失敗，資料沒有變更。${describeFirestoreError(error)}`);
+      return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    const updateOnlineStatus = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    return () => {
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
+    };
+  }, []);
 
   // --- Firebase Auth 監聽 (改為 Google 登入) ---
   useEffect(() => {
@@ -237,6 +306,8 @@ export default function App() {
         setDeletedTrades([]);
         setIsDbReady(false);
         setDbError('');
+        setWriteError('');
+        setPendingWriteCount(0);
       }
       setAuthLoading(false);
     });
@@ -272,7 +343,7 @@ export default function App() {
         try {
           const estimate = getFredTheoreticalEstimate(trade, yieldCurve);
           if (!estimate) return;
-          await saveTradeToDB({
+          await updateTradeInDB(trade, {
             ...trade,
             fredEstimatedPrice: roundMarketPriceForStorage(estimate.cleanPrice),
             fredEstimatedAt: estimate.observationDate,
@@ -280,13 +351,13 @@ export default function App() {
           });
         } catch (err) {
           console.error('更新 FRED 理論估值失敗：', trade.id, err);
-          setDbError(`FRED 理論估值未能儲存；使用者市場價沒有被修改。${describeFirestoreError(err)}`);
+          setWriteError(`FRED 理論估值未能儲存；使用者市場價沒有被修改。${describeFirestoreError(err)}`);
         } finally {
           priceUpdatesInFlightRef.current.delete(trade.id);
         }
       })();
     }
-  }, [yieldCurve, trades, user, isDbReady, saveTradeToDB, todayObj]);
+  }, [yieldCurve, trades, user, isDbReady, updateTradeInDB, todayObj]);
 
   const handleRefreshCurve = async () => {
     setIsFetchingCurve(true);
@@ -305,7 +376,8 @@ export default function App() {
     if (!user) return;
     // 使用 user.uid 作為個人專屬路徑 (每個 Google 帳號有獨立空間)
     const tradesRef = collection(db, 'users', user.uid, 'trades');
-    const unsubscribe = onSnapshot(tradesRef, (snapshot) => {
+    const unsubscribe = onSnapshot(tradesRef, { includeMetadataChanges: true }, (snapshot) => {
+      setPendingWriteCount(snapshot.docs.filter((tradeDoc) => tradeDoc.metadata.hasPendingWrites).length);
       const fetchedTrades = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
       setTrades(fetchedTrades.filter((trade) => !trade.deletedAt));
       setDeletedTrades(fetchedTrades.filter((trade) => Boolean(trade.deletedAt)));
@@ -333,12 +405,23 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    if (pendingWriteCount > 0 && !window.confirm(`仍有 ${pendingWriteCount} 項變更未同步，登出後會被捨棄。確定登出？`)) return;
     try {
       await signOut(auth);
     } catch (error) {
       console.error('登出錯誤：', error);
       alert('登出失敗，請檢查網絡後重試。');
+      return;
     }
+    // Remove this device's cached copy of the ledger; another open tab can block
+    // clearing, in which case the cache is cleared on a later sign-out.
+    try {
+      await terminate(db);
+      await clearIndexedDbPersistence(db);
+    } catch (error) {
+      console.warn('未能清除本機快取：', error);
+    }
+    window.location.reload();
   };
 
   // --- Derived Data ---
@@ -487,28 +570,18 @@ export default function App() {
       priceUpdatedAt: ytmForm.tradeDate,
       status: 'active',
     });
-    if (!await saveTradeWithFeedback(tradeData, '加入帳本')) return;
+    if (!await runWrite(() => createTradeInDB(tradeData), '加入帳本')) return;
     setLedgerSubTab('active');
     setActiveTab('trades');
   };
 
   const handleDeleteTrade = async (trade) => {
     if (!user || !window.confirm(`將 ${trade.cusip || '這筆交易'} 移至回收桶？之後仍可復原。`)) return;
-    try {
-      await saveTradeToDB(markTradeDeleted(trade));
-    } catch (error) {
-      console.error('移至回收桶失敗：', trade.id, error);
-      alert(`未能刪除交易，資料沒有變更。${describeFirestoreError(error)}`);
-    }
+    await runWrite(() => updateTradeInDB(trade, markTradeDeleted(trade)), '移至回收桶');
   };
 
   const handleRestoreTrade = async (trade) => {
-    try {
-      await saveTradeToDB(restoreDeletedTrade(trade));
-    } catch (error) {
-      console.error('復原交易失敗：', trade.id, error);
-      alert(`未能復原交易。${describeFirestoreError(error)}`);
-    }
+    await runWrite(() => updateTradeInDB(trade, restoreDeletedTrade(trade)), '復原交易');
   };
 
   const handleSaveTrade = async (e) => {
@@ -546,22 +619,16 @@ export default function App() {
       alert(`平倉交收日（${existingTrade.closeDate}）必須介乎開倉交收日與到期日之間，請調整日期。`);
       return;
     }
-    const tradeData = normalizeTradeForStorage({
-      ...existingTrade,
-      ...formData,
-      status: editingTradeId ? (formData.status || existingTrade?.status || 'active') : 'active',
-    });
-    if (!editingTradeId) {
-      tradeData.id = makeTradeId();
-      tradeData.currentMarketPrice = tradeData.cleanPrice;
-      tradeData.priceUpdatedAt = tradeData.tradeDate;
-    } else {
-      tradeData.id = editingTradeId;
-      tradeData.currentMarketPrice = toFiniteNumber(existingTrade.currentMarketPrice, tradeData.cleanPrice);
-      if (isValidISODate(existingTrade.priceUpdatedAt)) tradeData.priceUpdatedAt = existingTrade.priceUpdatedAt;
-      else delete tradeData.priceUpdatedAt;
-    }
-    if (!await saveTradeWithFeedback(tradeData, '儲存交易')) return;
+    // Only the form's own fields change; prices, FRED estimates and close terms
+    // stay as stored so a stale form cannot overwrite newer values.
+    const formFields = pickFields(formData, TRADE_FORM_FIELDS);
+    const saved = existingTrade
+      ? await runWrite(() => updateTradeInDB(existingTrade, { ...existingTrade, ...formFields }), '儲存交易')
+      : await runWrite(() => {
+        const newTrade = normalizeTradeForStorage({ ...formFields, id: makeTradeId(), status: 'active' });
+        return createTradeInDB({ ...newTrade, currentMarketPrice: newTrade.cleanPrice, priceUpdatedAt: newTrade.tradeDate });
+      }, '儲存交易');
+    if (!saved) return;
     setIsFormOpen(false); setEditingTradeId(null);
   };
 
@@ -580,7 +647,7 @@ export default function App() {
       alert('平倉價格必須大於 0，手續費及應計利息不可為負數。');
       return;
     }
-    const updatedTrade = normalizeTradeForStorage({
+    const closedTrade = {
       ...trade,
       status: 'closed',
       closeDate: closeData.closeDate,
@@ -589,8 +656,8 @@ export default function App() {
       closeAccruedInterestPer100: closeData.closeAccruedInterestPer100,
       currentMarketPrice: closeData.closePrice,
       priceUpdatedAt: closeData.closeDate,
-    });
-    if (!await saveTradeWithFeedback(updatedTrade, '平倉')) return;
+    };
+    if (!await runWrite(() => updateTradeInDB(trade, closedTrade), '平倉')) return;
     setIsCloseModalOpen(false);
   };
 
@@ -601,21 +668,21 @@ export default function App() {
       return;
     }
     const trade = trades.find(t => t.id === id);
-    if (trade && !await saveTradeWithFeedback({
+    if (trade && !await runWrite(() => updateTradeInDB(trade, {
       ...trade,
       currentMarketPrice: roundMarketPriceForStorage(n),
       priceUpdatedAt: formatDateOnly(todayObj),
-    }, '更新市場價格')) return;
+    }), '更新市場價格')) return;
     setEditingPriceId(null);
   };
 
   const handleAdoptFredPrice = async (trade) => {
     if (!hasCurrentFredEstimate(trade)) return;
-    await saveTradeWithFeedback({
+    await runWrite(() => updateTradeInDB(trade, {
       ...trade,
       currentMarketPrice: Number(trade.fredEstimatedPrice),
       priceUpdatedAt: trade.fredEstimatedAt,
-    }, '採用 FRED 理論價');
+    }), '採用 FRED 理論價');
   };
 
   // --- 匯出 / 匯入 ---
@@ -628,6 +695,10 @@ export default function App() {
   const handleImport = () => {
     if (!user) {
       alert('請先登入再匯入交易。');
+      return;
+    }
+    if (!navigator.onLine) {
+      alert('匯入需要網絡連線，以確保所有交易一次過寫入。請連線後再試。');
       return;
     }
     const input = document.createElement('input');
@@ -1136,6 +1207,25 @@ export default function App() {
           <div role="alert" className="status-banner status-banner--danger mb-4 rounded-xl px-4 py-3 text-sm flex items-start gap-2">
             <AlertCircle size={17} className="mt-0.5 flex-shrink-0" />
             <span>{dbError}</span>
+          </div>
+        )}
+        {!isOnline && (
+          <div role="status" className="status-banner status-banner--offline mb-4 rounded-xl px-4 py-3 text-sm flex items-start gap-2">
+            <WifiOff size={17} className="mt-0.5 flex-shrink-0" />
+            <span>離線模式：正在顯示這部裝置上的帳本副本。新增或修改會先儲存在裝置上，重新連線後自動同步。{pendingWriteCount > 0 && `（${pendingWriteCount} 項待同步）`}</span>
+          </div>
+        )}
+        {isOnline && pendingWriteCount > 0 && (
+          <div role="status" className="status-banner status-banner--offline mb-4 rounded-xl px-4 py-3 text-sm flex items-start gap-2">
+            <Loader2 size={17} className="mt-0.5 flex-shrink-0 animate-spin" />
+            <span>正在同步 {pendingWriteCount} 項變更…</span>
+          </div>
+        )}
+        {writeError && (
+          <div role="alert" className="status-banner status-banner--danger mb-4 rounded-xl px-4 py-3 text-sm flex items-start gap-2">
+            <AlertCircle size={17} className="mt-0.5 flex-shrink-0" />
+            <span className="flex-1">{writeError}</span>
+            <button type="button" onClick={() => setWriteError('')} aria-label="關閉提示" className="banner-dismiss"><X size={15} /></button>
           </div>
         )}
         {stalePriceTrades.length > 0 && (

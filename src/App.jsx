@@ -63,6 +63,13 @@ import {
   restoreDeletedTrade,
 } from './lib/tradeLifecycle.js';
 import CouponCalendar from './components/CouponCalendar.jsx';
+import {
+  buildSecuritiesIndex,
+  isValidCusip,
+  normalizeCusip,
+  securityToTradeTerms,
+  validateSecuritiesFeed,
+} from './lib/securities.js';
 
 const YieldCurveChart = lazy(() => import('./components/YieldCurveChart.jsx'));
 
@@ -127,6 +134,20 @@ const fetchYieldCurve = async ({ bypassCache = false } = {}) => {
   return normalizeYieldCurve(await res.json());
 };
 
+const fetchTreasurySecurities = async () => {
+  const res = await fetch(`${import.meta.env.BASE_URL || '/'}treasury-securities.json`);
+  if (!res.ok) throw new Error(`國債資料請求失敗（HTTP ${res.status}）`);
+  return buildSecuritiesIndex(validateSecuritiesFeed(await res.json()));
+};
+
+const looksLikeCusip = (value) => /^[0-9A-Z*@#]{9}$/.test(normalizeCusip(value));
+
+const termsMatch = (form, terms) => (
+  form.type === terms.type
+  && form.maturityDate === terms.maturityDate
+  && (terms.type === 't-bill' || (Number(form.couponRate) === terms.couponRate && Number(form.couponFrequency) === 2))
+);
+
 const roundMarketPriceForStorage = (price) => Math.round(price * 1000) / 1000;
 
 const pickFields = (source, fields) => Object.fromEntries(
@@ -165,6 +186,8 @@ export default function App() {
   const [writeError, setWriteError] = useState('');
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [pendingWriteCount, setPendingWriteCount] = useState(0);
+  const [securitiesIndex, setSecuritiesIndex] = useState(null);
+  const [securitiesStatus, setSecuritiesStatus] = useState('idle');
 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [ledgerSubTab, setLedgerSubTab] = useState('active'); 
@@ -187,7 +210,7 @@ export default function App() {
   const [todayObj, setTodayObj] = useState(() => toDateAtMidnight(new Date()));
 
   const defaultForm = { cusip: '', type: 't-note', side: 'buy', tradeDate: formatDateOnly(new Date()), maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 0, commission: 0, couponFrequency: 2, accruedInterestPer100: '' };
-  const defaultYtmForm = { type: 't-note', tradeDate: formatDateOnly(new Date()), maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0, accruedInterestPer100: '' };
+  const defaultYtmForm = { cusip: '', type: 't-note', tradeDate: formatDateOnly(new Date()), maturityDate: '', faceValue: 1000, cleanPrice: 100, couponRate: 4, couponFrequency: 2, commission: 0, accruedInterestPer100: '' };
   const [formData, setFormData] = useState(defaultForm);
   const [ytmForm, setYtmForm] = useState(defaultYtmForm);
   const [closeData, setCloseData] = useState({ closeDate: formatDateOnly(new Date()), closePrice: '', closeCommission: 0, closeAccruedInterestPer100: '' });
@@ -286,6 +309,45 @@ export default function App() {
       return false;
     }
   }, []);
+
+  // The CUSIP list is only needed while entering a trade, so load it on demand.
+  const needsSecurities = isFormOpen || activeTab === 'ytm';
+  const securitiesRequestedRef = useRef(false);
+  useEffect(() => {
+    if (!needsSecurities || securitiesRequestedRef.current) return;
+    securitiesRequestedRef.current = true;
+    fetchTreasurySecurities()
+      .then((index) => { setSecuritiesIndex(index); setSecuritiesStatus('ready'); })
+      .catch((error) => { console.warn('未能載入國債資料：', error); setSecuritiesStatus('unavailable'); });
+  }, [needsSecurities]);
+
+  const lookupSecurity = (cusip) => (isValidCusip(cusip) ? securitiesIndex?.get(normalizeCusip(cusip)) ?? null : null);
+
+  // Typing a known CUSIP fills in the bond's official terms.
+  const withCusipTerms = (form, cusip) => {
+    const security = lookupSecurity(cusip);
+    return security ? { ...form, ...securityToTradeTerms(security) } : { ...form, cusip };
+  };
+
+  const renderCusipHint = (form, applyTerms) => {
+    const cusip = normalizeCusip(form.cusip);
+    if (!looksLikeCusip(cusip)) return null;
+    if (!isValidCusip(cusip)) return <p className="cusip-hint cusip-hint--warning">CUSIP 檢查碼不正確，請核對號碼；如輸入的是名稱可忽略。</p>;
+    if (securitiesStatus === 'idle') return <p className="cusip-hint">正在載入財政部國債資料…</p>;
+    if (securitiesStatus === 'unavailable') return <p className="cusip-hint">暫時未能載入財政部國債資料，請手動輸入條款。</p>;
+    const security = lookupSecurity(cusip);
+    if (!security) return <p className="cusip-hint">財政部資料中找不到此 CUSIP（只包括未到期的 T-Bill、T-Note 及 T-Bond），請手動輸入條款。</p>;
+    const terms = securityToTradeTerms(security);
+    const description = `${security.term ? `${security.term} ` : ''}${TREASURY_TYPE_LABELS[security.type]}，${security.maturityDate} 到期${security.type === 't-bill' ? '' : `，票息 ${security.couponRate}%`}`;
+    return termsMatch(form, terms)
+      ? <p className="cusip-hint cusip-hint--ok">已按財政部資料：{description}</p>
+      : (
+        <p className="cusip-hint cusip-hint--warning">
+          財政部資料：{description}。
+          <button type="button" onClick={() => applyTerms(terms)} className="cusip-apply">帶入條款</button>
+        </p>
+      );
+  };
 
   useEffect(() => {
     const updateOnlineStatus = () => setIsOnline(navigator.onLine);
@@ -555,7 +617,7 @@ export default function App() {
     }
     const tradeData = normalizeTradeForStorage({
       id: makeTradeId(),
-      cusip: `${ytmForm.type.toUpperCase()} ${ytmForm.maturityDate}`,
+      cusip: normalizeCusip(ytmForm.cusip) || `${ytmForm.type.toUpperCase()} ${ytmForm.maturityDate}`,
       type: ytmForm.type,
       side: 'buy',
       tradeDate: ytmForm.tradeDate,
@@ -1002,6 +1064,11 @@ export default function App() {
 
           <div className="p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-[1fr_1.1fr] gap-5">
             <div className="grid grid-cols-2 gap-3 content-start">
+              <div className="col-span-2">
+                <label htmlFor="ytm-cusip" className="block text-xs font-medium text-slate-500 mb-1">CUSIP（可選，自動帶入條款）</label>
+                <input id="ytm-cusip" value={ytmForm.cusip || ''} onChange={(e) => setYtmForm(prev => withCusipTerms({ ...prev, cusip: e.target.value }, e.target.value))} placeholder="例如 91282CXXX" autoComplete="off" className="w-full p-2 border rounded-lg text-sm" />
+                {renderCusipHint({ ...ytmForm, cusip: ytmForm.cusip || '' }, (terms) => setYtmForm(prev => ({ ...prev, ...terms })))}
+              </div>
               <div>
                 <label htmlFor="ytm-type" className="block text-xs font-medium text-slate-500 mb-1">債券類型</label>
                 <select id="ytm-type" value={ytmForm.type} onChange={(e) => setYtmForm(prev => ({ ...prev, type: e.target.value, accruedInterestPer100: e.target.value === 't-bill' ? '' : prev.accruedInterestPer100 }))} className="w-full p-2 border rounded-lg text-sm bg-white">
@@ -1270,7 +1337,8 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="col-span-2">
                       <label htmlFor="trade-cusip" className="block text-xs font-medium text-slate-500 mb-1">CUSIP／名稱</label>
-                      <input id="trade-cusip" required name="cusip" value={formData.cusip} onChange={(e)=>setFormData({...formData, cusip: e.target.value})} className="w-full p-2 border rounded-lg text-sm" />
+                      <input id="trade-cusip" required name="cusip" value={formData.cusip} onChange={(e)=>setFormData(withCusipTerms({...formData, cusip: e.target.value}, e.target.value))} autoComplete="off" className="w-full p-2 border rounded-lg text-sm" />
+                      {renderCusipHint(formData, (terms) => setFormData((prev) => ({ ...prev, ...terms })))}
                     </div>
                     <div>
                       <label htmlFor="trade-type" className="block text-xs font-medium text-slate-500 mb-1">債券類型</label>

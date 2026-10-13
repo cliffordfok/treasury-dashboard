@@ -40,6 +40,8 @@ Emulator 模式只在 `npm run dev` 生效，Production Build 會忽略此設定
 
 FRED 資料由 `.github/workflows/deploy.yml` 在伺服器端取得，並只寫入當次 GitHub Pages artifact；工作流程不會再由 bot 直接 Push `main`。每次 `main` 部署、手動部署及平日排程部署都會重新擷取資料，只發布 11 個指定年期均有數值的最近共同觀察日。瀏覽器及 Vite 建置程序不會收到 FRED API Key，前端亦會再次驗證點數、年期及觀察日期。
 
+新增交易及 YTM 試算器支援 CUSIP 自動帶入：輸入 9 位 CUSIP 後，會按財政部資料自動填入債券類型、到期日及票息，並以 CUSIP 檢查碼提示輸入錯誤。資料由部署流程從 U.S. Treasury Fiscal Data 的「Treasury Securities Auctions Data」擷取所有未到期的 T-Bill、T-Note 及 T-Bond，發布為 `treasury-securities.json`（同一 CUSIP 的增發會合併為一筆）。擷取失敗不會阻止部署，表單會改為提示手動輸入；CI 亦會對正式 API 做非阻塞的檢查。
+
 帳本會在裝置的 IndexedDB 保留一份副本：離線時仍可開啟及查看，離線期間的新增或修改會先套用在裝置上，重新連線後自動同步（匯入需要連線，以確保整批原子寫入）。更新交易時只寫入該操作改動的欄位，避免覆蓋其他裝置同時作出的修改。登出時會清除這部裝置上的帳本副本。
 
 交易的刪除操作會先要求確認，然後移至帳本內的「回收桶」。回收桶保留完整交易資料並可隨時復原，不會直接永久刪除 Firestore 文件。

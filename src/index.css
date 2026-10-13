@@ -489,6 +489,29 @@ h3 {
   color: #c7dcfa;
 }
 
+.cusip-hint {
+  margin-top: 6px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cusip-hint--ok {
+  color: var(--color-gain);
+}
+
+.cusip-hint--warning {
+  color: var(--color-gold-bright);
+}
+
+.cusip-apply {
+  margin-left: 6px;
+  color: var(--color-gold-bright);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .banner-dismiss {
   display: inline-flex;
   align-items: center;

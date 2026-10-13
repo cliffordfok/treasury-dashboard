@@ -37,6 +37,12 @@ jobs:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY || secrets.VITE_FRED_API_KEY }}
         run: node scripts/fetch-yield-curve.mjs
 
+      # The CUSIP lookup is optional: if Fiscal Data is unavailable the site still
+      # deploys and the trade form falls back to manual entry.
+      - name: Fetch outstanding Treasury securities for CUSIP lookup
+        continue-on-error: true
+        run: node scripts/fetch-treasury-securities.mjs
+
       - name: Lint
         run: npm run lint
 

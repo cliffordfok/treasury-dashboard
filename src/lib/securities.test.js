@@ -45,6 +45,15 @@ describe('Fiscal Data auction rows', () => {
     ]);
   });
 
+  it('leaves out TIPS and FRNs even when listed as notes or bonds', () => {
+    const securities = normalizeAuctionRows([
+      { cusip: note, security_type: 'Note', maturity_date: '2028-11-15', int_rate: '4.125', inflation_index_security: 'No', floating_rate: 'No' },
+      { cusip: tips, security_type: 'Note', maturity_date: '2036-07-15', int_rate: '1.875', inflation_index_security: 'Yes', floating_rate: 'No' },
+      { cusip: withCheckDigit('91282CNA'), security_type: 'Note', maturity_date: '2028-07-31', int_rate: '0', inflation_index_security: 'No', floating_rate: 'Yes' },
+    ]);
+    expect(securities.map((security) => security.cusip)).toEqual([note]);
+  });
+
   it('merges reopenings into one record with the original issue date', () => {
     const [security] = normalizeAuctionRows([
       { cusip: note, security_type: 'Note', security_term: '2-Year 10-Month', issue_date: '2026-01-15', maturity_date: '2028-11-15', int_rate: '4.125' },

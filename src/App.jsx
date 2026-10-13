@@ -140,6 +140,13 @@ const fetchTreasurySecurities = async () => {
   return buildSecuritiesIndex(validateSecuritiesFeed(await res.json()));
 };
 
+const findSecurity = (index, cusip) => (isValidCusip(cusip) ? index?.get(normalizeCusip(cusip)) ?? null : null);
+
+const fillTermsFromIndex = (form, index) => {
+  const security = findSecurity(index, form.cusip);
+  return security ? { ...form, ...securityToTradeTerms(security) } : form;
+};
+
 const looksLikeCusip = (value) => /^[0-9A-Z*@#]{9}$/.test(normalizeCusip(value));
 
 const termsMatch = (form, terms) => (
@@ -313,20 +320,29 @@ export default function App() {
   // The CUSIP list is only needed while entering a trade, so load it on demand.
   const needsSecurities = isFormOpen || activeTab === 'ytm';
   const securitiesRequestedRef = useRef(false);
+  // Forms whose CUSIP was typed before the list arrived; filled once it loads.
+  const pendingCusipFormsRef = useRef(new Set());
   useEffect(() => {
     if (!needsSecurities || securitiesRequestedRef.current) return;
     securitiesRequestedRef.current = true;
     fetchTreasurySecurities()
-      .then((index) => { setSecuritiesIndex(index); setSecuritiesStatus('ready'); })
+      .then((index) => {
+        const pending = pendingCusipFormsRef.current;
+        if (pending.has('trade')) setFormData((prev) => fillTermsFromIndex(prev, index));
+        if (pending.has('ytm')) setYtmForm((prev) => fillTermsFromIndex(prev, index));
+        pending.clear();
+        setSecuritiesIndex(index);
+        setSecuritiesStatus('ready');
+      })
       .catch((error) => { console.warn('未能載入國債資料：', error); setSecuritiesStatus('unavailable'); });
   }, [needsSecurities]);
 
-  const lookupSecurity = (cusip) => (isValidCusip(cusip) ? securitiesIndex?.get(normalizeCusip(cusip)) ?? null : null);
+  const lookupSecurity = (cusip) => findSecurity(securitiesIndex, cusip);
 
   // Typing a known CUSIP fills in the bond's official terms.
-  const withCusipTerms = (form, cusip) => {
-    const security = lookupSecurity(cusip);
-    return security ? { ...form, ...securityToTradeTerms(security) } : { ...form, cusip };
+  const withCusipTerms = (formKey, form) => {
+    if (securitiesStatus === 'idle') pendingCusipFormsRef.current.add(formKey);
+    return fillTermsFromIndex(form, securitiesIndex);
   };
 
   const renderCusipHint = (form, applyTerms) => {
@@ -336,7 +352,7 @@ export default function App() {
     if (securitiesStatus === 'idle') return <p className="cusip-hint">正在載入財政部國債資料…</p>;
     if (securitiesStatus === 'unavailable') return <p className="cusip-hint">暫時未能載入財政部國債資料，請手動輸入條款。</p>;
     const security = lookupSecurity(cusip);
-    if (!security) return <p className="cusip-hint">財政部資料中找不到此 CUSIP（只包括未到期的 T-Bill、T-Note 及 T-Bond），請手動輸入條款。</p>;
+    if (!security) return <p className="cusip-hint">財政部資料中找不到此 CUSIP（只包括未到期的定息 T-Bill、T-Note 及 T-Bond，不含 TIPS 及 FRN），請手動輸入條款。</p>;
     const terms = securityToTradeTerms(security);
     const description = `${security.term ? `${security.term} ` : ''}${TREASURY_TYPE_LABELS[security.type]}，${security.maturityDate} 到期${security.type === 't-bill' ? '' : `，票息 ${security.couponRate}%`}`;
     return termsMatch(form, terms)
@@ -1066,7 +1082,7 @@ export default function App() {
             <div className="grid grid-cols-2 gap-3 content-start">
               <div className="col-span-2">
                 <label htmlFor="ytm-cusip" className="block text-xs font-medium text-slate-500 mb-1">CUSIP（可選，自動帶入條款）</label>
-                <input id="ytm-cusip" value={ytmForm.cusip || ''} onChange={(e) => setYtmForm(prev => withCusipTerms({ ...prev, cusip: e.target.value }, e.target.value))} placeholder="例如 91282CXXX" autoComplete="off" className="w-full p-2 border rounded-lg text-sm" />
+                <input id="ytm-cusip" value={ytmForm.cusip || ''} onChange={(e) => setYtmForm(prev => withCusipTerms('ytm', { ...prev, cusip: e.target.value }))} placeholder="例如 91282CXXX" autoComplete="off" className="w-full p-2 border rounded-lg text-sm" />
                 {renderCusipHint({ ...ytmForm, cusip: ytmForm.cusip || '' }, (terms) => setYtmForm(prev => ({ ...prev, ...terms })))}
               </div>
               <div>
@@ -1337,7 +1353,7 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="col-span-2">
                       <label htmlFor="trade-cusip" className="block text-xs font-medium text-slate-500 mb-1">CUSIP／名稱</label>
-                      <input id="trade-cusip" required name="cusip" value={formData.cusip} onChange={(e)=>setFormData(withCusipTerms({...formData, cusip: e.target.value}, e.target.value))} autoComplete="off" className="w-full p-2 border rounded-lg text-sm" />
+                      <input id="trade-cusip" required name="cusip" value={formData.cusip} onChange={(e)=>setFormData(withCusipTerms('trade', {...formData, cusip: e.target.value}))} autoComplete="off" className="w-full p-2 border rounded-lg text-sm" />
                       {renderCusipHint(formData, (terms) => setFormData((prev) => ({ ...prev, ...terms })))}
                     </div>
                     <div>

@@ -68,3 +68,16 @@ test('fills the YTM calculator and adds the bond to the ledger under its CUSIP',
   await page.getByRole('button', { name: /加入債券帳本/ }).click();
   await expect(tradeRow(page, KNOWN_BILL.cusip)).toContainText(`到期：${KNOWN_BILL.maturityDate}`);
 });
+
+test('fills a CUSIP typed before the securities list has loaded', async ({ page }) => {
+  let releaseSecurities;
+  await openApp(page, { securitiesReady: new Promise((resolve) => { releaseSecurities = resolve; }) });
+  await signIn(page, uniqueUid());
+  await page.getByRole('tab', { name: /到期收益率試算/ }).click();
+  await page.locator('#ytm-cusip').fill(KNOWN_NOTE.cusip);
+  await expect(page.locator('.cusip-hint')).toContainText('正在載入');
+  releaseSecurities();
+  await expect(page.locator('#ytm-type')).toHaveValue('t-note');
+  await expect(page.locator('#ytm-maturity-date')).toHaveValue(KNOWN_NOTE.maturityDate);
+  await expect(page.locator('.cusip-hint')).toContainText('已按財政部資料');
+});

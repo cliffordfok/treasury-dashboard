@@ -29,6 +29,8 @@ const readField = (row, field) => {
   return value === undefined || value === null || value === '' || value === 'null' ? null : value;
 };
 
+const isFlagSet = (row, field) => /^(y|yes|true)$/i.test(String(readField(row, field) ?? ''));
+
 // Collapses auction rows (a reopened issue appears once per auction) into one
 // record per CUSIP with the terms the ledger needs.
 export const normalizeAuctionRows = (rows) => {
@@ -38,6 +40,8 @@ export const normalizeAuctionRows = (rows) => {
     const type = SECURITY_TYPES[readField(row, 'security_type')];
     const cusip = normalizeCusip(readField(row, 'cusip'));
     if (!type || !isValidCusip(cusip)) continue;
+    // TIPS and FRNs can be listed as notes or bonds; their coupons are not fixed nominal terms.
+    if (isFlagSet(row, 'inflation_index_security') || isFlagSet(row, 'floating_rate')) continue;
     const maturityDate = readField(row, 'maturity_date');
     const issueDate = readField(row, 'issue_date');
     if (!isValidISODate(maturityDate)) continue;

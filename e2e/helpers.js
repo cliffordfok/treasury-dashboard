@@ -62,11 +62,17 @@ export const makeSecuritiesFeed = () => ({
   ],
 });
 
-export async function openApp(page, { curveDate = isoDate(-1), securities = makeSecuritiesFeed() } = {}) {
+// `securitiesReady` lets a test hold back the CUSIP list to exercise slow loads.
+export async function openApp(page, {
+  curveDate = isoDate(-1),
+  securities = makeSecuritiesFeed(),
+  securitiesReady = Promise.resolve(),
+} = {}) {
   await page.route('**/yield-curve.json*', (route) => route.fulfill({ json: makeCurve(curveDate) }));
-  await page.route('**/treasury-securities.json*', (route) => (
-    securities ? route.fulfill({ json: securities }) : route.fulfill({ status: 404, body: 'not found' })
-  ));
+  await page.route('**/treasury-securities.json*', async (route) => {
+    await securitiesReady;
+    await (securities ? route.fulfill({ json: securities }) : route.fulfill({ status: 404, body: 'not found' }));
+  });
   await page.goto('./');
 }
 

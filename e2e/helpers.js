@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { isValidCusip } from '../src/lib/securities.js';
 
 export const FIRESTORE_EMULATOR = 'http://127.0.0.1:8080';
 export const PROJECT_ID = 'demo-treasury-dashboard';
@@ -36,8 +37,42 @@ export const trackDialogs = (page) => {
   return messages;
 };
 
-export async function openApp(page, { curveDate = isoDate(-1) } = {}) {
+export const withCheckDigit = (base) => {
+  for (let digit = 0; digit <= 9; digit += 1) if (isValidCusip(`${base}${digit}`)) return `${base}${digit}`;
+  throw new Error(`no check digit for ${base}`);
+};
+
+export const KNOWN_NOTE = { cusip: withCheckDigit('91282CQA'), type: 't-note', term: '5-Year', issueDate: isoDate(-30), maturityDate: isoDate(1795), couponRate: 3.875 };
+export const KNOWN_BILL = { cusip: withCheckDigit('912797SB'), type: 't-bill', term: '26-Week', issueDate: isoDate(-7), maturityDate: isoDate(175), couponRate: 0 };
+
+// A feed large enough to pass the app's completeness check.
+export const makeSecuritiesFeed = () => ({
+  generatedAt: isoDate(0),
+  securities: [
+    KNOWN_NOTE,
+    KNOWN_BILL,
+    ...Array.from({ length: 120 }, (_, index) => ({
+      cusip: withCheckDigit(`9128${String(index).padStart(4, '0')}`),
+      type: ['t-bill', 't-note', 't-bond'][index % 3],
+      term: '',
+      issueDate: isoDate(-100),
+      maturityDate: isoDate(400 + index),
+      couponRate: index % 3 === 0 ? 0 : 4,
+    })),
+  ],
+});
+
+// `securitiesReady` lets a test hold back the CUSIP list to exercise slow loads.
+export async function openApp(page, {
+  curveDate = isoDate(-1),
+  securities = makeSecuritiesFeed(),
+  securitiesReady = Promise.resolve(),
+} = {}) {
   await page.route('**/yield-curve.json*', (route) => route.fulfill({ json: makeCurve(curveDate) }));
+  await page.route('**/treasury-securities.json*', async (route) => {
+    await securitiesReady;
+    await (securities ? route.fulfill({ json: securities }) : route.fulfill({ status: 404, body: 'not found' }));
+  });
   await page.goto('./');
 }
 

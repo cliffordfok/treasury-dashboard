@@ -44,6 +44,15 @@ export default defineConfig(({ mode }) => ({
         globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
         runtimeCaching: [
           {
+            urlPattern: /treasury-securities\.json$/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'treasury-securities',
+              networkTimeoutSeconds: 10,
+              expiration: { maxAgeSeconds: 7 * 86400 },
+            },
+          },
+          {
             urlPattern: /yield-curve\.json$/,
             handler: 'NetworkFirst',
             options: {
